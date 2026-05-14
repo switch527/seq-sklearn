@@ -225,6 +225,13 @@ contributes sixty. The same code path handles both.
 Configurable, default `last_valid`. Both options ignore padded
 positions by construction.
 
+**Layer factory.** All `nn.Linear` and `nn.LayerNorm` instantiations in
+`src/tft_sklearn/models/` route through a single factory in
+`src/tft_sklearn/models/_layers.py`. v1 returns standard PyTorch layers;
+v2 can swap in Transformer Engine equivalents (`te.Linear`, `te.LayerNorm`)
+in one place to enable FP8. See N5 for the rationale and the broader
+precision story.
+
 **Output heads.** The TFT's quantile output layer is replaced by a
 task-specific head. The backbone is the same module in all cases; only
 the head and loss change.
@@ -424,10 +431,73 @@ every randomness boundary. Two runs with the same seed and same input
 produce bit-identical predictions on CPU (CUDA non-determinism is a
 caveat noted in the docstring).
 
-### N5: GPU support
+### N5: Hardware and precision
 
-CUDA is optional. The library detects CUDA at runtime; falls back to
-CPU if absent. Tests marked `gpu` are skipped on CPU CI.
+**CPU as first-class.** A 1-5M parameter TFT fits comfortably on modern
+CPUs. CPU is a fully supported runtime for development, CI (GitHub
+Actions free tier gives no GPU), the synthetic-data unit tests, and
+small-scale production where GPU infrastructure is not available. All
+tests except those marked `pytest.mark.gpu` run on CPU.
+
+**GPU floor.** NVIDIA compute capability 6.0 (Pascal, 2016) and newer.
+The library inherits PyTorch's own minimum via the pinned `torch>=2.x`
+version; we do not impose tighter constraints than PyTorch itself does.
+CUDA is auto-detected at runtime, with fallback to CPU if absent.
+
+**Precision: configurable, auto-detect default.**
+
+```python
+precision: Literal["bf16-mixed", "16-mixed", "32", "auto"] = "auto"
+```
+
+The `"auto"` mode detects hardware and picks the best supported option:
+
+| Detected hardware | `auto` picks | Reason |
+|---|---|---|
+| Ampere / Ada / Hopper / Blackwell | `bf16-mixed` | Native BF16 TensorCores |
+| Volta / Turing | `16-mixed` | FP16 TensorCores, no BF16 hardware |
+| Pascal | `32` | No low-precision TensorCore acceleration |
+| CPU | `32` | CPU mixed-precision adds complexity for marginal gain at this model size |
+
+Callers override via the constructor or pydantic config.
+
+**Out of scope for v1: FP8 and FP4.** Transformer Engine and the
+FP8/FP4 hardware paths on Hopper and Blackwell are deliberately
+deferred. Rationale:
+
+- The model is bandwidth-bound at 1-5M parameters, not compute-bound.
+  BF16 captures most of the achievable speedup; FP8 over BF16 is
+  roughly 1.2x on this scale.
+- FP8 requires per-tensor scale tracking and TE-aware layers, not a
+  configuration flag.
+- CI cost: FP8 paths require self-hosted Hopper or Blackwell runners.
+- Engineering budget for v1 is better spent on the core library.
+
+**v1 architecture must keep the FP8 door open cheaply.** These are
+hard v1 constraints, not stretch goals:
+
+1. **Layer factory** (see F4). All `nn.Linear` and `nn.LayerNorm`
+   instantiations route through one module. v2's swap to `te.Linear`
+   and `te.LayerNorm` is a one-place change.
+2. **No hand-rolled CUDA kernels.** v1 sticks to standard PyTorch
+   primitives (`nn.MultiheadAttention` or the F.scaled_dot_product
+   variant). Custom fused kernels would have to be re-implemented for
+   FP8 and are not justified at this model scale.
+3. **Precision config is forward-extensible.** The current `Literal`
+   type adds `"fp8-mixed"` in v2 with no API change; the factory
+   branches on the new value.
+4. **Hardware-tier helper in v1.** A single
+   `tft_sklearn.hardware.detect() -> HardwareTier` enum function lives
+   in v1, with values `CPU`, `PASCAL`, `VOLTA_TURING`, `AMPERE_ADA`,
+   `HOPPER`, `BLACKWELL`. v1 branches only on the first four tiers; v2
+   reads the last two without touching the function signature.
+
+**Reproducibility caveat.** Deterministic mode (see N4) runs in FP32
+only. Mixed-precision modes can produce minor numerical drift
+run-to-run on CUDA because TensorCore reduction order is not
+guaranteed. The `seed` docstring notes this and tells callers to set
+`precision="32"` plus `torch.use_deterministic_algorithms(True)` when
+bit-identical reproducibility is required.
 
 ### N6: Documentation
 
