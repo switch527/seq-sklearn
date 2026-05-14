@@ -1072,8 +1072,9 @@ decision. Items still open are OPEN and feed the design-review loop.
    `__iter__` for tuple unpacking. See F1.
 8. **Hyperparameter search.** RESOLVED: F7 ships Optuna integration.
 9. **PyPI publishable name.** RESOLVED: `seq-sklearn` (verified
-   available on PyPI). Renames from earlier `tft-sklearn` and `tft-cls`
-   noted in the project history.
+   available on PyPI). Earlier package names in this project's
+   history were `tft-cls` and `tft-sklearn`; both were renamed before
+   any code shipped, while scope was still being settled.
 10. **Class imbalance.** RESOLVED: multiple strategies in F5, all
     Optuna-tunable.
 11. **Calibration.** RESOLVED: temperature default with platt /

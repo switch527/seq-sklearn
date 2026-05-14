@@ -1,5 +1,5 @@
 # ─── Agent meta-configuration ───────────────────────────────────────────────
-# Lives in the separate tft-sklearn-meta repo, mounted at .meta/ via symlinks.
+# Lives in the separate seq-sklearn-meta repo, mounted at .meta/ via symlinks.
 # Don't commit any of it from this repo. Run `bash .meta/bootstrap.sh` on a
 # fresh clone to set up the symlinks.
 .meta
