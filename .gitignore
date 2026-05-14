@@ -7,7 +7,7 @@ CLAUDE.md
 .claude
 GEMINI.md
 .gemini
-.aiexclude
+.geminiignore
 
 # ─── Python ─────────────────────────────────────────────────────────────────
 __pycache__/
