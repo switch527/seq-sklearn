@@ -137,6 +137,20 @@ Both classes satisfy enough of the sklearn estimator contract to pass
 `sklearn.utils.estimator_checks.check_estimator` for the subset
 applicable to non-array inputs.
 
+**`y` shape contract (v1).** Both estimators accept only 1D `y` in v1
+(single-output classification or single-output regression). The single
+validator function lives in `tft_sklearn._validate.check_y` and raises
+a clear error if a 2D `y` is passed:
+
+```
+ValueError: tft-sklearn v1 supports single-output targets only.
+Multi-output regression and multi-label classification are planned
+for v1.1. Got y with shape (n_samples, n_outputs).
+```
+
+v1.1 changes this validator in one place; no other code touches `y`
+shape.
+
 ### F2: Input data contract
 
 The caller must declare, at construction time, which columns are which:
@@ -236,18 +250,29 @@ precision story.
 task-specific head. The backbone is the same module in all cases; only
 the head and loss change.
 
+Both heads take an `n_outputs: int` constructor parameter so v1.1 can
+add multi-output regression and multi-label classification as small
+additive changes (see Open Question 3 resolution). In v1, `n_outputs`
+is set to `1` for regression and `num_classes` for single-label
+classification.
+
 *Classification head* (used by `TFTClassifier`):
-- a sigmoid for binary classification
-- a softmax over `num_classes` for multi-class classification
+- `Linear(d_model, n_outputs)` projection
+- sigmoid activation for binary (`n_outputs=1`)
+- softmax activation over `n_outputs` for multi-class
+- v1.1 multi-label support: same projection with `n_outputs=num_labels`
+  and sigmoid-per-output activation
 
 The classifier produces calibrated probabilities. Calibration strategy
 is a configuration knob (default and alternatives discussed in F5
 alongside class-imbalance strategies, since the two interact).
 
 *Regression head* (used by `TFTRegressor`):
-- a linear projection to one output for point regression
-- a linear projection to `len(quantiles)` outputs for quantile
-  regression (TFT's native style; pinball loss during training)
+- `Linear(d_model, n_outputs * n_quantiles)` projection where
+  `n_outputs=1` in v1 and `n_quantiles` is `1` for point regression
+  or `len(quantiles)` for quantile regression
+- v1.1 multi-output regression: same projection with `n_outputs>1`,
+  no other changes
 
 The regressor produces well-calibrated quantile coverage on validation
 data when fit in quantile mode. Coverage calibration strategy is a
@@ -291,6 +316,28 @@ config and Optuna-tunable:
 | `mae` | Mean absolute error. Robust to outliers; reports the conditional median. |
 | `huber` | Huber loss with configurable `delta`. Hybrid of MSE / MAE. |
 | `pinball` | Pinball / quantile loss over a configurable quantile list (e.g. `[0.1, 0.5, 0.9]`). Required for `predict_quantiles`. Default when the regressor is constructed with quantile output. |
+
+All regression loss functions accept output tensors of shape
+`(N, K)` where `K = n_outputs * n_quantiles`. In v1 this is
+`(N, 1)` for point regression or `(N, len(quantiles))` for quantile
+regression. v1.1 multi-output regression passes `(N, n_outputs)` or
+`(N, n_outputs, len(quantiles))` with no loss-function changes
+needed (PyTorch's reductions handle the extra dimension). Tests assert
+this on synthetic two-output data in v1 even though the public API
+exposes single-output only.
+
+**Loss strategies for classification.** The classification head's loss
+function is selected by `task_type`:
+
+| `task_type` | Loss function |
+|---|---|
+| `binary` | `BCEWithLogitsLoss` (single-output sigmoid) |
+| `multiclass` | `CrossEntropyLoss` (softmax) |
+| `multilabel` (v1.1) | `BCEWithLogitsLoss` (multi-output sigmoid) |
+
+The selection point is a single dispatch in the loss factory. v1.1's
+multi-label addition swaps `task_type` and `n_outputs`; the loss factory
+returns the right loss without further changes.
 
 **Calibration strategies.** The two tasks calibrate differently.
 
@@ -545,15 +592,43 @@ design-review loop.
    configurable to any non-negative integer the caller's data
    supports. The calling team uses `prediction_step=2` for CX
    intervention lead time; the library does not bake that in. See F3.
-3. **Multi-output / multi-label.** OPEN, revisit decision. Originally
-   RESOLVED out of scope. With `TFTRegressor` added, multi-output
-   regression (predicting several correlated continuous targets in one
-   forward pass, e.g. spend AND login count AND support volume) is
-   more plausibly in scope. Multi-label classification (multiple
-   independent binary labels per row) is a separate axis and is still
-   easier to defer. Decision needed: include multi-output regression
-   in v1 (modest extra work, share-the-backbone story stays clean), or
-   defer both to v1.1.
+3. **Multi-output / multi-label.** RESOLVED: both deferred to v1.1.
+   v1 ships single-output classifier (binary or multi-class) and
+   single-output regressor (point or quantile). v1 must be architected
+   so v1.1 adds both extensions as small additive changes, not as
+   architectural surgery. The v1 constraints that keep these doors
+   open are listed below and enforced in F1, F4, and F5.
+
+   **v1 constraints for cheap v1.1 multi-output / multi-label:**
+
+   1. **Head modules take `n_outputs` as a constructor parameter**
+      (see F4). The classification head accepts `n_outputs` defaulting
+      to `1` for binary and `num_classes` for multi-class; v1 sets it
+      to those values, v1.1 adds a `multilabel` task type that sets
+      `n_outputs = num_labels` and switches the activation from
+      softmax to sigmoid. The regression head accepts `n_outputs`
+      defaulting to `1`; v1 hardcodes `1`, v1.1 lets the caller pass a
+      higher value.
+
+   2. **`y` shape validation is one function** (see F1). v1's
+      validator accepts only 1D `y` and raises a clear error
+      mentioning v1.1 if the caller passes a 2D array. v1.1 changes
+      the validator to accept 2D `y` of shape `(n_samples, n_outputs)`;
+      no other code touches `y` shape.
+
+   3. **Loss functions accept `(N, K)` output shapes natively** (see
+      F5). The regression losses already do this in PyTorch; the v1
+      tests assert it on synthetic two-output data even though the
+      public API exposes single-output only. The classification loss
+      function selection is parameterized so swapping
+      `CrossEntropyLoss` for `BCEWithLogitsLoss` in multi-label mode
+      is a one-line change in v1.1.
+
+   4. **`task_type` config enum is forward-extensible.** The pydantic
+      config defines `task_type: Literal["binary", "multiclass",
+      "regression_point", "regression_quantile"]` in v1. v1.1 extends
+      the literal with `"multilabel"` and `"regression_multioutput"`
+      without breaking the API.
 4. **Saved-model format.** RESOLVED: PyTorch-native `save`/`load` is
    the primary path; ONNX export is supported via `export_onnx(path)`
    behind an optional `pip install tft-sklearn[onnx]` extra. See F1.
