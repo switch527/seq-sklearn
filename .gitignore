@@ -1,0 +1,63 @@
+# ─── Agent meta-configuration ───────────────────────────────────────────────
+# Lives in the separate tft-cls-meta repo, mounted at .meta/ via symlinks.
+# Don't commit any of it from this repo. Run `bash .meta/bootstrap.sh` on a
+# fresh clone to set up the symlinks.
+.meta
+CLAUDE.md
+.claude
+GEMINI.md
+.gemini
+.aiexclude
+
+# ─── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# ─── Virtual environments ───────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ─── ML artifacts ───────────────────────────────────────────────────────────
+checkpoints/
+runs/
+wandb/
+mlruns/
+lightning_logs/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.pkl
+
+# ─── Data ───────────────────────────────────────────────────────────────────
+data/
+datasets/
+
+# ─── Local config / secrets ─────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Editor / OS ────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
