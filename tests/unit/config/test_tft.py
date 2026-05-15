@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from seq_sklearn.config.tabular import TabularToSequenceConfig
-from seq_sklearn.config.tft import TFTConfig
+from seq_sklearn.config.tft import TFTAdvancedConfig, TFTConfig
 
 
 def _tab() -> TabularToSequenceConfig:
@@ -72,3 +72,17 @@ def test_inherits_validity_matrix_validator() -> None:
             loss_strategy="cross_entropy",  # illegal for regression
             tabular_config=_tab(),
         )
+
+
+def test_tft_config_advanced_field_is_not_none_by_default() -> None:
+    cfg = _minimal_tft()
+    assert cfg.advanced is not None
+    assert isinstance(cfg.advanced, TFTAdvancedConfig)
+    assert cfg.advanced.extra == ()
+
+
+def test_tft_advanced_config_default_construction_succeeds() -> None:
+    adv = TFTAdvancedConfig()
+    assert adv.extra == ()
+    with pytest.raises(ValidationError):
+        TFTAdvancedConfig(unknown_knob=1)  # type: ignore[call-arg]
