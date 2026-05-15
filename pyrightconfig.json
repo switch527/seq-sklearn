@@ -18,5 +18,16 @@
     "reportUnknownMemberType": "warning",
     "reportUnknownVariableType": "warning",
     "reportUnknownArgumentType": "warning",
-    "reportUntypedFunctionDecorator": "warning"
+    "reportUntypedFunctionDecorator": "warning",
+    "executionEnvironments": [
+        {
+            "root": "tests",
+            "reportArgumentType": "warning",
+            "reportAttributeAccessIssue": "warning",
+            "reportUnknownMemberType": "none",
+            "reportUnknownVariableType": "none",
+            "reportUnknownArgumentType": "none",
+            "reportMissingTypeStubs": "none"
+        }
+    ]
 }
