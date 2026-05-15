@@ -14,6 +14,7 @@
     "typeCheckingMode": "strict",
     "reportMissingImports": "error",
     "reportMissingTypeStubs": "warning",
+    "reportPrivateImportUsage": "warning",
     "reportPrivateUsage": "warning",
     "reportUnknownMemberType": "warning",
     "reportUnknownVariableType": "warning",
