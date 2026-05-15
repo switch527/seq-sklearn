@@ -187,6 +187,34 @@ def test_single_window_entity_no_negative_slices() -> None:
     assert total == 2
 
 
+def test_one_window_and_multi_window_entity_same_call() -> None:
+    # Entity 0 has a single window; entity 1 has ten. With fractions
+    # 0.2 / 0.2, round(0.2 * 1) == 0 so entity 0's sole window lands in
+    # train; entity 1 splits normally. Folds stay disjoint.
+    entity_ids = np.array([0, *([1] * 10)])
+    window_time_index = np.array([0, *list(range(10))])
+    train, val, cal = compute_three_way_split(
+        entity_ids,
+        window_time_index,
+        val_fraction=0.2,
+        cal_fraction=0.2,
+        val_split_strategy="time_ordered",
+        calibration_set_provided=False,
+    )
+
+    def tuples(idx: np.ndarray) -> set[tuple[int, int]]:
+        return {(int(entity_ids[i]), int(window_time_index[i])) for i in idx}
+
+    t, v, c = tuples(train), tuples(val), tuples(cal)
+    assert (0, 0) in t
+    assert (0, 0) not in v
+    assert (0, 0) not in c
+    assert t & v == set()
+    assert t & c == set()
+    assert v & c == set()
+    assert len(t | v | c) == len(entity_ids)
+
+
 def test_random_with_zero_fractions_all_train() -> None:
     entity_ids, wti = _panel(1, 8)
     train, val, cal = compute_three_way_split(

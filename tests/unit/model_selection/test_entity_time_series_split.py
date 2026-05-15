@@ -101,6 +101,18 @@ def test_max_train_size_caps_per_entity() -> None:
             assert count <= 7
 
 
+def test_gap_and_max_train_size_together() -> None:
+    panel = _panel(2, 60)
+    splitter = EntityTimeSeriesSplit(n_splits=3, gap=3, lookback=2, max_train_size=5)
+    for train_idx, _ in splitter.split(panel):
+        ids = panel["id"].to_numpy()
+        for entity in (0, 1):
+            count = sum(1 for i in train_idx if ids[i] == entity)
+            # gap trims the train tail first, then max_train_size caps
+            # the remainder to its trailing 5 rows per entity.
+            assert count <= 5
+
+
 def test_short_entities_dropped_with_one_aggregated_warning() -> None:
     rows = []
     # Two long entities, three short ones.
