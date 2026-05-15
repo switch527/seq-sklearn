@@ -136,6 +136,15 @@ detection but stays a pure function.
 
 **Modules**:
 
+The hyperparameter-strategy refactor (per
+`docs/hyperparameter_strategy.md`) lands the four-tier
+config hierarchy in Phase 1. The module roster expands to include
+family sub-configs (`optimizer.py`, `scheduler.py`, `loss.py`,
+`sampler.py`), the `extras` infrastructure (`_extras.py` with
+`ExtraDict`, `_normalize_extras`, `_PROMOTED_KEYS_BY_FAMILY`,
+`extract_deprecated_extras`), and the renamed multi-adapter
+module (`_adapters.py`).
+
 - `src/seq_sklearn/errors.py` (A10): full exception hierarchy
   including `NotFittedError` with the MRO-load-bearing dual parent.
 - `src/seq_sklearn/logging.py` (A15): `Event` enum + `emit` helper.
@@ -149,32 +158,67 @@ detection but stays a pure function.
   as tuple constants. Single source of truth.
 - `src/seq_sklearn/config/_validity.py`: `check_combo(task_type,
   loss_strategy, imbalance_strategy, calibration_strategy)` per the
-  F5 matrix. Returns `None` on legal cells, raises `ValueError` on
-  illegal cells with a message naming legal alternatives. Pure
-  function so the Optuna search-space sampler and the cross-field
-  validator share it.
+  F5 matrix. Signature unchanged (still four strings); the call
+  site inside `BaseModelConfig._check_validity_matrix` reads from
+  the nested family configs (`self.loss.strategy`,
+  `self.sampler.strategy`). Returns `None` on legal cells, raises
+  `ValueError` on illegal cells with a message naming legal
+  alternatives. Pure function so the Optuna search-space sampler
+  and the cross-field validator share it.
+- `src/seq_sklearn/config/_extras.py` (new per strategy doc):
+  `ExtraValue` restricted-union type, `ExtraDict` annotated tuple,
+  `_normalize_extras` BeforeValidator, `_PROMOTED_KEYS_BY_FAMILY`
+  registry (empty in v1; populated as ALPHA → BETA promotions
+  occur), `extract_deprecated_extras` helper. Single source of
+  truth for the escape-hatch contract.
+- `src/seq_sklearn/config/optimizer.py` (new per strategy doc):
+  `OptimizerConfig` family sub-config (`name`, `learning_rate`,
+  `weight_decay`, `betas`, `eps`, `momentum`, `nesterov`, `extra`).
+  Frozen pydantic, `extra="forbid"`.
+- `src/seq_sklearn/config/scheduler.py` (new per strategy doc):
+  `SchedulerConfig` family sub-config (`name`, `warmup_steps`,
+  OneCycleLR / ReduceLROnPlateau / cosine sub-fields, `extra`).
+- `src/seq_sklearn/config/loss.py` (new per strategy doc):
+  `LossConfig` family sub-config (`strategy` with NO default per
+  F5, `focal_gamma`, `focal_alpha`, `huber_delta`,
+  `label_smoothing`, `extra`).
+- `src/seq_sklearn/config/sampler.py` (new per strategy doc):
+  `SamplerConfig` family sub-config (`strategy`,
+  `oversample_ratio`, `replacement`, `extra`).
 - `src/seq_sklearn/config/base.py`: `BaseTrainingConfig`,
-  `BaseModelConfig` (A4). Pydantic v2 frozen models. The
-  `BaseModelConfig.model_validator` calls `check_combo` and wraps
-  `ValueError` into the model's validation context.
+  `BaseModelConfig` (A4). Pydantic v2 frozen models. Both nest
+  the family sub-configs (`optimizer: OptimizerConfig`,
+  `scheduler: SchedulerConfig`, `loss: LossConfig`, `sampler:
+  SamplerConfig`); cross-cutting fields (precision, seed,
+  val/cal_fraction, etc.) stay flat per the strategy doc's Tier 2
+  spec. `BaseModelConfig._check_validity_matrix` calls
+  `check_combo` reading `self.loss.strategy` and
+  `self.sampler.strategy` from the nested family configs.
 - `src/seq_sklearn/config/tabular.py`:
-  `TabularToSequenceConfig` (A4). `Mapping[str, int]` field for
-  `categorical_embed_dims` so the frozen model is hashable.
-- `src/seq_sklearn/config/tft.py`: `TFTConfig` per A4. Lives in
-  Phase 1 alongside the other configs (one source of truth for
-  every pydantic schema); the backbone in Phase 3 consumes
-  instances of this class. TFT-specific cross-field validators
-  (`attention_heads divides hidden_size`) live here. The
-  base-class validators (`quantiles strictly increasing in (0, 1)`,
-  validity-matrix check via `_validity.py`) live on
-  `BaseModelConfig` so v2 quantile regressors (PatchTST quantile,
-  TimesNet quantile) inherit them. `test_config_tft.py` exercises
-  only the TFT-specific validator; the quantile validator is
-  exercised in `test_config_base.py`.
-- `src/seq_sklearn/config/_params_adapter.py`:
-  `TabularConfigParams(BaseEstimator)` per A4 step 3. Fields mirror
-  `TabularToSequenceConfig` 1:1. `to_pydantic()` constructs the
-  frozen instance.
+  `TabularToSequenceConfig` (A4). `categorical_embed_dims` is
+  `CategoricalEmbedDims = tuple[tuple[str, int], ...]` with a
+  `BeforeValidator` that accepts dict / Mapping / tuple input
+  (the earlier `Mapping[str, int]` claim did not deliver
+  hashability in pydantic v2).
+- `src/seq_sklearn/config/tft.py`: `TFTConfig` per A4 plus the new
+  `TFTAdvancedConfig` (Tier 3, BETA, ships empty in v1 plus the
+  `extra` escape hatch). `TFTConfig.advanced:
+  TFTAdvancedConfig = Field(default_factory=TFTAdvancedConfig)`
+  per strategy doc. TFT-specific cross-field validators
+  (`attention_heads divides hidden_size`) live here. The base-
+  class validators (`quantiles strictly increasing in (0, 1)`,
+  validity-matrix check) live on `BaseModelConfig`.
+- `src/seq_sklearn/config/_adapters.py` (renamed from
+  `_params_adapter.py` per strategy doc): six BaseEstimator
+  adapters, one per nested pydantic sub-config. Every adapter
+  `__init__` carries the `*` keyword-only marker (mandatory per
+  Gemini-pass finding on the strategy doc; without it the
+  ALPHA → BETA promotion path silently breaks positional callers).
+  Adapters: `TabularConfigParams` ← `TabularToSequenceConfig`,
+  `OptimizerParams` ← `OptimizerConfig`, `SchedulerParams` ←
+  `SchedulerConfig`, `LossParams` ← `LossConfig`, `SamplerParams`
+  ← `SamplerConfig`, `TFTAdvancedParams` ← `TFTAdvancedConfig`.
+  Each has `to_pydantic()` constructing the frozen instance.
 
 **Dependencies**: Phase 0.
 
@@ -201,32 +245,91 @@ detection but stays a pure function.
   parametrized over the Cartesian product of the four domain
   enumerations from `_domains.py` minus the legal cells listed in F5.
   Every illegal cell raises and the error message names both the
-  offending fields and a legal alternative. v1.1 task-type rows
-  carry `pytest.mark.xfail(strict=True)` so a future change that
+  offending fields and a legal alternative. The test body constructs
+  configs via the nested shape per the strategy doc's "Test
+  parametrize-ID stability" subsection: pass
+  `LossConfig(strategy=loss_strategy)` and
+  `SamplerConfig(strategy=imbalance_strategy)` as sub-configs to
+  `BaseModelConfig`. The parametrization tuple stays 4 strings so
+  pytest IDs are stable. v1.1 task-type rows carry
+  `pytest.mark.xfail(strict=True)` so a future change that
   accidentally accepts a v1.1 task type fails CI rather than
   silently converting to a pass.
+- `tests/unit/config/test_extras.py` (new per strategy doc; lands
+  in Phase 1): covers `_normalize_extras` type validation, hash
+  stability, JSON round-trip via `model_dump(mode="json")`, and
+  the deprecation-alias machinery. Named tests:
+  `test_extra_dict_rejects_non_primitive_value`,
+  `test_extra_dict_round_trips_each_primitive_type`,
+  `test_extra_dict_stored_as_sorted_tuple`,
+  `test_extra_dict_survives_json_roundtrip`,
+  `test_extract_deprecated_extras_meta_promoted_keys_exist`,
+  `test_extract_deprecated_extras_both_typed_and_extra_raises_config_error`,
+  `test_extract_deprecated_extras_happy_path_passes_through`
+  (asserts unpromoted `extra` keys pass through unchanged with no
+  `DeprecationWarning`),
+  `test_extract_deprecated_extras_mock_promotion_emits_warning`
+  (Phase 1 mock variant of the deprecation-warning test; the real
+  post-promotion test
+  `test_extra_path_after_promotion_emits_deprecation_warning`
+  is deferred until the first ALPHA→BETA promotion).
+- `tests/unit/config/test_optimizer.py` (new per strategy doc):
+  `test_default_construction_uses_documented_defaults` asserts
+  `OptimizerConfig()` produces the documented field defaults;
+  `test_adamw_reserved_keys_collision_raises` and
+  `test_sgd_reserved_keys_collision_raises` assert
+  `OptimizerConfig(name=..., extra=(("collision_key", value),))`
+  raises `ValidationError` from the `_check_extra_not_reserved`
+  model_validator at config construction (per architecture A4 +
+  strategy doc; the check lives on the config, not on
+  `build_optimizer`, so Phase 1 owns the test).
+- `tests/unit/config/test_scheduler.py` (new per strategy doc):
+  `test_default_construction_uses_documented_defaults` asserts
+  `SchedulerConfig()` produces the documented field defaults.
+- `tests/unit/config/test_loss.py` (new per strategy doc):
+  `test_construction_requires_strategy` asserts `LossConfig()`
+  without `strategy=` raises `ValidationError` (no default per F5).
+- `tests/unit/config/test_sampler.py` (new per strategy doc):
+  `test_default_strategy_is_none` asserts `SamplerConfig()`
+  produces `strategy="none"`.
 - `tests/unit/test_config_base.py`: legal `BaseModelConfig`
   constructions succeed; mutation post-construction raises
   (frozen); `extra="forbid"` rejects unknown fields. The
   `quantiles strictly increasing in (0, 1)` cross-field validator
   fires on non-monotone or out-of-(0, 1) values; the test
-  parametrizes over malformed quantile vectors.
+  parametrizes over malformed quantile vectors. Includes
+  `test_v1_task_type_rejects_multilabel_and_regression_multioutput`
+  pinning the v1.1-unreachable guard per the architecture A4
+  fold-in note.
 - `tests/unit/test_config_tabular.py`: same as above for
   `TabularToSequenceConfig`. The hashability assertion confirms
-  `hash(config)` succeeds.
+  `hash(config)` succeeds against the `CategoricalEmbedDims`
+  tuple form.
 - `tests/unit/test_config_tft.py`: legal `TFTConfig` constructions
   succeed; `attention_heads` not dividing `hidden_size` raises
   via the TFT-specific cross-field validator; mutation
   post-construction raises. The quantile validator is tested in
   `test_config_base.py` (it lives on `BaseModelConfig`, not
-  `TFTConfig`).
-- `tests/unit/test_params_adapter.py`: `TabularConfigParams`
-  composes with `sklearn.base.clone`; `clone(adapter)` produces an
-  independent instance whose mutation does not aliase the
-  original; `get_params(deep=False)` returns the flat field dict;
-  `set_params(lookback=6)` mutates in place; `to_pydantic()` builds
-  the frozen `TabularToSequenceConfig` and re-raises pydantic
-  ValidationError as the caller's context allows.
+  `TFTConfig`). Per strategy doc:
+  `test_tft_config_advanced_field_is_not_none_by_default` and
+  `test_tft_advanced_config_default_construction_succeeds` pin
+  the `advanced` slot's non-None empty-default contract.
+- `tests/unit/config/test_adapters.py` (renamed from
+  `test_params_adapter.py` per strategy doc): every adapter
+  composes with `sklearn.base.clone`. Six named per-adapter
+  clone-safety tests:
+  `test_tabular_config_params_clone_is_independent`,
+  `test_optimizer_params_clone_is_independent`,
+  `test_scheduler_params_clone_is_independent`,
+  `test_loss_params_clone_is_independent`,
+  `test_sampler_params_clone_is_independent`,
+  `test_tft_advanced_params_clone_is_independent`. Plus
+  `test_all_adapters_have_keyword_only_init` introspecting every
+  adapter's `__init__` signature for the `*` marker.
+  `get_params(deep=False)` returns the flat field dict;
+  `set_params(...)` mutates in place; `to_pydantic()` builds the
+  frozen pydantic instance and re-raises pydantic
+  `ValidationError` as the caller's context allows.
 
 **Done when**: all unit tests pass; coverage on `src/seq_sklearn/`
 hits 90%+ on the modules in this phase (it should, they are pure
@@ -722,8 +825,13 @@ test imports it).
   tag block (`input_tags.dataframe = True`, `requires_fit = True`,
   etc.) per F1.1; concrete classes override only when a tag must
   flip (e.g. v3 recurrent models flip `non_deterministic = True`).
-  The `BackboneOutput` dataclass base and the abstract
-  `BaseBackbone` class with the default
+  `_build_config` injects the task-type-aware loss default per
+  architecture A4: when `self.loss is None`, build a
+  `LossParams(strategy=_DEFAULT_LOSS_FOR_TASK[self.task_type])`
+  so `TFTClassifier(task_type="binary").fit(X, y)` works without
+  explicit loss specification while keeping `LossConfig.strategy`
+  no-default at the pydantic layer. The `BackboneOutput` dataclass
+  base and the abstract `BaseBackbone` class with the default
   `compute_training_metrics() -> {}` already landed in Phase 3 at
   `models/_backbone.py`; `BaseSequenceEstimator` imports
   `BaseBackbone` for type annotations only.
@@ -801,6 +909,22 @@ test imports it).
   `tags.non_deterministic is False`. A tag-value regression
   surfaces immediately at the unit level, not only when
   `check_estimator` happens to probe the affected field.
+- `tests/unit/models/test_loss_default_injection.py` (per
+  hyperparameter-strategy fold-in; Phase 6a since it ships with
+  `BaseSequenceEstimator._build_config`):
+  `test_loss_default_injection_per_task_type` parametrizes over v1
+  task types (`binary`, `multiclass`, `regression_point`,
+  `regression_quantile`); for each, construct
+  `_DummySequenceClassifier(task_type=task)` without `loss=`,
+  call `_build_config`, assert the injected
+  `LossConfig.strategy == _DEFAULT_LOSS_FOR_TASK[task]`.
+- `tests/unit/config/test_adapters.py` (extends Phase 1's
+  clone-safety roster):
+  `test_outer_estimator_clone_does_not_alias_adapter_instances`
+  per hyperparameter-strategy fold-in. Constructs a
+  `_DummySequenceClassifier` with explicit adapter instances,
+  calls `sklearn.base.clone`, asserts each cloned adapter is a
+  fresh instance (not aliased to the original).
 - `tests/unit/models/test_short_entity_predict.py` (one of N1's
   required tests): predict on a panel with three entities below
   `min_periods_predict` plus one above-floor entity; assert each
@@ -983,8 +1107,24 @@ symbols, and Optuna integration works end-to-end.
 **Modules**:
 
 - `src/seq_sklearn/__init__.py`: full re-export list per A3.
-- `src/seq_sklearn/tuning/suggest_params.py` per A16. Search space
-  closed under the F5 validity matrix by construction.
+- `src/seq_sklearn/tuning/suggest_params.py` per A16 (signature
+  includes `search_advanced: bool = False` and `search_extras: bool
+  = False` keyword-only flags per hyperparameter-strategy fold-in).
+  Default flags sample ONLY STABLE fields enumerated in the strategy
+  doc's "Default search space per model" table; `search_advanced=True`
+  also samples BETA fields on `<Model>AdvancedConfig` (v1 ships
+  empty so the flag is a no-op for v1); `search_extras=True` samples
+  from `src/seq_sklearn/tuning/_alpha_keys.py` (empty in v1).
+  Closed under the F5 validity matrix regardless of flag values.
+- `src/seq_sklearn/tuning/_alpha_keys.py` (new per strategy doc):
+  curated per-family ALPHA-key enum lists. v1 ships empty;
+  maintainers populate as ALPHA passthroughs land.
+- `src/seq_sklearn/tuning/_config_to_estimator_kwargs.py` (new per
+  strategy doc): `_config_to_estimator_kwargs` helper + the
+  `_ADAPTER_MAP_BY_CONFIG` registry + `_TFT_ADAPTER_MAP` per the
+  A16 spec. Pops every nested sub-config from
+  `config.model_dump(mode="json")` and wraps in the matching
+  adapter; v2 / v3 register their per-model adapter maps here.
 - `src/seq_sklearn/tuning/pruning.py`: `optuna_trial_guard` context
   manager per A16. The LightningModule's `optuna_trial` constructor
   argument and the `_pending_prune` deferred-raise pattern already
@@ -1009,11 +1149,23 @@ symbols, and Optuna integration works end-to-end.
   the search space). Each sampled trial drives `suggest_params`;
   every returned config passes `check_combo` from the validity
   matrix. One of N1's required tests. The architecture A16 code
-  block is the canonical pattern.
+  block is the canonical pattern. Includes
+  `test_suggest_params_default_flags_exclude_advanced_fields`,
+  `test_suggest_params_search_advanced_true_accepts_flag`, and
+  `test_suggest_params_sweeps_only_default_fields` per the
+  hyperparameter-strategy fold-in (pins the per-flag sampling
+  behavior).
   `FixedTrial` remains the right tool for the
   `optuna_trial_guard` tests below, where the wrapped objective
   body needs `report` / `should_prune` to be no-ops without
   standing up a `Study`.
+- `tests/unit/tuning/test_config_to_estimator_kwargs.py` (new per
+  hyperparameter-strategy fold-in):
+  `test_config_to_estimator_kwargs_round_trips_all_adapters`
+  exercises every adapter slot;
+  `test_config_to_estimator_kwargs_extra_tuple_type_survives`
+  pins the `mode="json"` round-trip of `extra` tuples through
+  adapter construction. Both load-bearing for the Optuna helper.
 - `tests/unit/tuning/test_trial_guard.py`: a `ConfigError` raised
   inside the guard converts to `optuna.TrialPruned`; a
   `TrainingError` does the same; `DataContractError` and
@@ -1241,7 +1393,7 @@ The phases above lock contracts that v2 and v3 inherit unchanged:
   BaseEstimator adapter for nested pydantic configs has no
   surveyed precedent per `docs/research/pydantic_sklearn.md`.
   Mitigation: Phase 1 includes a focused
-  `test_params_adapter.py` covering `clone`, `get_params(deep=True)`,
+  `test_adapters.py` covering `clone`, `get_params(deep=True)`,
   `set_params` chaining, joblib threading, and
   pickle. If the pattern proves unworkable, the fallback is the
   flatten-into-dict pattern from the Gemini-rejected A4 v1, taking
@@ -1344,7 +1496,7 @@ single experienced engineer working full-time."
 | Phase | Estimate |
 |---|---|
 | 0 | 1 day |
-| 1 | 3-4 days |
+| 1 | 5-7 days (post-hyperparameter-strategy fold-in: six new sub-config modules, six adapter classes, _extras machinery, expanded test roster) |
 | 2 | 3-4 days |
 | 3 | 4-5 days |
 | 4a (determinism + precision + losses + optimizers + schedulers + sampling + callbacks) | 2-3 days |
@@ -1353,12 +1505,12 @@ single experienced engineer working full-time."
 | 6a (BaseSequenceEstimator + classifier + regressor + smoke skeleton + base tests) | 2-3 days |
 | 6b (transformer + recurrent family bases + AttentionOutput + family tests) | 2-3 days |
 | 7 | 3-4 days |
-| 8 | 2 days |
+| 8 | 2-3 days (post-fold-in: `_alpha_keys.py`, `_config_to_estimator_kwargs.py` registry, suggest_params flag plumbing) |
 | 9 | 3-4 days |
 | 10 | 2-3 days |
 | 11 | 1-2 days |
 | 12 | 3-4 days |
-| **Total** | **35-48 days** |
+| **Total** | **37-52 days** |
 
 Calendar estimate is wider because of swarm-review cycles and
 Gemini-pass wait time. A three-month v1 ship is achievable.
@@ -1828,3 +1980,68 @@ Post-Gemini design-review swarm (Round 2 verification):
   trailing `test_on_train_epoch_end_skips_entropy_when_no_output`
   sentence; the test is already named in the three-named-tests
   block above.
+
+Hyperparameter-strategy fold-in (Round 1):
+
+- **Phase 1 module roster expanded.** Added six new module entries
+  (`_extras.py`, `optimizer.py`, `scheduler.py`, `loss.py`,
+  `sampler.py`, `_adapters.py` renamed from `_params_adapter.py`)
+  plus updated descriptions for `base.py` (nested sub-configs),
+  `tabular.py` (`CategoricalEmbedDims` tuple form), and `tft.py`
+  (`TFTAdvancedConfig` + `advanced` field). The single-adapter
+  `TabularConfigParams`-only design from the previous Phase 1 spec
+  is superseded by the six-adapter family per the strategy doc.
+- **Phase 1 deliverable tests expanded.** Renamed
+  `test_params_adapter.py` to `test_adapters.py` with six per-
+  adapter clone-safety tests plus
+  `test_all_adapters_have_keyword_only_init`. Added new test files
+  per family sub-config (`test_optimizer.py`, `test_scheduler.py`,
+  `test_loss.py`, `test_sampler.py`) and `test_extras.py` for the
+  escape-hatch machinery and deprecation-alias contract. Updated
+  `test_validity_matrix.py` to construct via the nested shape
+  (`LossConfig`, `SamplerConfig` sub-configs); parametrize IDs
+  stay 4 strings so pytest caches are stable. Added
+  `test_v1_task_type_rejects_multilabel_and_regression_multioutput`
+  to `test_config_base.py` pinning the v1.1-unreachable guard.
+  Added `test_tft_config_advanced_field_is_not_none_by_default`
+  and `test_tft_advanced_config_default_construction_succeeds`
+  to `test_config_tft.py` pinning the `advanced` slot contract.
+- **Phase 6a `_build_config` loss-default injection.** `_build_config`
+  now injects `LossParams(strategy=_DEFAULT_LOSS_FOR_TASK[task_type])`
+  when `self.loss is None`. New test
+  `tests/unit/models/test_loss_default_injection.py::test_loss_default_injection_per_task_type`
+  parametrizes over v1 task types and asserts the injected
+  default. The corresponding clone-safety test
+  `test_outer_estimator_clone_does_not_alias_adapter_instances`
+  also lives in Phase 6a (extends the Phase 1 per-adapter clone
+  roster with the outer-estimator-level guarantee).
+- **Phase 8 Optuna module and test additions.** Phase 8 now ships
+  `_alpha_keys.py` (empty enum lists in v1) and
+  `_config_to_estimator_kwargs.py` (helper + adapter map registry
+  per A16 fold-in). `test_suggest_params.py` gains the per-flag
+  sampling tests; `test_config_to_estimator_kwargs.py` (new)
+  pins the round-trip and `extra`-tuple `mode="json"` contracts.
+- **F7 signature change cascaded through Phase 8.** `suggest_params`
+  carries `search_advanced` and `search_extras` keyword-only flags;
+  the default behavior matches the strategy doc's "Default search
+  space per model" table.
+
+Gemini three-doc final pass:
+
+- **Phase 1 reserved-keys test placement contract clarified**
+  (gemini-qa r1-C1). `test_adamw_reserved_keys_collision_raises` and
+  `test_sgd_reserved_keys_collision_raises` test the
+  `_check_extra_not_reserved` model_validator on `OptimizerConfig`
+  (which lives in Phase 1's `src/seq_sklearn/config/optimizer.py`),
+  NOT the build-factory check at `build_optimizer` (Phase 4). The
+  reserved-keys collision is a config-layer invariant per
+  architecture A4 / strategy doc; Phase 1 ownership is correct.
+- **`test_extract_deprecated_extras_happy_path_passes_through` added**
+  to Phase 1's `test_extras.py` roster (gemini-qa r1-I2). Pins the
+  unpromoted-key passthrough contract that the strategy doc's prior
+  test list missed.
+- **F7 / requirements N1 paragraph updated** (gemini-arch r1-I1 +
+  gemini-qa r1-I1). The `suggest_params` signature in F7 now uses
+  the strict type hints matching architecture A16. The N1 Phase 8
+  carve-out now names both the `test_suggest_params_*` trio AND the
+  `test_config_to_estimator_kwargs_*` pair.
