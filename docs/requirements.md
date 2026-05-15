@@ -286,12 +286,17 @@ classes are `TFTClassifier` and `TFTRegressor`. v2 adds `PatchTSTClassifier`,
 
 All classifier and regressor classes expose the same methods:
 
-- `fit(X, y, *, calibration_set=None)` where `X` is a pandas DataFrame
-  in the panel shape above, `y` is array-like of targets aligned to
-  the rows of `X`, and `calibration_set` is an optional
-  `(X_cal, y_cal)` tuple matching the same shape contract. See F2 for
-  the three-way-split rules and the `calibration_set` / `cal_fraction`
-  interaction.
+- `fit(X, y, *, calibration_set=None, optuna_trial=None)` where `X`
+  is a pandas DataFrame in the panel shape above, `y` is array-like
+  of targets aligned to the rows of `X`, `calibration_set` is an
+  optional `(X_cal, y_cal)` tuple matching the same shape contract,
+  and `optuna_trial` is an optional `optuna.Trial` instance threaded
+  into the Trainer for in-training pruning. See F2 for the
+  three-way-split rules and the `calibration_set` / `cal_fraction`
+  interaction. See F7 for the `optuna_trial` plumbing; the keyword
+  lives on `fit` (not `__init__`) to preserve the pydantic config
+  schema's `extra="forbid"` contract and to keep the trial out of
+  `get_params` / `set_params` / `save` / `load`.
 - `predict(X)` returning class predictions (classifier) or point
   predictions (regressor).
 - `score(X, y)` returning accuracy by default for classifiers and R² for
@@ -945,11 +950,22 @@ For Optuna specifically the library ships:
   `prediction_step` (F3) when the caller wants them tuned. The search
   space samples only from the legal cells of the F5 validity matrix.
 - A runnable example at `docs/examples/optuna_search.py`.
-- A pruning hook via `optuna_integration.PyTorchLightningPruningCallback`
-  (imported from the separate `optuna-integration` package, NOT the
-  deprecated `optuna.integration` namespace). The hook reports the
-  validation metric at the end of `on_validation_epoch_end` and
-  raises `optuna.TrialPruned` when `should_prune()` returns true.
+- A pruning hook native to `_LightningModule` using the
+  deferred-raise pattern: `on_validation_epoch_end` calls
+  `trial.report(value, step=current_epoch)` and stashes the prune
+  decision when `should_prune()` returns true;
+  `on_train_epoch_end` raises `optuna.TrialPruned` at the END of
+  the hook so the `train.epoch` and entropy events fire for the
+  pruned epoch first. The library does NOT ship
+  `optuna_integration.PyTorchLightningPruningCallback` because
+  that callback raises from `on_validation_end`, before Lightning
+  fires `on_train_epoch_end`, which would skip the structured-log
+  events for the pruned epoch.
+- The trial reaches `_LightningModule` via the `fit` keyword:
+  `estimator.fit(X, y, optuna_trial=trial)` per F1. The trial is
+  NOT a pydantic config field and NOT an `__init__` argument; this
+  preserves `extra="forbid"` on the config and keeps the trial out
+  of `get_params` / `save` / `load`.
 - `MedianPruner` and `HyperbandPruner` are both supported. Tests
   asserting prune-at-epoch-0 behavior must construct the pruner with
   `MedianPruner(n_startup_trials=0, n_warmup_steps=0, n_min_trials=1)`;
@@ -967,11 +983,15 @@ guard are re-raised as `optuna.TrialPruned` with the original message
 attached. `DataContractError`, `KeyboardInterrupt`, and unexpected
 exceptions propagate so the study fails fast on genuine bugs.
 
-**Testing `suggest_params`.** Unit tests use `optuna.trial.FixedTrial`
-(same method surface as `Trial`, including no-op `report` and
-`should_prune`) to exercise the legal-cell sampling without
-instantiating a Study. A 1000-iteration test asserts every
-`FixedTrial`-produced config passes the validity-matrix validator.
+**Testing `suggest_params`.** Unit tests use a real
+`optuna.create_study().ask()` loop to sample trials that actually
+exercise the search space. A 1000-iteration sweep asserts every
+sampled config passes the validity-matrix validator (`FixedTrial`
+returns deterministic pre-loaded values and would not exercise the
+sampling logic; `FixedTrial` remains the right tool for
+`optuna_trial_guard` tests where the wrapped body needs
+`report` / `should_prune` to be no-ops without standing up a
+Study).
 
 The default search space is ALPHA stability (may change without MINOR
 bump); pass an explicit search space for stable behavior.
@@ -1593,7 +1613,7 @@ deployment-test job has one allowlist for installing from TestPyPI.
 ### N2: CI and review automation
 
 **GitHub Actions matrix.** `{ubuntu-latest, macos-latest, windows-latest}`
-x `{Python 3.11, 3.12, 3.13}`. Per-PR runs Linux on every Python
+x `{Python 3.12, 3.13, 3.14}`. Per-PR runs Linux on every Python
 version; macOS and Windows nightly-only.
 
 **Per-PR workflow (under 5-minute target).**
@@ -1630,7 +1650,7 @@ follow-up.
   | `pydantic` | `>=2.12,<3` | skip 2.11.3 joblib regression (pydantic issue #11746); 2.12 fixes pickle round-trip for `frozen=True` models |
   | `scikit-learn` | `>=1.6,<2` | `Tags` dataclass + `__sklearn_tags__` API |
   | `optuna` | `>=4.4,<5` | 4.0 removed several legacy callbacks and the `MOTPESampler` |
-  | `optuna-integration` | `>=4.4,<5` | required for `PyTorchLightningPruningCallback` against `lightning.pytorch` |
+  | `optuna-integration` | `>=4.4,<5` | installed for transitive dependency hygiene; `PyTorchLightningPruningCallback` is NOT used (the library ships a native pruning hook on `_LightningModule` to preserve Lightning 2.6 lifecycle events, see F7) |
   | `pandas` | `>=2.2` | dtype-extension stability |
   | `numpy` | `>=1.26` | numpy 2.x compatibility cutoff |
   | `safetensors` | `>=0.5` | save/load format (F4) |
@@ -1650,7 +1670,10 @@ follow-up.
 - **Python version policy.** The library supports the three most-recent
   Python releases at each release cut. When a fourth release ships,
   the oldest drops in the next MINOR version with one deprecation
-  cycle. Initial v1 supports 3.11, 3.12, 3.13.
+  cycle. Initial v1 supports 3.12, 3.13, 3.14 (Python 3.14 is the
+  current release as of project start; 3.11 was the prior support
+  floor in pre-v1 drafts and is dropped before v1 ships because the
+  N3 "three most-recent releases" rule covers 3.12-3.14).
 - **`CHANGELOG.md`** following Keep a Changelog conventions.
 - **`CONTRIBUTING.md`** documenting the review workflow (see
   `/design-review`, `/review`, `/gemini-final-pass`).
@@ -2283,3 +2306,28 @@ Gemini final pass (cross-family review on requirements doc):
   `num_workers=min(4, os.cpu_count())` would raise TypeError on
   systems where `os.cpu_count()` returns None. Added the `or 1`
   fallback.
+
+Gemini final pass (second; on the implementation plan, but with cross-doc impact on requirements):
+
+- **F1 fit signature (gemini-impl r1-C3).** Added `optuna_trial:
+  optuna.Trial | None = None` to `fit(X, y, *, calibration_set=None,
+  ...)`. The architecture's Optuna integration (A16) now routes the
+  trial via this keyword instead of polluting the pydantic config
+  kwargs, preserving `extra="forbid"`.
+- **F7 pruning hook design (gemini-impl r1-C4).** Replaced the
+  `PyTorchLightningPruningCallback` paragraph with the native
+  `_LightningModule` deferred-raise pattern. The upstream callback
+  raises from `on_validation_end`, before
+  `on_train_epoch_end` fires, which would skip the `train.epoch`
+  and entropy events on the pruned epoch. The native hook stashes
+  the decision in `on_validation_epoch_end` and raises at the END
+  of `on_train_epoch_end` so logging fires first.
+- **F7 `suggest_params` test guidance (gemini-impl r1-I1).**
+  Switched from a 1000-iteration `FixedTrial` sweep to
+  `optuna.create_study().ask()` so each sampled trial actually
+  exercises the search space. `FixedTrial` is retained for
+  `optuna_trial_guard` tests only.
+- **N3 dependency-table rationale for `optuna-integration`
+  (gemini-impl r1-C4).** Updated the rationale to "installed for
+  transitive dependency hygiene; `PyTorchLightningPruningCallback`
+  is NOT used".

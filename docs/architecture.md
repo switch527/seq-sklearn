@@ -65,6 +65,7 @@ src/seq_sklearn/
   models/
     __init__.py
     _layers.py                      Linear / LayerNorm / Embedding factory (F4)
+    _backbone.py                    BackboneOutput dataclass base, BaseBackbone abstract (A15)
     _base.py                        BaseSequenceEstimator
     _classifier.py                  BaseSequenceClassifier
     _regressor.py                   BaseSequenceRegressor
@@ -72,6 +73,7 @@ src/seq_sklearn/
     _attention.py                   mask polarity flip helper (padding_mask -> attn_mask)
     transformer/
       __init__.py
+      _backbone.py                  TransformerBackboneOutput dataclass (A15)
       _base.py                      TransformerSequenceEstimator
       _interpretable_attention.py   shared-V interpretable multi-head attention (TFT)
       _positional.py                positional encoding helpers
@@ -389,6 +391,17 @@ class BaseModelConfig(BaseTrainingConfig):
         check_combo(self.task_type, self.loss_strategy,
                     self.imbalance_strategy, self.calibration_strategy)
         return self
+
+    @model_validator(mode="after")
+    def _check_quantiles_monotone(self) -> "BaseModelConfig":
+        if self.quantiles is None:
+            return self
+        q = self.quantiles
+        if any(not (0.0 < v < 1.0) for v in q):
+            raise ValueError(f"quantiles must lie in (0, 1); got {q}")
+        if any(q[i] >= q[i + 1] for i in range(len(q) - 1)):
+            raise ValueError(f"quantiles must be strictly increasing; got {q}")
+        return self
 ```
 
 **`TabularToSequenceConfig`**:
@@ -622,7 +635,7 @@ Interpretable multi-head self-attention (custom, shared-V):
       out_per_head = attn_weights @ v_broadcast     # (B, H, L, d)
       out = out_per_head.mean(dim=1)
       out = out_proj(out)
-      attn_weights is returned alongside the output for BackboneOutput.
+      attn_weights is returned alongside the output for TransformerBackboneOutput.
 
   The fast path skips capture entirely; the interpretable path
   materializes attn_weights once, on demand. predict_with_attention
@@ -1381,51 +1394,154 @@ recurrent concrete model ships.
 **Backbone-to-LightningModule instrumentation contract.** The
 entropy events (`train.var_selection_entropy`,
 `train.attention_entropy`) require the backbone's forward pass to
-expose the source tensors to the LightningModule. The contract:
-`TFTBackbone.forward` returns a `BackboneOutput` named tuple with
-the readout vector AND the introspection tensors:
+expose the source tensors to the LightningModule. The base
+contract isolates the LightningModule from family-specific
+introspection field names:
 
 ```python
-class BackboneOutput(NamedTuple):
+# src/seq_sklearn/models/_backbone.py
+@dataclass
+class BackboneOutput:
+    """Family-agnostic backbone output. Concrete families subclass
+    this and add introspection fields. Generic training plumbing
+    sees only `representation` and `padding_mask` plus the dict
+    returned by `compute_training_metrics`. Plain `@dataclass`
+    (not `Protocol`) so concrete families inherit via standard
+    dataclass subclassing and pyright strict mode passes without
+    `@runtime_checkable` ceremony."""
     representation: Tensor                   # (B, hidden_size)
+    padding_mask: Tensor                     # (B, L); True = padding (ignore)
+
+class BaseBackbone(nn.Module, ABC):
+    @abstractmethod
+    def forward(self, batch: dict[str, Tensor]) -> BackboneOutput: ...
+
+    def compute_training_metrics(
+        self, output: BackboneOutput
+    ) -> dict[str, object]:
+        """Return event-payload dicts keyed by F11 event name. Base
+        returns {} so a backbone with no introspection (e.g. v3's
+        recurrent base before any concrete model lands) emits
+        nothing. Concrete backbones override to return one entry
+        per event."""
+        return {}
+```
+
+Transformer-family backbones (TFT in v1, PatchTST / TimesNet / TST
+in v2) extend the dataclass:
+
+```python
+# src/seq_sklearn/models/transformer/_backbone.py
+@dataclass
+class TransformerBackboneOutput(BackboneOutput):
     var_selection_weights: Tensor            # (B, L, n_vars); softmaxed per timestep
-    attention_weights: Tensor                # (B, n_heads, L, L); post-softmax, pre-V scores
-    static_var_selection_weights: Tensor     # (B, n_static_vars); softmaxed across static inputs
+    attention_weights: Tensor                # (B, n_heads, L, L); post-softmax, pre-V
+    static_var_selection_weights: Tensor     # (B, n_static_vars); softmaxed across static
+```
+
+v3 recurrent backbones extend with `RecurrentBackboneOutput`
+carrying `hidden_states` and a `var_selection_weights` field that
+may be zero-valued if the model has no VSN.
+
+`TFTBackbone.compute_training_metrics(output)` reduces the four
+introspection tensors to the F11 payloads, applying the
+`padding_mask` so padded timesteps do not corrupt the metrics:
+
+```python
+# src/seq_sklearn/models/transformer/tft/backbone.py
+def compute_training_metrics(
+    self, output: TransformerBackboneOutput
+) -> dict[str, object]:
+    mask = output.padding_mask                          # (B, L); True = padding
+    valid = (~mask).float()                             # (B, L); 1 at valid timesteps
+    valid_count = valid.sum().clamp_min(1.0)            # scalar; >= 1 per the mask
+                                                        # invariant in A6
+
+    # static_entropy: VSN softmaxes across n_static_vars per batch element;
+    # no time axis so no mask is needed.
+    sw = output.static_var_selection_weights            # (B, n_static_vars)
+    static_h = -(sw * sw.clamp_min(1e-12).log()).sum(dim=-1)  # (B,)
+    static_entropy = static_h.mean().item()
+
+    # temporal_entropy: per-timestep VSN softmax across n_vars; padded
+    # rows are zeroed BEFORE softmax (per A6 VSN spec), so post-softmax
+    # they are uniform (max entropy). We mask them out of the mean.
+    tw = output.var_selection_weights                   # (B, L, n_vars)
+    temporal_h = -(tw * tw.clamp_min(1e-12).log()).sum(dim=-1)  # (B, L)
+    temporal_entropy = ((temporal_h * valid).sum() / valid_count).item()
+
+    # entropy_per_head: attention softmax across keys. Padded queries
+    # produce zero attention rows (the nan_to_num pass in the
+    # interpretable path; the SDPA fast path is not used here since
+    # the introspection tensor is populated only on the interpretable
+    # path). Mask padded queries out of the head-wise mean.
+    aw = output.attention_weights                       # (B, H, L, L)
+    attn_h = -(aw * aw.clamp_min(1e-12).log()).sum(dim=-1)  # (B, H, L)
+    # broadcast mask over heads
+    valid_h = valid.unsqueeze(1)                        # (B, 1, L)
+    per_head = (attn_h * valid_h).sum(dim=(0, 2)) / valid_count
+    entropy_per_head = per_head.tolist()                # list[float], length H
+
+    return {
+        "train.var_selection_entropy": {
+            "static_entropy": static_entropy,
+            "temporal_entropy": temporal_entropy,
+        },
+        "train.attention_entropy": {
+            "entropy_per_head": entropy_per_head,
+        },
+    }
 ```
 
 `_LightningModule.training_step` stashes the most recent
 `BackboneOutput` on `self._last_train_output`;
-`on_train_epoch_end` reads `self._last_train_output` to compute
-per-epoch entropy. The F11 payload shapes
-(`static_entropy: float`, `temporal_entropy: float`,
-`entropy_per_head: list[float]` of length `n_heads`) dictate the
-reduction axes:
+`on_train_epoch_end` calls
+`self.backbone.compute_training_metrics(self._last_train_output)`
+and emits one event per returned key. The LightningModule never
+reads family-specific attribute names; v3 recurrent models override
+`compute_training_metrics` to emit `train.hidden_norm` (and
+optionally `train.var_selection_entropy` if their VSN is non-trivial)
+without touching `_LightningModule` code.
 
 ```python
-out = self._last_train_output
-
-# static_entropy: scalar, from static VSN softmax across n_static_vars
-sw = out.static_var_selection_weights               # (B, n_static_vars)
-static_entropy = -(sw * sw.clamp_min(1e-12).log()).sum(dim=-1).mean()
-
-# temporal_entropy: scalar, from per-timestep VSN softmax across n_vars
-tw = out.var_selection_weights                      # (B, L, n_vars)
-temporal_entropy = -(tw * tw.clamp_min(1e-12).log()).sum(dim=-1).mean()
-
-# entropy_per_head: (n_heads,) vector; reduce across (B, L_q, L_k)
-aw = out.attention_weights                          # (B, H, L, L); softmax over last dim
-attn_entropy = -(aw * aw.clamp_min(1e-12).log()).sum(dim=-1)  # (B, H, L)
-entropy_per_head = attn_entropy.mean(dim=(0, 2)).tolist()     # list[float], length H
+# src/seq_sklearn/training/_lightning_module.py
+def on_train_epoch_end(self) -> None:
+    if self._last_train_output is None:
+        return                                          # no successful batch this epoch
+    payloads = self.backbone.compute_training_metrics(self._last_train_output)
+    for event_name, payload in payloads.items():
+        emit(self._logger, Event(event_name), **payload)
+    # ... (other emissions: train.epoch, train.grad_norm, etc.)
 ```
 
-`emit(Event.TRAIN_VAR_SELECTION_ENTROPY, static_entropy=...,
-temporal_entropy=...)` and `emit(Event.TRAIN_ATTENTION_ENTROPY,
-entropy_per_head=...)` then fire per the F11 payload schemas. If
-`_last_train_output` is `None` (e.g. the epoch ended with no
-successful training batches), the entropy events are skipped
-silently; a named test
-`test_on_train_epoch_end_skips_entropy_when_no_output` asserts
-`caplog` contains no entropy records when this branch fires.
+Four named tests pin this contract. They share a common naming
+convention with the plan to avoid the cross-doc drift the prior
+Gemini pass surfaced:
+
+- `test_on_train_epoch_end_skips_entropy_when_no_output` asserts
+  `caplog` contains no entropy records when
+  `_last_train_output is None` (e.g. the epoch ended with no
+  successful training batches).
+- `test_on_train_epoch_end_emits_events_from_compute_metrics`
+  uses a `_DummyBackbone` subclass that overrides
+  `compute_training_metrics` to return one synthetic payload
+  (`{"train.var_selection_entropy": {"static_entropy": 1.0,
+  "temporal_entropy": 0.5}}`); asserts `caplog` contains exactly
+  one record with `record.event == "train.var_selection_entropy"`
+  and the expected payload keys. Pins the
+  `for event_name, payload in payloads.items(): emit(...)`
+  delegation loop at the LightningModule unit level.
+- `test_compute_training_metrics_ignores_padded_positions`
+  constructs a `TransformerBackboneOutput` with uniform-distribution
+  rows at padded timesteps and asserts the returned
+  `temporal_entropy` and `entropy_per_head` equal hand-computed
+  values on the unpadded slice (proving the time-axis mask is
+  applied). Also asserts `static_entropy` is identical to the
+  no-mask reference (proving the static branch correctly skips
+  the mask).
+- `test_base_backbone_compute_training_metrics_returns_empty`
+  asserts `BaseBackbone.compute_training_metrics` defaults to `{}`
+  so a v3 recurrent backbone that overrides nothing emits no events.
 
 Under `accumulate_grad_batches > 1`, `_last_train_output` reflects
 the FINAL micro-batch only, not an aggregate. v1 treats this as
@@ -1496,8 +1612,9 @@ def suggest_params(
     Closed under the F5 validity matrix by construction: samples
     task_type first (or reads from `base`), then samples each
     downstream field from the legal subset for that task type. A
-    1000-iteration unit test asserts every FixedTrial-built config
-    passes the cross-field validator."""
+    1000-iteration unit test using `optuna.create_study().ask()`
+    asserts every sampled config passes the cross-field validator
+    (FixedTrial would not actually sample the search space)."""
 ```
 
 ```python
@@ -1518,36 +1635,104 @@ def optuna_trial_guard(trial: optuna.Trial) -> Iterator[None]:
 Recommended objective shape:
 
 ```python
+def _config_to_estimator_kwargs(config: BaseModelConfig) -> dict[str, object]:
+    """Convert a pydantic config dump into the flat double-underscore
+    kwargs an estimator's `__init__` accepts. The TFTConfig's
+    nested `tabular_config` field becomes a `TabularConfigParams`
+    adapter; other fields pass through unchanged."""
+    raw = config.model_dump()
+    tabular_dict = raw.pop("tabular_config")
+    return {**raw, "tabular_config": TabularConfigParams(**tabular_dict)}
+
 def objective(trial: optuna.Trial) -> float:
     with optuna_trial_guard(trial):
         config = suggest_params(trial, TFTClassifier, base=BASE_CONFIG)
-        params = config.model_dump()
-        params["optuna_pruning_trial"] = trial   # plumbed into _LightningModule
-        model = TFTClassifier(**flatten_double_underscore(params))
-        model.fit(X_train, y_train, calibration_set=(X_cal, y_cal))
+        model = TFTClassifier(**_config_to_estimator_kwargs(config))
+        model.fit(
+            X_train, y_train,
+            calibration_set=(X_cal, y_cal),
+            optuna_trial=trial,           # threaded via fit, NOT __init__
+        )
         return model.score(X_val, y_val)
 ```
+
+`_config_to_estimator_kwargs` is documented here (not exported)
+because the round-trip between a frozen pydantic dump and the
+mutable BaseEstimator-adapter kwargs is non-obvious. v2 / v3
+estimators with their own nested config adapters add similar
+helpers; the shape stays the same.
+
+The trial reaches `_LightningModule` via `fit`, not via the pydantic
+config. `BaseSequenceEstimator.fit` accepts `optuna_trial:
+optuna.Trial | None = None` as a keyword argument and forwards it
+to the Trainer, which threads it into the LightningModule's
+constructor. This preserves `BaseModelConfig`'s `extra="forbid"`
+contract (Phase 7's test that unknown kwargs raise stays valid) and
+keeps the trial out of `get_params` / `set_params` /
+`save` / `load` (where a serialized `Trial` would be nonsense and a
+pickle hazard).
 
 **Pruning hook integration.** The Trainer passes `optuna_trial` to
 `_LightningModule`'s constructor. `on_validation_epoch_end` pulls the
 metric from `self.trainer.callback_metrics` (epoch-aggregated, not
 last-batch), calls `trial.report(value, step=current_epoch)`, and
-raises `optuna.TrialPruned` on `should_prune()`. The N1 pruning test
-uses `MedianPruner(n_startup_trials=0, n_warmup_steps=0, n_min_trials=1)`
-and asserts trial 2 prunes at epoch 0; `n_min_trials=1` is mandatory
-or the test becomes flaky per `docs/research/optuna.md`.
+records the prune decision in `self._pending_prune` per A7's
+deferred-raise pattern; `on_train_epoch_end` raises
+`optuna.TrialPruned` at the END of the hook so the `train.epoch`
+and entropy events still fire for the pruned epoch. The N1 pruning
+test uses `MedianPruner(n_startup_trials=0, n_warmup_steps=0,
+n_min_trials=1)` and asserts trial 2 prunes at epoch 0;
+`n_min_trials=1` is mandatory or the test becomes flaky per
+`docs/research/optuna.md`.
 
-Testing `suggest_params` uses `optuna.trial.FixedTrial` (same method
-surface, no-op `report` / `should_prune`).
+**`optuna-integration.PyTorchLightningPruningCallback` is NOT
+shipped.** The upstream callback raises `TrialPruned` from
+`on_validation_end`, which Lightning fires BEFORE
+`on_train_epoch_end`; that skips the `train.epoch` and entropy
+log events for the pruned epoch (the lifecycle bug A7's deferred-
+raise pattern was designed to prevent). The library's native
+`_pending_prune` machinery is the only supported path. The
+`optuna-integration` package is still installed (its other
+utilities may be referenced by callers) but
+`PyTorchLightningPruningCallback` is not imported into the library
+and not exposed in any example.
+
+**Testing `suggest_params`.** Use a real `optuna.Study` via
+`study.ask()` so each sampled trial draws from the search space.
+`FixedTrial` is deterministic and only returns pre-loaded param
+values, so a 1000-iteration `FixedTrial` loop would not actually
+exercise the F5 validity matrix's downstream sampling logic. The
+unit test pattern:
+
+```python
+def test_suggest_params_sweep_respects_validity_matrix():
+    study = optuna.create_study()
+    for _ in range(1000):
+        trial = study.ask()
+        config = suggest_params(trial, TFTClassifier)
+        check_combo(
+            config.task_type, config.loss_strategy,
+            config.imbalance_strategy, config.calibration_strategy,
+        )  # raises ValueError on any illegal cell
+        study.tell(trial, 0.0)  # value irrelevant for this test
+```
+
+`FixedTrial` remains the right tool for testing
+`optuna_trial_guard` (where the wrapped body should see `report` /
+`should_prune` as no-ops without standing up a Study) and for any
+test where the trial values are explicitly known.
 
 Imports (from `docs/research/optuna.md`):
 
 ```python
 import optuna
-from optuna_integration import PyTorchLightningPruningCallback  # not optuna.integration
+# No PyTorchLightningPruningCallback import; see the deferred-raise
+# note above.
 ```
 
-Pin: `optuna>=4.4,<5`, `optuna-integration>=4.4,<5`.
+Pin: `optuna>=4.4,<5`, `optuna-integration>=4.4,<5` (the integration
+package is installed for transitive dependency hygiene; the
+specific pruning callback is not imported into seq-sklearn).
 
 ## A17: Save / load format
 
@@ -1686,7 +1871,7 @@ Concrete `pyproject.toml`:
 ```toml
 [project]
 name = "seq-sklearn"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.12,<3.15"
 dependencies = [
     "torch>=2.6,<3",
     "lightning>=2.6.1,<2.7",      # 2.6.2/2.6.3 yanked after PyPI compromise 2026-04-30
@@ -1753,7 +1938,7 @@ build runs faster still).
 `.github/workflows/nightly.yml`:
 
 ```
-full-matrix:     {linux, macos, windows} x {3.11, 3.12, 3.13}
+full-matrix:     {linux, macos, windows} x {3.12, 3.13, 3.14}
 perf:            pytest -m perf with regression gate
                  against tests/perf/_baselines/cpu-x86.json
 gpu:             self-hosted T4 when available
@@ -1784,12 +1969,14 @@ architecture phase:
 5. **`resume_path` user-facing surface**: F5 promises restore of
    model weights, optimizer state, scheduler state, and RNG state
    from a checkpoint. A7's `RngStateCallback` handles the RNG side.
-   Open: does the user pass `resume_path` to the Estimator's
-   `__init__` (and then to `pl_trainer.fit(ckpt_path=...)` inside
-   `fit`), or to `fit(X, y, *, resume_path=...)` as a keyword? Both
-   are defensible. Sklearn convention prefers the second, but
-   construction-time arguments make `clone()` semantics cleaner. Pin
-   at implementation time.
+   **RESOLVED**: per requirements F5,
+   `BaseSequenceEstimator.__init__(..., resume_path: str | Path |
+   None = None, ...)`. The estimator stores `resume_path` as an
+   instance attribute and forwards it to the Trainer at `fit` time
+   via `pl_trainer.fit(ckpt_path=resume_path)`. `clone()` semantics
+   are clean (a clone with the same `resume_path` resumes from the
+   same checkpoint deterministically). `fit` does NOT accept
+   `resume_path` as a keyword.
 
 ## Addressed
 
@@ -1860,7 +2047,7 @@ Round 1 (design-review swarm):
   docstring now states the N1 parametrized test exercises BOTH
   functions in sequence per tier, not independently.
 - **Backbone-to-LightningModule entropy hooks (qa r1-I2).** Added
-  the `BackboneOutput` named-tuple contract in A15: backbone
+  the `BackboneOutput` dataclass contract in A15 (originally a NamedTuple; refactored to `@dataclass` in the post-Gemini pass): backbone
   forward returns `(representation, var_selection_weights,
   attention_weights, static_var_selection_weights)`, and the
   LightningModule stashes the most recent output for entropy
@@ -1956,7 +2143,15 @@ Round 3 (design-review swarm):
   `test_migrate_detects_no_op_registration` meta-test now exercises
   visible behavior rather than a prose-only invariant.
 
-Gemini final pass (cross-family review on architecture doc):
+Gemini final pass (cross-family review on the implementation plan; surfaced architecture-level issues):
+
+- **`_LightningModule` hardcoded transformer-specific attributes (gemini r1-C1, surfaced via impl-plan review).** A15's entropy emission code indexed `var_selection_weights`, `attention_weights`, and `static_var_selection_weights` directly on `self._last_train_output`. v3 `RecurrentBackboneOutput` (carrying `hidden_states` instead of `attention_weights`) would `AttributeError` on every recurrent training epoch, forcing a rewrite of the generic training plumbing. Refactored A15 to a Protocol + delegation: `BackboneOutput` is a Protocol carrying only `representation` and `padding_mask`; `BaseBackbone` declares `compute_training_metrics(output)` returning `{event_name: payload}` with a default empty implementation. `TFTBackbone` overrides the method. The LightningModule reads only the Protocol surface plus the returned dict. Transformer-family backbones extend the Protocol via `TransformerBackboneOutput`; recurrent-family backbones will extend via their own concrete output type without touching LightningModule code.
+- **Entropy reductions dropped the padding mask (gemini r1-C2).** A15's prior reductions (`.mean(dim=-1).mean()` and `.mean(dim=(0, 2))`) averaged across padded timesteps which carry max-entropy uniform VSN rows and zero attention rows by construction (per A6's VSN zeroing + the interpretable-attention `nan_to_num` safety net). The result inflated `temporal_entropy` and deflated `entropy_per_head` by amounts that scale with the padding fraction (severe for short-tenure entities). A15 now adds `padding_mask` to the base `BackboneOutput` Protocol and the reduction is a masked mean (sum over valid positions divided by valid count). Three named tests cover: padded-position mask application, the `_last_train_output is None` early return, and the `BaseBackbone` default-empty return.
+- **Optuna trial polluting pydantic config (gemini r1-C3).** A16's prior objective example dumped the trial into the pydantic params dict before calling `TFTClassifier(**...)`. That contradicted A4's `extra="forbid"` contract (Phase 7's test expects unknown kwargs to raise). Moved the trial out of `__init__` into the `fit` keyword: `BaseSequenceEstimator.fit(X, y, *, calibration_set=None, optuna_trial=None)`. The trial reaches `_LightningModule` via the Trainer; it is never serialized, never enters `get_params`, and cannot break `extra="forbid"`. Requirements F1's fit signature updated to match. `resume_path` stays on `__init__` per requirements F5 (A20 item 5 is now resolved that way).
+- **`PyTorchLightningPruningCallback` removed (gemini r1-C4).** The upstream callback raises `TrialPruned` from `on_validation_end`, before `on_train_epoch_end` fires, defeating the `_pending_prune` deferred-raise pattern A7 introduced. A16 now explicitly states the callback is NOT shipped. The library's native pruning hook in `_LightningModule.on_validation_epoch_end` (which stashes the prune decision) plus `on_train_epoch_end` (which raises at the END after logging fires) is the only supported path.
+- **`FixedTrial` sweep is vacuous (gemini r1-I1).** A16's prior test recommendation used a 1000-iteration `FixedTrial` sweep to assert validity-matrix conformance. `FixedTrial` only returns pre-loaded param values; it does not sample distributions, so the sweep would be vacuous without externally-supplied randomized param dicts. Replaced with `optuna.create_study().ask()` in the test pattern. `FixedTrial` remains correct for `optuna_trial_guard` tests where the trial's `report` / `should_prune` must be no-ops without standing up a Study.
+
+Gemini final pass (cross-family review on architecture doc; prior pass):
 
 - **Pydantic nested-config pattern corrected (gemini r1-C1).** A4
   step 3 originally specified the flatten-into-dict pattern, which
