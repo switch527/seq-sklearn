@@ -132,14 +132,16 @@ def test_extract_deprecated_extras_happy_path_passes_through(
     cfg = _ExtraHolder(extra=(("amsgrad", True),))
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        result = extract_deprecated_extras(cfg, "optimizer")
+        returned_cfg, result = extract_deprecated_extras(cfg, "optimizer")
+    assert returned_cfg is cfg  # no promoted key: cfg returned unchanged
     assert result == {"amsgrad": True}
 
     monkeypatch.setitem(_PROMOTED_KEYS_BY_FAMILY["optimizer"], "fake", "fake_field")
     unrelated = _PromotionStub(extra=(("amsgrad", True),))  # "fake" not present
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        result_skip = extract_deprecated_extras(unrelated, "optimizer")
+        skip_cfg, result_skip = extract_deprecated_extras(unrelated, "optimizer")
+    assert skip_cfg is unrelated
     assert result_skip == {"amsgrad": True}
 
 
@@ -149,12 +151,13 @@ def test_extract_deprecated_extras_mock_promotion_emits_warning(
     monkeypatch.setitem(_PROMOTED_KEYS_BY_FAMILY["optimizer"], "fake", "fake_field")
     cfg = _PromotionStub(extra=(("fake", True),))  # fake_field left at default
     with pytest.warns(DeprecationWarning, match=r"deprecated"):
-        result = extract_deprecated_extras(cfg, "optimizer")
-    # Current behavior: the promoted key is removed from the returned
-    # dict and (per the documented pre-condition in
-    # extract_deprecated_extras) the supplied value is discarded rather
-    # than written onto the frozen cfg. The frozen cfg keeps its default.
+        returned_cfg, result = extract_deprecated_extras(cfg, "optimizer")
+    # The promoted key is consumed from the returned dict and its value
+    # is routed onto the typed field of the returned (copied) cfg, so
+    # the alias is behavior-preserving. The original frozen cfg is
+    # untouched.
     assert "fake" not in result
+    assert returned_cfg.fake_field is True
     assert cfg.fake_field is False
 
 

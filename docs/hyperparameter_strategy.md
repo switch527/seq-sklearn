@@ -419,7 +419,9 @@ def build_optimizer(cfg: OptimizerConfig, params) -> torch.optim.Optimizer:
     # cfg has already been validated at construction; build_optimizer
     # trusts the config-layer validators (reserved-keys collision,
     # extras normalization, etc.) and does not duplicate them.
-    extra = extract_deprecated_extras(cfg, "optimizer")
+    # extract_deprecated_extras returns a cfg with any promoted extra
+    # value routed onto the typed field, plus the cleaned extra dict.
+    cfg, extra = extract_deprecated_extras(cfg, "optimizer")
     if cfg.name == "adamw":
         return torch.optim.AdamW(
             params, lr=cfg.learning_rate, weight_decay=cfg.weight_decay,
@@ -458,21 +460,37 @@ _PROMOTED_KEYS_BY_FAMILY: dict[str, dict[str, str]] = {
 }
 
 
-def extract_deprecated_extras(
-    cfg: BaseModel,
+def extract_deprecated_extras[BaseModelT: BaseModel](
+    cfg: BaseModelT,
     family: str,
-) -> dict[str, ExtraValue]:
-    """Return `extra` as a dict, routing any promoted keys to the typed
-    field and emitting a `DeprecationWarning` per route.
+) -> tuple[BaseModelT, dict[str, ExtraValue]]:
+    """Route promoted `extra` keys onto their typed fields.
+
+    Returns `(cfg, extra)`:
+
+    * `cfg` is the input unchanged when no promoted key was supplied
+      via `extra`, otherwise a `cfg.model_copy` with each promoted value
+      written onto its typed field.
+    * `extra` is `dict(cfg.extra)` with the consumed promoted keys
+      removed.
 
     Every family factory (build_optimizer, build_scheduler, build_loss,
-    build_sampler) calls this helper instead of `dict(cfg.extra)` so the
-    deprecation-alias contract lands once. A maintainer promoting an
-    ALPHA key to a typed field adds one entry to
-    _PROMOTED_KEYS_BY_FAMILY and the alias behavior fires automatically.
+    build_sampler) calls this helper instead of `dict(cfg.extra)`, reads
+    typed fields from the RETURNED cfg, and splats the returned dict as
+    `**extra`. The dict path is therefore a permanent,
+    behavior-preserving alias: the supplied value always reaches the
+    model via the typed field, never a silent no-op. A maintainer
+    promoting an ALPHA key adds one entry to _PROMOTED_KEYS_BY_FAMILY
+    and the alias fires automatically.
+
+    The promoted value already passed `_normalize_extras` (primitive
+    ExtraValue typing) before reaching here; `model_copy(update=...)`
+    sets it on the typed field without re-running field validators,
+    which matches the historical `extra`-passthrough semantics.
     """
     extra = dict(cfg.extra)
     promoted = _PROMOTED_KEYS_BY_FAMILY[family]
+    updates: dict[str, ExtraValue] = {}
     for extra_key, typed_name in promoted.items():
         if extra_key in extra:
             existing_typed = getattr(cfg, typed_name)
@@ -484,19 +502,21 @@ def extract_deprecated_extras(
                 stacklevel=3,
             )
             # Promoted fields must have an explicit default (the registry
-            # meta-test enforces this). The asymmetric check below: if the
-            # typed value differs from its default, the caller set BOTH
-            # the typed field AND the extra key, which is ambiguous. If
-            # the typed value equals its default, the extra value wins
-            # (existing callers see no behavior change).
-            typed_default = cfg.model_fields[typed_name].default
+            # meta-test enforces this). If the typed value differs from
+            # its default, the caller set BOTH the typed field AND the
+            # extra key, which is ambiguous and rejected. Otherwise the
+            # extra value is routed onto the typed field below so the
+            # alias is behavior-preserving.
+            typed_default = type(cfg).model_fields[typed_name].default
             if existing_typed != typed_default:
                 raise ConfigError(
                     f"{extra_key!r} provided via both extra and the typed "
                     f"{typed_name} field; remove one."
                 )
-            extra.pop(extra_key)  # consumed; typed field carries the value
-    return extra
+            updates[typed_name] = extra.pop(extra_key)
+    if updates:
+        cfg = cfg.model_copy(update=updates)
+    return cfg, extra
 ```
 
 A meta-test asserts that every entry in `_PROMOTED_KEYS_BY_FAMILY` has a
