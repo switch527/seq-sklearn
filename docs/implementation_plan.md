@@ -136,9 +136,8 @@ detection but stays a pure function.
 
 **Modules**:
 
-The hyperparameter-strategy refactor (per
-`docs/hyperparameter_strategy.md`) lands the four-tier
-config hierarchy in Phase 1. The module roster expands to include
+The hyperparameter-strategy refactor (per architecture A4 /
+requirements F7) lands the four-tier config hierarchy in Phase 1. The module roster expands to include
 family sub-configs (`optimizer.py`, `scheduler.py`, `loss.py`,
 `sampler.py`), the `extras` infrastructure (`_extras.py` with
 `ExtraDict`, `_normalize_extras`, `_PROMOTED_KEYS_BY_FAMILY`,
@@ -165,24 +164,24 @@ module (`_adapters.py`).
   `ValueError` on illegal cells with a message naming legal
   alternatives. Pure function so the Optuna search-space sampler
   and the cross-field validator share it.
-- `src/seq_sklearn/config/_extras.py` (new per strategy doc):
+- `src/seq_sklearn/config/_extras.py` (new per architecture A4):
   `ExtraValue` restricted-union type, `ExtraDict` annotated tuple,
   `_normalize_extras` BeforeValidator, `_PROMOTED_KEYS_BY_FAMILY`
   registry (empty in v1; populated as ALPHA → BETA promotions
   occur), `extract_deprecated_extras` helper. Single source of
   truth for the escape-hatch contract.
-- `src/seq_sklearn/config/optimizer.py` (new per strategy doc):
+- `src/seq_sklearn/config/optimizer.py` (new per architecture A4):
   `OptimizerConfig` family sub-config (`name`, `learning_rate`,
   `weight_decay`, `betas`, `eps`, `momentum`, `nesterov`, `extra`).
   Frozen pydantic, `extra="forbid"`.
-- `src/seq_sklearn/config/scheduler.py` (new per strategy doc):
+- `src/seq_sklearn/config/scheduler.py` (new per architecture A4):
   `SchedulerConfig` family sub-config (`name`, `warmup_steps`,
   OneCycleLR / ReduceLROnPlateau / cosine sub-fields, `extra`).
-- `src/seq_sklearn/config/loss.py` (new per strategy doc):
+- `src/seq_sklearn/config/loss.py` (new per architecture A4):
   `LossConfig` family sub-config (`strategy` with NO default per
   F5, `focal_gamma`, `focal_alpha`, `huber_delta`,
   `label_smoothing`, `extra`).
-- `src/seq_sklearn/config/sampler.py` (new per strategy doc):
+- `src/seq_sklearn/config/sampler.py` (new per architecture A4):
   `SamplerConfig` family sub-config (`strategy`,
   `oversample_ratio`, `replacement`, `extra`).
 - `src/seq_sklearn/config/base.py`: `BaseTrainingConfig`,
@@ -190,8 +189,8 @@ module (`_adapters.py`).
   the family sub-configs (`optimizer: OptimizerConfig`,
   `scheduler: SchedulerConfig`, `loss: LossConfig`, `sampler:
   SamplerConfig`); cross-cutting fields (precision, seed,
-  val/cal_fraction, etc.) stay flat per the strategy doc's Tier 2
-  spec. `BaseModelConfig._check_validity_matrix` calls
+  val/cal_fraction, etc.) stay flat per architecture A4 (Tier 2).
+  `BaseModelConfig._check_validity_matrix` calls
   `check_combo` reading `self.loss.strategy` and
   `self.sampler.strategy` from the nested family configs.
 - `src/seq_sklearn/config/tabular.py`:
@@ -204,16 +203,16 @@ module (`_adapters.py`).
   `TFTAdvancedConfig` (Tier 3, BETA, ships empty in v1 plus the
   `extra` escape hatch). `TFTConfig.advanced:
   TFTAdvancedConfig = Field(default_factory=TFTAdvancedConfig)`
-  per strategy doc. TFT-specific cross-field validators
+  per architecture A4. TFT-specific cross-field validators
   (`attention_heads divides hidden_size`) live here. The base-
   class validators (`quantiles strictly increasing in (0, 1)`,
   validity-matrix check) live on `BaseModelConfig`.
 - `src/seq_sklearn/config/_adapters.py` (renamed from
-  `_params_adapter.py` per strategy doc): six BaseEstimator
+  `_params_adapter.py` per architecture A4): six BaseEstimator
   adapters, one per nested pydantic sub-config. Every adapter
-  `__init__` carries the `*` keyword-only marker (mandatory per
-  Gemini-pass finding on the strategy doc; without it the
-  ALPHA → BETA promotion path silently breaks positional callers).
+  `__init__` carries the `*` keyword-only marker (mandatory per A4;
+  without it the ALPHA → BETA promotion path silently breaks
+  positional callers).
   Adapters: `TabularConfigParams` ← `TabularToSequenceConfig`,
   `OptimizerParams` ← `OptimizerConfig`, `SchedulerParams` ←
   `SchedulerConfig`, `LossParams` ← `LossConfig`, `SamplerParams`
@@ -246,16 +245,15 @@ module (`_adapters.py`).
   enumerations from `_domains.py` minus the legal cells listed in F5.
   Every illegal cell raises and the error message names both the
   offending fields and a legal alternative. The test body constructs
-  configs via the nested shape per the strategy doc's "Test
-  parametrize-ID stability" subsection: pass
+  configs via the nested shape: pass
   `LossConfig(strategy=loss_strategy)` and
   `SamplerConfig(strategy=imbalance_strategy)` as sub-configs to
-  `BaseModelConfig`. The parametrization tuple stays 4 strings so
-  pytest IDs are stable. v1.1 task-type rows carry
+  `BaseModelConfig`. The parametrization tuple stays 4 strings (the
+  `check_combo` signature is unchanged) so pytest IDs are stable. v1.1 task-type rows carry
   `pytest.mark.xfail(strict=True)` so a future change that
   accidentally accepts a v1.1 task type fails CI rather than
   silently converting to a pass.
-- `tests/unit/config/test_extras.py` (new per strategy doc; lands
+- `tests/unit/config/test_extras.py` (new per architecture A4; lands
   in Phase 1): covers `_normalize_extras` type validation, hash
   stability, JSON round-trip via `model_dump(mode="json")`, and
   the deprecation-alias machinery. Named tests:
@@ -273,23 +271,23 @@ module (`_adapters.py`).
   post-promotion test
   `test_extra_path_after_promotion_emits_deprecation_warning`
   is deferred until the first ALPHA→BETA promotion).
-- `tests/unit/config/test_optimizer.py` (new per strategy doc):
+- `tests/unit/config/test_optimizer.py` (new per architecture A4):
   `test_default_construction_uses_documented_defaults` asserts
   `OptimizerConfig()` produces the documented field defaults;
   `test_adamw_reserved_keys_collision_raises` and
   `test_sgd_reserved_keys_collision_raises` assert
   `OptimizerConfig(name=..., extra=(("collision_key", value),))`
   raises `ValidationError` from the `_check_extra_not_reserved`
-  model_validator at config construction (per architecture A4 +
-  strategy doc; the check lives on the config, not on
-  `build_optimizer`, so Phase 1 owns the test).
-- `tests/unit/config/test_scheduler.py` (new per strategy doc):
+  model_validator at config construction (per architecture A4; the
+  check lives on the config, not on `build_optimizer`, so Phase 1
+  owns the test).
+- `tests/unit/config/test_scheduler.py` (new per architecture A4):
   `test_default_construction_uses_documented_defaults` asserts
   `SchedulerConfig()` produces the documented field defaults.
-- `tests/unit/config/test_loss.py` (new per strategy doc):
+- `tests/unit/config/test_loss.py` (new per architecture A4):
   `test_construction_requires_strategy` asserts `LossConfig()`
   without `strategy=` raises `ValidationError` (no default per F5).
-- `tests/unit/config/test_sampler.py` (new per strategy doc):
+- `tests/unit/config/test_sampler.py` (new per architecture A4):
   `test_default_strategy_is_none` asserts `SamplerConfig()`
   produces `strategy="none"`.
 - `tests/unit/test_config_base.py`: legal `BaseModelConfig`
@@ -310,12 +308,12 @@ module (`_adapters.py`).
   via the TFT-specific cross-field validator; mutation
   post-construction raises. The quantile validator is tested in
   `test_config_base.py` (it lives on `BaseModelConfig`, not
-  `TFTConfig`). Per strategy doc:
+  `TFTConfig`). Per architecture A4:
   `test_tft_config_advanced_field_is_not_none_by_default` and
   `test_tft_advanced_config_default_construction_succeeds` pin
   the `advanced` slot's non-None empty-default contract.
 - `tests/unit/config/test_adapters.py` (renamed from
-  `test_params_adapter.py` per strategy doc): every adapter
+  `test_params_adapter.py` per architecture A4): every adapter
   composes with `sklearn.base.clone`. Six named per-adapter
   clone-safety tests:
   `test_tabular_config_params_clone_is_independent`,
@@ -1116,11 +1114,11 @@ symbols, and Optuna integration works end-to-end.
   empty so the flag is a no-op for v1); `search_extras=True` samples
   from `src/seq_sklearn/tuning/_alpha_keys.py` (empty in v1).
   Closed under the F5 validity matrix regardless of flag values.
-- `src/seq_sklearn/tuning/_alpha_keys.py` (new per strategy doc):
+- `src/seq_sklearn/tuning/_alpha_keys.py` (new per architecture A4):
   curated per-family ALPHA-key enum lists. v1 ships empty;
   maintainers populate as ALPHA passthroughs land.
 - `src/seq_sklearn/tuning/_config_to_estimator_kwargs.py` (new per
-  strategy doc): `_config_to_estimator_kwargs` helper + the
+  architecture A16): `_config_to_estimator_kwargs` helper + the
   `_ADAPTER_MAP_BY_CONFIG` registry + `_TFT_ADAPTER_MAP` per the
   A16 spec. Pops every nested sub-config from
   `config.model_dump(mode="json")` and wraps in the matching
@@ -1990,7 +1988,7 @@ Hyperparameter-strategy fold-in (Round 1):
   `tabular.py` (`CategoricalEmbedDims` tuple form), and `tft.py`
   (`TFTAdvancedConfig` + `advanced` field). The single-adapter
   `TabularConfigParams`-only design from the previous Phase 1 spec
-  is superseded by the six-adapter family per the strategy doc.
+  is superseded by the six-adapter family per architecture A4.
 - **Phase 1 deliverable tests expanded.** Renamed
   `test_params_adapter.py` to `test_adapters.py` with six per-
   adapter clone-safety tests plus
@@ -2023,8 +2021,8 @@ Hyperparameter-strategy fold-in (Round 1):
   pins the round-trip and `extra`-tuple `mode="json"` contracts.
 - **F7 signature change cascaded through Phase 8.** `suggest_params`
   carries `search_advanced` and `search_extras` keyword-only flags;
-  the default behavior matches the strategy doc's "Default search
-  space per model" table.
+  the per-model default search space is defined by the Phase 8
+  `suggest_params` implementation (architecture A16).
 
 Gemini three-doc final pass:
 
@@ -2035,11 +2033,11 @@ Gemini three-doc final pass:
   (which lives in Phase 1's `src/seq_sklearn/config/optimizer.py`),
   NOT the build-factory check at `build_optimizer` (Phase 4). The
   reserved-keys collision is a config-layer invariant per
-  architecture A4 / strategy doc; Phase 1 ownership is correct.
+  architecture A4; Phase 1 ownership is correct.
 - **`test_extract_deprecated_extras_happy_path_passes_through` added**
   to Phase 1's `test_extras.py` roster (gemini-qa r1-I2). Pins the
-  unpromoted-key passthrough contract that the strategy doc's prior
-  test list missed.
+  unpromoted-key passthrough contract that the prior test roster
+  missed.
 - **F7 / requirements N1 paragraph updated** (gemini-arch r1-I1 +
   gemini-qa r1-I1). The `suggest_params` signature in F7 now uses
   the strict type hints matching architecture A16. The N1 Phase 8

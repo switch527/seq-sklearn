@@ -250,13 +250,15 @@ STABLE.
 
 **Authoritative source for hyperparameter exposure**: this section
 documents the v1 estimator-config plumbing (frozen pydantic + sklearn
-adapter pattern + validity matrix). The four-tier exposure architecture
-(family sub-configs → main configs → advanced sub-configs → `extra`
-escape hatch), the ALPHA → BETA → STABLE promotion path, the
-deprecation-alias contract, and the per-model default search space
-live in `docs/hyperparameter_strategy.md`. A4 below states the
-load-bearing implementation contracts; the strategy doc is the source
-of truth for the design.
+adapter pattern + validity matrix). A4 below and requirements F7 are
+authoritative for the four-tier exposure architecture (family
+sub-configs → main configs → advanced sub-configs → `extra` escape
+hatch), the deprecation-alias contract, and the per-model default
+search space (the last via A16 / the Phase 8 `suggest_params`
+implementation); the code carries the verbatim schemas.
+`docs/hyperparameter_strategy.md` holds the design rationale (why the
+four-tier shape) and the living ALPHA → BETA → STABLE promotion
+procedure only; it is not authoritative for the schemas or contracts.
 
 The pydantic + sklearn integration pattern is novel; the research
 brief at `docs/research/pydantic_sklearn.md` documents that no
@@ -276,7 +278,7 @@ estimator. The canonical pattern derived for seq-sklearn:
    approach recommended in `docs/research/sklearn.md` for combining
    pydantic v2 configs with sklearn's nested `get_params` /
    `set_params` protocol. Under the four-tier hyperparameter
-   architecture (F7 / strategy doc), the v1 TFT estimator stores SIX
+   architecture (F7 / A4), the v1 TFT estimator stores SIX
    adapter instances (one per nested pydantic sub-config), each
    following the same pattern:
 
@@ -295,8 +297,7 @@ estimator. The canonical pattern derived for seq-sklearn:
    only marker so adding a BETA field via the ALPHA → BETA promotion
    path does NOT shift positional arguments (the promotion contract
    is MINOR-additive only; without keyword-only the promotion is
-   silently MAJOR-breaking). See `docs/hyperparameter_strategy.md`
-   "Keyword-only adapter constructors" for the full discussion.
+   silently MAJOR-breaking).
 
    ```python
    # src/seq_sklearn/config/_adapters.py
@@ -322,8 +323,9 @@ estimator. The canonical pattern derived for seq-sklearn:
 
    # OptimizerParams, SchedulerParams, LossParams, SamplerParams,
    # TFTAdvancedParams follow the same shape (keyword-only init
-   # + to_pydantic). Their pydantic schemas are documented in
-   # docs/hyperparameter_strategy.md.
+   # + to_pydantic). Their pydantic schemas are the family
+   # sub-configs specified later in this A4 section and carried
+   # verbatim in src/seq_sklearn/config/.
 
    class TFTClassifier(ClassifierMixin, BaseEstimator):
        def __init__(
@@ -369,7 +371,7 @@ estimator. The canonical pattern derived for seq-sklearn:
    `BaseModelConfig` construction; failures wrap into `ConfigError`
    at the `_build_config` call site (step 4 below).
 
-   **Task-type-aware loss default** (per strategy doc):
+   **Task-type-aware loss default**:
 
    ```python
    # src/seq_sklearn/models/_base.py inside _build_config:
@@ -430,9 +432,8 @@ estimator. The canonical pattern derived for seq-sklearn:
    not inside the validator itself (the validator stays a pure
    `@model_validator(mode="after")` returning the model).
 
-**Family sub-configs** (per F7 / strategy doc; the load-bearing
-field-name surface; full schemas in
-`docs/hyperparameter_strategy.md`):
+**Family sub-configs** (per F7; the load-bearing field-name surface,
+specified here and carried verbatim in `src/seq_sklearn/config/`):
 
 ```python
 # src/seq_sklearn/config/optimizer.py
@@ -617,7 +618,7 @@ through `Pipeline` cleanly for the same reason.
 param_grid={"optimizer__learning_rate": [1e-4, 3e-4, 1e-3]})` works
 without further plumbing.
 
-**`ExtraDict` escape hatch** (per F7 / strategy doc). Every family
+**`ExtraDict` escape hatch** (per F7). Every family
 sub-config carries an `extra: ExtraDict` field. `ExtraDict` is
 `tuple[tuple[str, ExtraValue], ...]` after the `BeforeValidator`
 normalizes input; `ExtraValue` is restricted to
@@ -1810,9 +1811,10 @@ def suggest_params(
     """Sample a config from the per-model default search space.
 
     The default search space (`search_advanced=False`,
-    `search_extras=False`) samples ONLY STABLE fields enumerated in
-    the "Default search space per model" table in
-    `docs/hyperparameter_strategy.md`. `search_advanced=True`
+    `search_extras=False`) samples ONLY STABLE fields; the per-model
+    default search space is defined by the `suggest_params`
+    implementation specified in this section (Phase 8 deliverable).
+    `search_advanced=True`
     additionally samples fields on the model's `<Model>AdvancedConfig`;
     in v1 those configs are empty so the flag is a no-op for v1.
     `search_extras=True` samples from the curated per-family
@@ -2462,12 +2464,12 @@ Hyperparameter-strategy fold-in (Round 1):
   from `_params_adapter.py`) under `config/`. The four-tier family
   sub-configs land alongside the existing `tabular.py` / `tft.py` /
   `recurrent.py`.
-- **A4 header note** added pointing to
-  `docs/hyperparameter_strategy.md` as authoritative for the
-  four-tier exposure architecture, ALPHA → BETA → STABLE promotion
-  path, deprecation-alias contract, and per-model default search
-  space. A4 itself documents the load-bearing implementation
-  contracts; the strategy doc is the design source of truth.
+- **A4 header note** added. (Subsequently updated when the strategy
+  doc was demoted: A4 + requirements F7 are authoritative for the
+  four-tier architecture, contracts, and per-model default search
+  space; the code carries verbatim schemas; the strategy doc holds
+  the rationale and the ALPHA → BETA → STABLE promotion procedure
+  only.)
 - **A4 step 3 (adapter pattern)** generalized from a single
   `TabularConfigParams` example to the six v1 TFT adapters
   (`TabularConfigParams`, `OptimizerParams`, `SchedulerParams`,
@@ -2491,8 +2493,8 @@ Hyperparameter-strategy fold-in (Round 1):
 - **`TFTConfig` snippet** updated to add `advanced:
   TFTAdvancedConfig = Field(default_factory=TFTAdvancedConfig)`.
   `TFTAdvancedConfig` defined inline with the `extra: ExtraDict`
-  escape hatch; v1 ships empty otherwise per the strategy doc's
-  Tier-3 spec.
+  escape hatch; v1 ships empty otherwise (Tier 3 per F7 / this A4
+  section).
 - **`TabularToSequenceConfig.categorical_embed_dims`** corrected
   to `CategoricalEmbedDims = tuple[tuple[str, int], ...]` (sorted,
   hashable, via `BeforeValidator`). The earlier `Mapping[str, int]`
@@ -2504,14 +2506,14 @@ Hyperparameter-strategy fold-in (Round 1):
   `_<NAME>_RESERVED` collision-detection sets.
 - **A16 `suggest_params` signature** updated with `search_advanced`
   and `search_extras` keyword-only flags. Default behavior samples
-  ONLY STABLE fields enumerated in the strategy doc's "Default
-  search space per model" table.
+  ONLY STABLE fields; the per-model default search space is defined
+  by the A16 `suggest_params` implementation (Phase 8).
 - **A16 `_config_to_estimator_kwargs`** generalized to handle six
   nested fields per the `_TFT_ADAPTER_MAP` pattern. The helper
   pops every sub-config dict from `model_dump(mode="json")` and
   wraps each in its matching adapter; `mode="json"` is the pinned
-  serialization mode per the strategy doc's
-  `test_extra_dict_survives_json_roundtrip` contract.
+  serialization mode per the F7 save/load contract, exercised by
+  `test_extra_dict_survives_json_roundtrip`.
 - **A16 validity-matrix sweep example** updated to read
   `config.loss.strategy` and `config.sampler.strategy` from the
   nested family configs (signature of `check_combo` itself is
@@ -2530,7 +2532,7 @@ Hyperparameter-strategy fold-in (Round 2):
   paragraph and the Round 1 ledger entry rewritten to name each
   adapter explicitly.
 - **`_config_to_estimator_kwargs` untested** (qa r2-C2). Two new
-  named tests added to the strategy doc's named-tests table:
+  named tests added to the Phase 8 test roster:
   `test_config_to_estimator_kwargs_round_trips_all_adapters` (every
   adapter slot survives) and
   `test_config_to_estimator_kwargs_extra_tuple_type_survives` (the
@@ -2547,11 +2549,11 @@ Hyperparameter-strategy fold-in (Round 2):
   scope only fields living on nested sub-configs; model-shape
   fields on `<Model>Config` (`hidden_size`, `attention_heads`, etc.)
   ARE flat top-level kwargs.
-- **`_adapter_map_for` undefined** (arch r2-I4). Both the strategy
-  doc and architecture A16 now define the registry inline:
-  `_ADAPTER_MAP_BY_CONFIG: dict[type[BaseModelConfig], dict[str,
-  type[BaseEstimator]]]` keyed by concrete config class, plus a
-  one-line `_adapter_map_for` body looking up the registry.
+- **`_adapter_map_for` undefined** (arch r2-I4). Architecture A16
+  defines the registry inline: `_ADAPTER_MAP_BY_CONFIG:
+  dict[type[BaseModelConfig], dict[str, type[BaseEstimator]]]` keyed
+  by concrete config class, plus a one-line `_adapter_map_for` body
+  looking up the registry.
 - **`model_dump` mode inconsistency between strategy and arch**
   (qa r2-I1). The strategy doc's `_config_to_estimator_kwargs`
   code sample originally used bare `model_dump()`; updated to

@@ -17,11 +17,9 @@ This plan maps the current Phase 1 implementation (on branch
    rewritten with a one-line rationale in this plan's "Test rewrite
    manifest." A test that disappears without justification is a
    correctness gap.
-3. **All named Phase 1 tests from the strategy doc land**: the 24
-   Phase-1-mandatory tests enumerated in
-   `docs/hyperparameter_strategy.md` "Named tests added in the Phase 1
-   refactor" table become real test functions. Each one has a documented
-   home (file + scope).
+3. **All named Phase 1 tests land**: the 24 Phase-1-mandatory tests
+   in the `docs/implementation_plan.md` Phase 1 test roster become
+   real test functions. Each one has a documented home (file + scope).
 4. **Gates green at the end**: `ruff check`, `ruff format --check`,
    `pyright` (strict on `src/`, relaxed on `tests/` per
    `pyrightconfig.json`), `pytest --cov` line >= 85% / branch >= 80%
@@ -177,7 +175,7 @@ rename (`test_params_adapter.py` to `test_adapters.py`).
 
 ### NEW: `src/seq_sklearn/config/_extras.py`
 
-Per architecture A4 / strategy doc:
+Per architecture A4:
 
 - `ExtraValue = str | int | float | bool | None` type alias.
 - `ExtraDict = Annotated[tuple[tuple[str, ExtraValue], ...], BeforeValidator(_normalize_extras)]`.
@@ -187,10 +185,11 @@ Per architecture A4 / strategy doc:
   tuple of tuples.
 - `_PROMOTED_KEYS_BY_FAMILY: dict[str, dict[str, str]]` registry
   (empty in v1; populated as ALPHA → BETA promotions occur).
-- `extract_deprecated_extras(cfg, family) -> dict[str, ExtraValue]`
-  helper per architecture A4. Routes promoted keys to typed fields
-  with a `DeprecationWarning`; raises `ConfigError` on the both-paths
-  ambiguous-configuration case.
+- `extract_deprecated_extras(cfg, family) -> tuple[cfg, dict[str, ExtraValue]]`
+  helper per architecture A4. Returns the cfg (a `model_copy` with any
+  promoted value routed onto the typed field) plus the cleaned extra
+  dict; emits a `DeprecationWarning` per promoted key; raises
+  `ConfigError` on the both-paths ambiguous-configuration case.
 
 Dependencies: stdlib, pydantic, and `seq_sklearn.errors.ConfigError`
 (raised on the both-paths ambiguous-configuration case).
@@ -231,11 +230,10 @@ Dependencies: `_extras.py`.
 ### NEW: `src/seq_sklearn/config/scheduler.py`
 
 Same `ConfigDict(extra="forbid", frozen=True)` shape as
-`optimizer.py`. The schema below is copied verbatim from the
-authoritative source at `docs/hyperparameter_strategy.md:176-193`
-(field list and defaults also trace to requirements F5,
-requirements.md:755-766). Do not re-derive the defaults; mirror the
-strategy doc exactly:
+`optimizer.py`. The schema below matches the authoritative source
+(architecture A4 and `src/seq_sklearn/config/scheduler.py`; field list
+and defaults also trace to requirements F5, requirements.md:755-766).
+Do not re-derive the defaults; mirror the code exactly:
 
 ```python
 class SchedulerConfig(BaseModel):
@@ -427,8 +425,8 @@ callers cannot collide with future BETA promotion field additions.
 | File | Rewrite | Rationale |
 |---|---|---|
 | `test_base.py` | Replace flat `_legal_kwargs` (returning `task_type`, `loss_strategy`, etc.) with nested `_legal_kwargs` (returning `task_type`, `loss=LossConfig(strategy="cross_entropy")`). Add `test_v1_task_type_rejects_multilabel_and_regression_multioutput`. | `BaseModelConfig` no longer accepts flat `loss_strategy` per the new schema. Tests that constructed via the flat shape must use nested construction. Intent preserved: every previous test still pins the same invariant (frozen, extra=forbid, validity matrix, quantile validator, val+cal sum). |
-| `test_tft.py` | Add `test_tft_config_advanced_field_is_not_none_by_default` and `test_tft_advanced_config_default_construction_succeeds`. Existing tests on attention_heads divides hidden_size, dropout bounds, prediction_readout literal stay. | New `advanced` field needs default-value test coverage per strategy doc. |
-| `test_validity_matrix.py` | The parametrization tuple stays 4 strings (`task_type, loss_strategy, imbalance_strategy, calibration_strategy`). The test body construction changes from `BaseModelConfig(task_type=t, loss_strategy=l, ...)` to `BaseModelConfig(task_type=t, loss=LossConfig(strategy=l), sampler=SamplerConfig(strategy=i), ...)`. | `check_combo` signature is unchanged so the parametrize-IDs match the previous run (pytest cache stays stable per the strategy doc's "Test parametrize-ID stability"). |
+| `test_tft.py` | Add `test_tft_config_advanced_field_is_not_none_by_default` and `test_tft_advanced_config_default_construction_succeeds`. Existing tests on attention_heads divides hidden_size, dropout bounds, prediction_readout literal stay. | New `advanced` field needs default-value test coverage per architecture A4. |
+| `test_validity_matrix.py` | The parametrization tuple stays 4 strings (`task_type, loss_strategy, imbalance_strategy, calibration_strategy`). The test body construction changes from `BaseModelConfig(task_type=t, loss_strategy=l, ...)` to `BaseModelConfig(task_type=t, loss=LossConfig(strategy=l), sampler=SamplerConfig(strategy=i), ...)`. | `check_combo` signature is unchanged so the parametrize-IDs match the previous run (pytest cache stays stable; the four-string parametrize tuple is unchanged). |
 | `test_params_adapter.py` → `test_adapters.py` | Rename file. Existing `TabularConfigParams` tests rename to `test_tabular_config_params_*`. Add five more per-adapter clone tests (one per new adapter). Add `test_all_adapters_have_keyword_only_init` introspecting every adapter's `__init__` signature. | The single-adapter contract generalizes to six adapters; the introspection test pins the `*` keyword-only marker per Gemini-pass finding. |
 
 ### New tests by file
@@ -502,11 +500,11 @@ In addition to the rewrite (nested-config construction), add:
 - `test_nested_base_model_config_model_dump_json_round_trips`: build a `BaseModelConfig` with non-default `optimizer`, `scheduler`, `loss`, `sampler` (each carrying a non-empty `extra=(("flag", True),)`); call `cfg.model_dump(mode="json")`; round-trip via `json.dumps` then `json.loads` then `BaseModelConfig.model_validate(...)`; assert the reconstructed config equals the original. Pins the on-disk serialization contract per requirements N1 save/load (mode="json").
 
 **Total named tests in the Phase 1 manifest: 40.** Breakdown:
-- 23 from the strategy doc's "Named tests added in the Phase 1 refactor" roster.
+- 23 from the implementation plan's Phase 1 test roster.
 - 1 from the architecture A4 fold-in (`test_v1_task_type_rejects_multilabel_and_regression_multioutput`).
 - 16 added during this refactor plan's swarm review to close per-family extra-forbid coverage, per-family `_check_extra_not_reserved` coverage, the nested JSON round-trip path, the Literal-to-domain invariant, the adapter `to_pydantic()` paths on the five new adapters, the non-string-key rejection branch, and the `extra=None` sentinel path.
 
-The 16 additions are within the strategy doc's coverage spirit (F7 / N1 mandatory-test gates). They do not change the architecture; they close coverage gaps that the swarm flagged as CRITICAL or IMPROVEMENT for the four-tier hyperparameter contract.
+The 16 additions are within the F7 / N1 mandatory-test-gate coverage spirit. They do not change the architecture; they close coverage gaps that the swarm flagged as CRITICAL or IMPROVEMENT for the four-tier hyperparameter contract.
 
 ## Execution sequencing
 
@@ -680,11 +678,11 @@ end-state lint / format / pyright residue.
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | Stale `loss_strategy` / `imbalance_strategy` references in non-test code | Medium | `AttributeError` / pyright `reportAttributeAccessIssue` when downstream code reads a renamed field (e.g. `cfg.loss_strategy` after it moved to `cfg.loss.strategy`) | Pyright strict mode + the pre-commit-4 grep script (documented in commit 4) surface every hit before the commit lands |
-| Pydantic v2 nested-validator order subtleties | Low | The strategy doc explicitly notes "Pydantic v2 validates nested submodels before the parent's `mode='after'` validator runs"; the architecture-reviewer Gemini pass confirmed this stable as of pydantic 2.12 | Pinned in `pyproject.toml`; no v2.11 fallback |
+| Pydantic v2 nested-validator order subtleties | Low | Pydantic v2 validates nested submodels before the parent's `mode='after'` validator runs; confirmed stable as of pydantic 2.12 | Pinned in `pyproject.toml`; no v2.11 fallback |
 | `_check_extra_not_reserved` model_validator interaction with `BeforeValidator` on `extra` | Low | `BeforeValidator` runs at validation time (parses input → stored tuple); `model_validator(mode="after")` runs after all field validators complete. Order is well-defined | Each family sub-config tests the collision case explicitly |
 | Test parametrize IDs change | Medium | The validity-matrix parametrize tuple stays 4 strings; only the test body changes | Strategy doc's "Test parametrize-ID stability" explicitly addresses this |
 | Hashability regression on nested configs | Low | Every sub-config is `frozen=True` with `extra: ExtraDict` (a sorted tuple, hashable); pydantic's default hash should compose | Add `hash(cfg)` assertion to one test per nested-config layer if pyright signals trouble |
-| Coverage drops below 85% | Low | Every new src module ships with a 1:1 test module per the strategy doc's migration plan; net additions: ~700 lines src + ~600 lines tests | `pytest --cov` at commits 1, 2, 4, 5 to catch drift early |
+| Coverage drops below 85% | Low | Every new src module ships with a 1:1 test module (the Phase 1 module/test pairing); net additions: ~700 lines src + ~600 lines tests | `pytest --cov` at commits 1, 2, 4, 5 to catch drift early |
 | Import cycle when adapters reference family configs | Low | Each adapter imports its specific pydantic config; family configs do not import adapters. Acyclic | Verify with `python -c "import seq_sklearn.config._adapters"` at commit 5 |
 | `_DEFAULT_LOSS_FOR_TASK` injection misplaced | NA in Phase 1 | The map and injection logic live in Phase 6a's `models/_base.py`, not Phase 1. `LossConfig.strategy` shipping with no default is by design; callers must pass `loss=LossConfig(strategy=...)` until Phase 6a lands the estimator-side injection | Out of scope for Phase 1; the test `test_construction_requires_strategy` pins the no-default contract |
 
@@ -789,6 +787,14 @@ The refactor is done when ALL of the following hold:
 
 ## Addressed
 
+> Historical note: this is the frozen swarm-review ledger for the
+> completed Phase 1 refactor. Entries below cite
+> `docs/hyperparameter_strategy.md` line numbers (e.g. `:176-193`,
+> `:1051`) that were valid at review time. That doc was subsequently
+> demoted and slimmed; those line references are historical. The
+> authoritative schemas now live in architecture A4 and
+> `src/seq_sklearn/config/`.
+
 Round 1 swarm tally: 12 CRITICAL, 14 IMPROVEMENT, 11 NITPICK across
 architecture-reviewer, qa-test-coverage, and style-reviewer. Findings
 resolved in this revision:
@@ -854,9 +860,9 @@ resolved in this revision:
 Net effect on the test count: 24 named tests (round 1) became 40 named
 tests (round 2). All 16 additions trace to one of the CRITICAL or
 IMPROVEMENT findings above; none represent a new architectural delta
-beyond the four-tier spec already documented in
-`docs/hyperparameter_strategy.md`, `docs/requirements.md`,
-`docs/architecture.md`, `docs/implementation_plan.md`.
+beyond the four-tier spec already documented in `docs/requirements.md`,
+`docs/architecture.md`, and `docs/implementation_plan.md` (with the
+rationale in `docs/hyperparameter_strategy.md`).
 
 ### Round 2
 

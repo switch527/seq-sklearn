@@ -251,9 +251,8 @@ attribute is **internal** and not covered by the stability guarantee.
 
 ### Per-hyperparameter stability tiers
 
-Hyperparameter exposure follows a separate tier system documented in
-`docs/hyperparameter_strategy.md`. Every documented hyperparameter
-carries one of three tiers:
+Hyperparameter exposure follows a separate tier system. Every
+documented hyperparameter carries one of three tiers:
 
 | Tier | Location | Removal / change cost |
 |---|---|---|
@@ -261,11 +260,13 @@ carries one of three tiers:
 | BETA | Typed field on `<Model>AdvancedConfig` or freshly-promoted family sub-config field | MINOR bump + `DeprecationWarning` cycle |
 | ALPHA | Entry in a sub-config's `extra: dict[str, str | int | float | bool | None]` escape hatch | No version bump; CHANGELOG entry only |
 
-The ALPHA → BETA → STABLE promotion path, benchmark-gate metrics for
-promotion, and the deprecation-alias contract live in
-`docs/hyperparameter_strategy.md`. That doc is authoritative for the
-hyperparameter-exposure surface; this requirements doc references it
-rather than duplicating the design.
+This requirements doc (F5 / F7) and architecture A4 are authoritative
+for the hyperparameter-exposure surface; the code carries the verbatim
+schemas. The *procedure* for moving a knob between tiers (the
+ALPHA → BETA → STABLE promotion path, its benchmark-gate metrics, and
+the deprecation-alias contract) is the living maintainer workflow in
+`docs/hyperparameter_strategy.md`, which holds rationale and procedure
+only and is not authoritative for the surface itself.
 
 ### Deprecation policy
 
@@ -692,8 +693,8 @@ note.
 **Note on config shape**: F5 prose and tables below use flat field
 names (`loss_strategy`, `imbalance_strategy`, `optimizer`, `scheduler`,
 `weight_decay`, `learning_rate`, `warmup_steps`, etc.) as display
-labels. Per F7 / the hyperparameter strategy doc these are now
-fields on nested family sub-configs:
+labels. Per F7 / architecture A4 these are now fields on nested family
+sub-configs:
 
 | Display label in F5 prose / tables | Nested access path |
 |---|---|
@@ -711,8 +712,8 @@ strings; the call site reads from the nested fields). The F5 legal-
 cell matrix below describes the same set of legal combinations
 regardless of access path. Sub-fields not in the table above
 (`OptimizerConfig.betas`, `OptimizerConfig.eps`, `SchedulerConfig.pct_start`,
-`LossConfig.label_smoothing`, etc.) are documented in
-`docs/hyperparameter_strategy.md`.
+`LossConfig.label_smoothing`, etc.) are specified in architecture A4
+and carried verbatim in `src/seq_sklearn/config/`.
 
 A `Trainer` wraps pytorch-lightning to handle:
 
@@ -995,7 +996,8 @@ excluding the 1-row case.
 ### F7: Hyperparameter tuning compatibility (Optuna first-class)
 
 Model and training hyperparameters compose hierarchically through a
-four-tier architecture documented in `docs/hyperparameter_strategy.md`:
+four-tier architecture (specified here and in architecture A4; the
+rationale for the four-tier shape is in `docs/hyperparameter_strategy.md`):
 
 - **Tier 1**: family sub-configs (`OptimizerConfig`, `SchedulerConfig`,
   `LossConfig`, `SamplerConfig`) carry family-of-options fields.
@@ -1017,8 +1019,8 @@ naturally.
 For Optuna specifically the library ships:
 
 - `seq_sklearn.tuning.suggest_params(trial: optuna.Trial, model_class: type[BaseSequenceClassifier | BaseSequenceRegressor], base: BaseModelConfig | None = None, *, search_advanced: bool = False, search_extras: bool = False) -> BaseModelConfig`
-  with a per-model default search space documented in
-  `docs/hyperparameter_strategy.md` "Default search space per model".
+  with a per-model default search space defined by the `suggest_params`
+  implementation (architecture A16; Phase 8 deliverable).
   Default flags (`search_advanced=False, search_extras=False`) sample
   only STABLE fields enumerated in that table; `search_advanced=True`
   also samples BETA fields on `<Model>AdvancedConfig`;
@@ -1450,9 +1452,9 @@ frozen=True)`. Cross-field validators:
 Unknown fields raise `ConfigError`. Mutability after construction is
 disallowed.
 
-The full nested-config schema lives in
-`docs/hyperparameter_strategy.md`; this section enumerates the v1
-TFT surface for completeness.
+The full nested-config schema lives in architecture A4 and verbatim in
+`src/seq_sklearn/config/`; this section enumerates the v1 TFT surface
+for completeness.
 
 ## Non-functional requirements (library-wide)
 
@@ -1519,29 +1521,29 @@ thresholds in the same PR.
 mandatory in v1; missing any blocks release.
 
 **Hyperparameter-strategy tests**. The four-tier hyperparameter
-architecture (F7 / `docs/hyperparameter_strategy.md`) introduces a
-named test roster in the strategy doc's "Named tests added in the
-Phase 1 refactor" subsection. The strategy doc owns the test names,
-intents, and per-test phase assignment. Test rows marked Phase 1
-there become mandatory v1 coverage at Phase 1 sign-off; rows marked
+architecture (F7 / architecture A4) introduces a named test roster.
+`docs/implementation_plan.md` owns the authoritative test names,
+intents, and per-phase assignment (the per-phase test rosters); the
+test files themselves are the ground truth. Tests assigned to Phase 1
+become mandatory v1 coverage at Phase 1 sign-off; tests assigned to
 Phase 6a (e.g. `test_outer_estimator_clone_does_not_alias_adapter_instances`,
 `test_loss_default_injection_per_task_type`) become mandatory when
-Phase 6a ships; rows marked Phase 8 (the `test_suggest_params_*`
-trio plus the two `test_config_to_estimator_kwargs_*` tests)
-become mandatory when Phase 8 ships; the row marked "First
-promotion (deferred)" lands when the first ALPHA → BETA promotion
-occurs. Highlights of the Phase 1 subset: adapter `*` keyword-only
-enforcement (`test_all_adapters_have_keyword_only_init`),
-reserved-key collision via the config-layer `_check_extra_not_reserved`
-model_validator (`test_adamw_reserved_keys_collision_raises`,
+Phase 6a ships; tests assigned to Phase 8 (the `test_suggest_params_*`
+trio plus the two `test_config_to_estimator_kwargs_*` tests) become
+mandatory when Phase 8 ships; the deferred first-promotion test lands
+when the first ALPHA → BETA promotion occurs. Highlights of the Phase 1
+subset: adapter `*` keyword-only enforcement
+(`test_all_adapters_have_keyword_only_init`), reserved-key collision
+via the config-layer `_check_extra_not_reserved` model_validator
+(`test_adamw_reserved_keys_collision_raises`,
 `test_sgd_reserved_keys_collision_raises`), deprecation-alias
 machinery (`test_extract_deprecated_extras_meta_promoted_keys_exist`,
 `test_extract_deprecated_extras_both_typed_and_extra_raises_config_error`,
 `test_extract_deprecated_extras_happy_path_passes_through`),
 `extra` JSON round-trip (`test_extra_dict_survives_json_roundtrip`),
 and sorted-tuple hash stability
-(`test_extra_dict_stored_as_sorted_tuple`). The strategy doc's
-"Phase" column governs precise per-phase release-gate timing.
+(`test_extra_dict_stored_as_sorted_tuple`). The implementation plan's
+per-phase rosters govern precise per-phase release-gate timing.
 
 - **Mask correctness.** For every variable-length-aware layer (VSN,
   masked attention, mean pool), the test puts the model into
@@ -1573,7 +1575,7 @@ and sorted-tuple hash stability
   includes nested sub-configs (`optimizer`, `scheduler`, `loss`,
   `sampler`, `advanced`); each sub-config's `extra` tuple must
   survive the round-trip with identical key order and value types
-  per F7 / the strategy doc's `mode="json"` pin.
+  per the F7 `mode="json"` serialization pin.
 - **save/load version-mismatch warning.** Save a model, mutate
   `seq_sklearn_version` in the checkpoint metadata to a fake older
   value, reload, assert a single `UserWarning` whose message contains
@@ -1682,9 +1684,10 @@ and sorted-tuple hash stability
   `LossConfig(strategy=loss_strategy)` and
   `SamplerConfig(strategy=imbalance_strategy)` as sub-configs to
   `BaseModelConfig`; the parametrization IDs remain the four-string
-  form per the strategy doc's "Test parametrize-ID stability"
-  subsection) and asserts `ConfigError` with a message that names
-  the offending field combination and the legal alternatives.
+  form because the `check_combo` signature is unchanged, so the
+  pytest cache stays stable across the refactor) and asserts
+  `ConfigError` with a message that names the offending field
+  combination and the legal alternatives.
 - **Structured-log event emission.** Parametrize over each event in
   the F11 table. For each event, exercise the code path that should
   emit it and assert (via `caplog`) that exactly one record appears
@@ -2484,8 +2487,8 @@ Hyperparameter-strategy fold-in (Round 1):
   four tiers (family sub-configs / main / advanced / `extra`). The
   `suggest_params` signature now carries `search_advanced` and
   `search_extras` keyword-only flags. Default search-space contents
-  pinned via reference to the strategy doc's "Default search space
-  per model" table.
+  are defined by the `suggest_params` implementation (architecture
+  A16; Phase 8 deliverable).
 - **TFT hyperparameters section** updated to reflect the nested
   config shape: training-side fields nest under `OptimizerConfig`,
   `SchedulerConfig`, `LossConfig`, `SamplerConfig`. Model-shape
@@ -2495,11 +2498,10 @@ Hyperparameter-strategy fold-in (Round 1):
   prose still references `loss_strategy` / `imbalance_strategy` as
   field names, but the access pattern is now `self.loss.strategy` /
   `self.sampler.strategy`. `check_combo` signature unchanged.
-- **N1 required-tests block** now lists the
-  hyperparameter-strategy-named test roster as mandatory v1 coverage
-  alongside the existing bullet list, pointing to the strategy doc's
-  "Named tests added in the Phase 1 refactor" subsection as
-  authoritative for test names and intents.
+- **N1 required-tests block** now lists the four-tier-architecture
+  named test roster as mandatory v1 coverage alongside the existing
+  bullet list, pointing to `docs/implementation_plan.md`'s per-phase
+  test rosters as authoritative for test names and intents.
 
 Gemini three-doc final pass:
 
