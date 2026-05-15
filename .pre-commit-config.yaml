@@ -18,6 +18,7 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
         args: [--maxkb=500]
+        exclude: ^docs/references/.*\.pdf$
 
   - repo: local
     hooks:
