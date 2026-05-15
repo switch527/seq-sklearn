@@ -1,14 +1,16 @@
 # seq-sklearn
 
 A sklearn-compatible Python library for **sequence learning on tabular
-time-series data**, covering modern deep models across three families:
-recurrent (LSTM, GRU, LSTM-FCN), transformer (TFT, PatchTST,
-iTransformer, TimesNet, TST), and foundation (Chronos, MOMENT, TimesFM).
+time-series data**, covering modern deep models across two families:
+transformer (TFT, PatchTST, TimesNet, TST) and recurrent (LSTM, GRU,
+LSTM-FCN).
 
 For **standard supervised tasks** (classification, regression), not
 forecasting. The gap this library fills sits at the intersection of
 the sklearn ecosystem and modern deep sequence models for supervised
-tabular panel work.
+tabular panel work. v1's TFT classifier and regressor are a genuine
+architectural adaptation of the original (forecasting-only) paper,
+which is the project's core contribution at first ship.
 
 ## Status
 
@@ -22,9 +24,14 @@ and tests follow.
 |---|---|
 | **v1** | TFT classifier + regressor; full `TabularToSequence` pipeline; Optuna; all library-wide infrastructure |
 | v1.1 | Multi-output regression, multi-label classification |
-| v2 | PatchTST, iTransformer, TimesNet, TST (transformer family completion) |
+| v2 | PatchTST, TimesNet, TST (transformer family completion) |
 | v3 | LSTM, GRU, LSTM-FCN (recurrent family) |
-| v4 | Chronos, MOMENT, TimesFM (foundation family with adapter heads) |
+
+iTransformer is tracked as experimental future exploration (no
+classification or regression evaluation exists in the literature).
+Foundation models (Chronos, MOMENT, TimesFM) are out of scope: only
+MOMENT has classification support, and a one-model family does not
+justify the abstraction work.
 
 ## Quick mental model
 
@@ -35,8 +42,8 @@ and tests follow.
   through the model backbone.
 - Every model contributes a classifier and a regressor variant
   (`<Model>Classifier`, `<Model>Regressor`). v1 ships `TFTClassifier`
-  and `TFTRegressor`; subsequent versions add nine more across the
-  three families.
+  and `TFTRegressor`; subsequent versions add six more across the
+  two families.
 - Every estimator implements the sklearn contract, so they compose
   into `Pipeline`, `GridSearchCV`, `cross_val_score`, and Optuna search.
 
