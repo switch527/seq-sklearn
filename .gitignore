@@ -45,6 +45,11 @@ lightning_logs/
 *.safetensors
 *.pkl
 
+# Phase 9 snapshot test fixtures are committed under tests/_snapshots/ per
+# N1; the SNAPSHOT_REVIEWED: commit-message gate guards updates.
+!tests/_snapshots/**
+!tests/_snapshots/.gitkeep
+
 # ─── Data ───────────────────────────────────────────────────────────────────
 data/
 datasets/

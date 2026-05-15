@@ -1,0 +1,22 @@
+{
+    "include": ["src", "tests"],
+    "exclude": [
+        "**/__pycache__",
+        ".venv",
+        "build",
+        "dist",
+        "docs"
+    ],
+    "venvPath": ".",
+    "venv": ".venv",
+    "pythonVersion": "3.12",
+    "pythonPlatform": "All",
+    "typeCheckingMode": "strict",
+    "reportMissingImports": "error",
+    "reportMissingTypeStubs": "warning",
+    "reportPrivateUsage": "warning",
+    "reportUnknownMemberType": "warning",
+    "reportUnknownVariableType": "warning",
+    "reportUnknownArgumentType": "warning",
+    "reportUntypedFunctionDecorator": "warning"
+}

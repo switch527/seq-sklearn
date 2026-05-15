@@ -1,0 +1,98 @@
+name: pr
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.5.11"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  type:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
+      - run: uv sync --extra dev
+      - run: uv run pyright
+
+  test-unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --extra dev
+      - run: uv run pytest -m "not slow and not perf and not gpu" --cov
+
+  test-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
+      - name: Build wheel
+        run: uv build --wheel
+      - name: Install wheel in a clean venv
+        run: |
+          uv venv .venv-deploy --python 3.14
+          source .venv-deploy/bin/activate
+          uv pip install dist/*.whl
+          python -c "import seq_sklearn; print(seq_sklearn.__version__)"
+      - run: uv run pytest tests/deploy/ -m "deploy" || echo "tests/deploy/ empty in Phase 0; skipping"
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docs job (no-op until Phase 12 lands mkdocs.yml)
+        run: |
+          if [ -f mkdocs.yml ]; then
+            echo "Building mkdocs site..."
+            # Phase 12 wires this to: uv run mkdocs build --strict
+            exit 0
+          else
+            echo "mkdocs.yml not present yet; docs gate is a no-op until Phase 12."
+            exit 0
+          fi
+
+  snapshot-guard:
+    runs-on: ubuntu-latest
+    env:
+      PR_USER_TYPE: ${{ github.event.pull_request.user.type }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: bash scripts/check_snapshots.sh

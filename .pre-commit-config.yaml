@@ -1,0 +1,50 @@
+# Phase 0: pre-commit hooks are NOT autoinstalled. Run `pre-commit install`
+# yourself when you want them firing on every commit.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.13
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        entry: pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: snapshot-marker
+        name: snapshot-marker
+        # Per A14 / N1: a commit touching both tests/_snapshots/ and other
+        # source files must carry a SNAPSHOT_REVIEWED: marker line in its
+        # commit message. The CI guard duplicates this against the full PR
+        # diff; this hook catches it locally at commit time.
+        entry: bash -c '
+          staged=$(git diff --cached --name-only);
+          if echo "$staged" | grep -q "^tests/_snapshots/" \
+             && echo "$staged" | grep -vq "^tests/_snapshots/"; then
+              msg=$(git log -1 --format=%B HEAD 2>/dev/null || cat .git/COMMIT_EDITMSG 2>/dev/null || true);
+              if ! echo "$msg" | grep -q "^SNAPSHOT_REVIEWED:"; then
+                  echo "FAIL: snapshot files modified without SNAPSHOT_REVIEWED: marker in commit message";
+                  exit 1;
+              fi;
+          fi
+        '
+        language: system
+        pass_filenames: false
+        stages: [commit-msg]
