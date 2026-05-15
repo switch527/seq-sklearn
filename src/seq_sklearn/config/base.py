@@ -1,13 +1,15 @@
 """Shared training and model configs (per architecture A4).
 
-:class:`BaseTrainingConfig` carries optimizer / scheduler / hardware
-fields that every model needs at fit time. :class:`BaseModelConfig`
-extends with task-type, loss, imbalance, and calibration plus the F5
-validity-matrix and quantile-monotonicity cross-field validators.
+:class:`BaseTrainingConfig` carries training-loop fields plus the nested
+:class:`OptimizerConfig` / :class:`SchedulerConfig` family sub-configs.
+:class:`BaseModelConfig` extends with task-type, the nested
+:class:`LossConfig` / :class:`SamplerConfig`, calibration, and the F5
+validity-matrix / quantile-monotonicity / val+cal-sum cross-field
+validators.
 
-Both are frozen pydantic v2 models. Mutation is reconciled with sklearn's
-contract via the :class:`seq_sklearn.config._params_adapter.TabularConfigParams`
-adapter pattern documented in A4 step 3.
+Both are frozen pydantic v2 models. Mutation is reconciled with
+sklearn's contract via the adapter pattern at
+:mod:`seq_sklearn.config._adapters` (A4 step 3).
 """
 
 from typing import Literal, Self
@@ -15,24 +17,29 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from seq_sklearn.config._validity import check_combo
+from seq_sklearn.config.loss import LossConfig
+from seq_sklearn.config.optimizer import OptimizerConfig
+from seq_sklearn.config.sampler import SamplerConfig
+from seq_sklearn.config.scheduler import SchedulerConfig
 
 __all__ = ["BaseModelConfig", "BaseTrainingConfig"]
 
 
 class BaseTrainingConfig(BaseModel):
-    """Shared training-loop hyperparameters."""
+    """Shared training-loop hyperparameters.
+
+    Optimizer and scheduler hyperparameters live on the nested
+    :class:`OptimizerConfig` / :class:`SchedulerConfig` sub-configs
+    (each with its own ``extra`` escape hatch) rather than as flat
+    fields, so the configuration surface can grow without a shape break.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    learning_rate: float = Field(default=1e-3, gt=0.0)
-    weight_decay: float = Field(default=1e-4, ge=0.0)
     batch_size: int = Field(default=64, ge=1)
     max_epochs: int = Field(default=50, ge=1)
-    optimizer: Literal["adamw", "adam", "sgd"] = "adamw"
-    scheduler: Literal["constant", "cosine_with_warmup", "one_cycle", "reduce_on_plateau"] = (
-        "cosine_with_warmup"
-    )
-    warmup_steps: int = Field(default=100, ge=0)
+    optimizer: OptimizerConfig = Field(default_factory=OptimizerConfig)
+    scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     gradient_clip_val: float | None = None
     accumulate_grad_batches: int = Field(default=1, ge=1)
     precision: Literal["bf16-mixed", "16-mixed", "32-true", "auto"] = "auto"
@@ -50,17 +57,23 @@ class BaseTrainingConfig(BaseModel):
 class BaseModelConfig(BaseTrainingConfig):
     """Shared model-level hyperparameters.
 
-    The two cross-field validators below run in the order declared:
+    The three cross-field validators below run in the order declared
+    (pydantic v2 dispatches ``model_validator(mode="after")`` in
+    declaration order; nested sub-configs are validated before the
+    parent's after-validators run):
 
     1. :meth:`_check_validity_matrix` rejects any
-       ``(task_type, loss_strategy, imbalance_strategy, calibration_strategy)``
-       cell that is not in the F5 matrix (delegates to
-       :func:`seq_sklearn.config._validity.check_combo`).
-    2. :meth:`_check_quantiles_monotone` rejects any non-monotone
-       ``quantiles`` vector or value outside ``(0, 1)``. Lives on
-       :class:`BaseModelConfig` (not on :class:`seq_sklearn.config.tft.TFTConfig`)
-       so v2 quantile regressors (PatchTST quantile, TimesNet quantile)
-       inherit the validator without duplication.
+       ``(task_type, loss.strategy, sampler.strategy, calibration_strategy)``
+       cell not in the F5 matrix (delegates to
+       :func:`seq_sklearn.config._validity.check_combo`, whose parameter
+       names keep the F5 display labels ``loss_strategy`` /
+       ``imbalance_strategy`` per the requirements F5 bridge table).
+    2. :meth:`_check_quantiles_monotone` rejects a non-monotone
+       ``quantiles`` vector or any value outside ``(0, 1)``. Lives here
+       (not on :class:`seq_sklearn.config.tft.TFTConfig`) so v2 quantile
+       regressors inherit it without duplication.
+    3. :meth:`_check_val_cal_sum` rejects ``val_fraction + cal_fraction
+       >= 1.0``.
     """
 
     task_type: Literal[
@@ -71,10 +84,8 @@ class BaseModelConfig(BaseTrainingConfig):
         "regression_quantile",
         "regression_multioutput",
     ]
-    loss_strategy: Literal["cross_entropy", "focal", "mse", "mae", "huber", "pinball"]
-    imbalance_strategy: Literal[
-        "none", "class_weighted", "oversample_minority", "undersample_majority"
-    ] = "none"
+    loss: LossConfig
+    sampler: SamplerConfig = Field(default_factory=SamplerConfig)
     calibration_strategy: Literal[
         "none",
         "temperature",
@@ -85,17 +96,14 @@ class BaseModelConfig(BaseTrainingConfig):
     ] = "none"
     threshold_tuning: bool = False
     threshold_metric: Literal["f1", "balanced_accuracy", "youden_j"] = "f1"
-    focal_gamma: float = Field(default=2.0, gt=0.0)
-    huber_delta: float = Field(default=1.0, gt=0.0)
     quantiles: tuple[float, ...] | None = None
-    oversample_ratio: float = Field(default=1.0, gt=0.0)
 
     @model_validator(mode="after")
     def _check_validity_matrix(self) -> Self:
         check_combo(
             self.task_type,
-            self.loss_strategy,
-            self.imbalance_strategy,
+            self.loss.strategy,
+            self.sampler.strategy,
             self.calibration_strategy,
         )
         return self

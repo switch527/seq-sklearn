@@ -9,6 +9,7 @@ this file does NOT re-test the quantile path.
 import pytest
 from pydantic import ValidationError
 
+from seq_sklearn.config.loss import LossConfig
 from seq_sklearn.config.tabular import TabularToSequenceConfig
 from seq_sklearn.config.tft import TFTAdvancedConfig, TFTConfig
 
@@ -20,7 +21,7 @@ def _tab() -> TabularToSequenceConfig:
 def _minimal_tft(**overrides: object) -> TFTConfig:
     return TFTConfig(
         task_type="binary",
-        loss_strategy="cross_entropy",
+        loss=LossConfig(strategy="cross_entropy"),
         tabular_config=_tab(),
         **overrides,
     )
@@ -69,7 +70,7 @@ def test_inherits_validity_matrix_validator() -> None:
     with pytest.raises(ValidationError):
         TFTConfig(
             task_type="regression_point",
-            loss_strategy="cross_entropy",  # illegal for regression
+            loss=LossConfig(strategy="cross_entropy"),  # illegal for regression
             tabular_config=_tab(),
         )
 

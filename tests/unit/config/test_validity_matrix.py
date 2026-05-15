@@ -13,8 +13,10 @@ the test stays in sync with the production validator (a duplicate copy
 would silently drift on future matrix changes).
 """
 
+from typing import get_args
+
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from seq_sklearn.config._domains import (
     CALIBRATION_STRATEGIES,
@@ -25,6 +27,8 @@ from seq_sklearn.config._domains import (
 )
 from seq_sklearn.config._validity import _LEGAL_CELLS, check_combo
 from seq_sklearn.config.base import BaseModelConfig
+from seq_sklearn.config.loss import LossConfig
+from seq_sklearn.config.sampler import SamplerConfig
 
 
 def _enumerate_legal_v1_cells() -> list[tuple[str, str, str, str]]:
@@ -96,8 +100,8 @@ def test_base_model_config_illegal_v1_cells_raise_validation_error(
     with pytest.raises(ValidationError):
         BaseModelConfig(
             task_type=task,  # type: ignore[arg-type]
-            loss_strategy=loss,  # type: ignore[arg-type]
-            imbalance_strategy=imb,  # type: ignore[arg-type]
+            loss=LossConfig(strategy=loss),  # type: ignore[arg-type]
+            sampler=SamplerConfig(strategy=imb),  # type: ignore[arg-type]
             calibration_strategy=cal,  # type: ignore[arg-type]
         )
 
@@ -127,3 +131,30 @@ def test_unknown_task_loss_pair_raises_helpful_message() -> None:
     """Legal task with illegal loss surfaces the legal-loss list."""
     with pytest.raises(ValueError, match="Legal losses"):
         check_combo("regression_point", "cross_entropy", "none", "none")
+
+
+# ---- Literal-to-domain invariant (architecture C3)
+#
+# Only LossConfig.strategy and SamplerConfig.strategy feed check_combo,
+# so the F5 failure-mode contract depends on their Literals matching the
+# _domains tuples exactly. If a Literal drifts, an illegal-cell value
+# would fail at sub-config construction (pydantic Literal error) instead
+# of at BaseModelConfig._check_validity_matrix (F5 ValueError ->
+# ValidationError), silently changing the documented failure mode.
+# OptimizerConfig.name / SchedulerConfig.name do not feed check_combo
+# and have no _domains tuple to drift against, so they are out of scope
+# for this invariant (and _domains.py is unchanged by this refactor).
+
+
+@pytest.mark.parametrize(
+    ("config_cls", "field", "domain"),
+    [
+        (LossConfig, "strategy", LOSS_STRATEGIES),
+        (SamplerConfig, "strategy", IMBALANCE_STRATEGIES),
+    ],
+)
+def test_family_config_strategy_literals_match_domains(
+    config_cls: type[BaseModel], field: str, domain: tuple[str, ...]
+) -> None:
+    annotation = config_cls.model_fields[field].annotation
+    assert get_args(annotation) == tuple(domain)
