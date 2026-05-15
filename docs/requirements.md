@@ -1022,8 +1022,9 @@ For Optuna specifically the library ships:
   with a per-model default search space defined by the `suggest_params`
   implementation (architecture A16; Phase 8 deliverable).
   Default flags (`search_advanced=False, search_extras=False`) sample
-  only STABLE fields enumerated in that table; `search_advanced=True`
-  also samples BETA fields on `<Model>AdvancedConfig`;
+  only STABLE fields (the default search space defined by that A16
+  implementation); `search_advanced=True` also samples BETA fields on
+  `<Model>AdvancedConfig`;
   `search_extras=True` samples from a curated per-family ALPHA-key list
   (the list ships empty in v1; maintainers populate as ALPHA
   passthroughs land). The search space samples only from the legal
@@ -1413,7 +1414,7 @@ TFT-specific fields on `TFTConfig` (the main model config):
 - `prediction_readout` (`"last_valid"` | `"mean_pool"`)
 - `tabular_config: TabularToSequenceConfig` (the preprocessing config)
 - `advanced: TFTAdvancedConfig` (BETA experimental knobs; empty in v1
-  with the `extra` ALPHA escape hatch; per F7 / hyperparameter strategy)
+  with the `extra` ALPHA escape hatch; per F7)
 
 Shared training-side hyperparameters live on `BaseTrainingConfig` and
 its nested family sub-configs (per F7's four-tier architecture):
@@ -2473,6 +2474,15 @@ Gemini final pass (second; on the implementation plan, but with cross-doc impact
   (gemini-impl r1-C4).** Updated the rationale to "installed for
   transitive dependency hygiene; `PyTorchLightningPruningCallback`
   is NOT used".
+
+> Historical note: the fold-in ledger entries below describe edits
+> made when `docs/hyperparameter_strategy.md` was the authoritative
+> spec. That doc was subsequently demoted to rationale + promotion
+> procedure only; its schemas, test rosters, and search-space table
+> were stripped. Authority now lives in this doc (F5/F7), architecture
+> A4/A16, the implementation plan's test rosters, and the code.
+> Entries referencing the strategy doc as authoritative for the
+> surface are historical.
 
 Hyperparameter-strategy fold-in (Round 1):
 

@@ -465,8 +465,8 @@ class SchedulerConfig(BaseModel):
 # src/seq_sklearn/config/loss.py
 class LossConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    # No default: legal value depends on task_type per F5 / strategy
-    # doc; the estimator injects _DEFAULT_LOSS_FOR_TASK[task_type] when
+    # No default: legal value depends on task_type per F5;
+    # the estimator injects _DEFAULT_LOSS_FOR_TASK[task_type] when
     # the caller omits the LossParams adapter.
     strategy: Literal["cross_entropy", "focal", "mse", "mae", "huber", "pinball"]
     focal_gamma: float = 2.0
@@ -2456,6 +2456,15 @@ Gemini final pass (cross-family review on architecture doc; prior pass):
 - **`os.cpu_count() or 1` (gemini r1-I1 carried).** Updated A4 and
   A7 references to add the None-handling fallback.
 
+
+> Historical note: the fold-in ledger entries below describe edits
+> made when `docs/hyperparameter_strategy.md` was the authoritative
+> spec. That doc was subsequently demoted to rationale + promotion
+> procedure only; its schemas, test rosters, and search-space table
+> were stripped. Authority now lives in this doc (A4/A16),
+> requirements F5/F7, the implementation plan's test rosters, and the
+> code. Entries referencing the strategy doc as authoritative for the
+> surface are historical.
 
 Hyperparameter-strategy fold-in (Round 1):
 

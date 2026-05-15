@@ -3,13 +3,13 @@
 > **Status: design rationale and promotion procedure.** This document is
 > not an authoritative spec. The authoritative sources are:
 >
-> - `docs/requirements.md` — the config surface, per-hyperparameter
+> - `docs/requirements.md`: the config surface, per-hyperparameter
 >   stability tiers, the F5 validity matrix, the F7 `suggest_params`
 >   contract, and the N1 mandatory tests.
-> - `docs/architecture.md` — A4 config schemas and adapter pattern, A16
+> - `docs/architecture.md`: A4 config schemas and adapter pattern, A16
 >   Optuna integration, A12 doc rendering.
-> - `docs/implementation_plan.md` — per-phase module and test rosters.
-> - the code itself (`src/seq_sklearn/config/`) — the verbatim pydantic
+> - `docs/implementation_plan.md`: per-phase module and test rosters.
+> - the code itself (`src/seq_sklearn/config/`): the verbatim pydantic
 >   schemas and the `extract_deprecated_extras` helper.
 >
 > This document owns only the *why* (the rationale for a four-tier
@@ -26,7 +26,7 @@ The hyperparameter-exposure architecture is graded against:
 1. **Benchmark headroom**: deep-sequence libraries are made or broken by
    their ability to compete on standard benchmarks. Benchmark performance
    is dominated by hyperparameter tuning. The library must let users tune
-   comprehensively without us shipping every knob on day one.
+   broadly without us shipping every knob on day one.
 2. **First-use ergonomics**: a new user reading the README quickstart
    should see a small, well-documented set of hyperparameters. Field
    counts on `TFTConfig` directly affect the `mkdocstrings` rendered

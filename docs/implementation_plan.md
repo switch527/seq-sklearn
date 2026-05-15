@@ -240,7 +240,7 @@ module (`_adapters.py`).
   `torch.cuda.get_device_capability` and asserts the returned
   `HardwareTier`. Combined with `resolve_precision` from Phase 4
   in a follow-up test once Phase 4 lands.
-- `tests/unit/test_validity_matrix.py` (one of N1's required tests):
+- `tests/unit/config/test_validity_matrix.py` (one of N1's required tests):
   parametrized over the Cartesian product of the four domain
   enumerations from `_domains.py` minus the legal cells listed in F5.
   Every illegal cell raises and the error message names both the
@@ -290,7 +290,7 @@ module (`_adapters.py`).
 - `tests/unit/config/test_sampler.py` (new per architecture A4):
   `test_default_strategy_is_none` asserts `SamplerConfig()`
   produces `strategy="none"`.
-- `tests/unit/test_config_base.py`: legal `BaseModelConfig`
+- `tests/unit/config/test_base.py`: legal `BaseModelConfig`
   constructions succeed; mutation post-construction raises
   (frozen); `extra="forbid"` rejects unknown fields. The
   `quantiles strictly increasing in (0, 1)` cross-field validator
@@ -299,15 +299,15 @@ module (`_adapters.py`).
   `test_v1_task_type_rejects_multilabel_and_regression_multioutput`
   pinning the v1.1-unreachable guard per the architecture A4
   fold-in note.
-- `tests/unit/test_config_tabular.py`: same as above for
+- `tests/unit/config/test_tabular.py`: same as above for
   `TabularToSequenceConfig`. The hashability assertion confirms
   `hash(config)` succeeds against the `CategoricalEmbedDims`
   tuple form.
-- `tests/unit/test_config_tft.py`: legal `TFTConfig` constructions
+- `tests/unit/config/test_tft.py`: legal `TFTConfig` constructions
   succeed; `attention_heads` not dividing `hidden_size` raises
   via the TFT-specific cross-field validator; mutation
   post-construction raises. The quantile validator is tested in
-  `test_config_base.py` (it lives on `BaseModelConfig`, not
+  `test_base.py` (it lives on `BaseModelConfig`, not
   `TFTConfig`). Per architecture A4:
   `test_tft_config_advanced_field_is_not_none_by_default` and
   `test_tft_advanced_config_default_construction_succeeds` pin
@@ -1558,7 +1558,7 @@ Round 1 (design-review swarm):
 - **Sub-phase 3a `config/tft.py` placement was a smell (arch
   r1-I8).** Moved `TFTConfig` to Phase 1 alongside the other
   pydantic configs. Phase 3 lost its sub-phase; Phase 1 gained the
-  `test_config_tft.py` cross-field validator test.
+  `test_tft.py` cross-field validator test.
 - **AttentionOutput dataclasses placed in Phase 5 with no
   functional coupling (arch r1-I2).** Moved to Phase 6 alongside
   the estimator base shells that expose `predict_with_attention`.
@@ -1632,7 +1632,7 @@ Round 1 (design-review swarm):
 - **Phase 4 module-count vs. estimate honesty (arch r1-NITPICK 1).**
   Effort table split Phase 4 into 4a / 4b.
 - **Phase 1 effort estimate inconsistency.** Bumped from 2-3 days
-  to 3-4 days to absorb the added `test_config_tft.py` work from
+  to 3-4 days to absorb the added `test_tft.py` work from
   the config-tft move.
 
 Round 2 (design-review swarm):
@@ -1850,7 +1850,7 @@ Gemini final pass (cross-family review on the implementation plan):
   `quantiles` field lives on `BaseModelConfig` per A4. Moved the
   cross-field validator (strictly increasing, in `(0, 1)`) from
   `TFTConfig` to `BaseModelConfig` and the test from
-  `test_config_tft.py` to `test_config_base.py`. v2 quantile
+  `test_tft.py` to `test_base.py`. v2 quantile
   regressors (PatchTST quantile, TimesNet quantile) inherit the
   validator without duplication.
 
@@ -2000,10 +2000,10 @@ Hyperparameter-strategy fold-in (Round 1):
   (`LossConfig`, `SamplerConfig` sub-configs); parametrize IDs
   stay 4 strings so pytest caches are stable. Added
   `test_v1_task_type_rejects_multilabel_and_regression_multioutput`
-  to `test_config_base.py` pinning the v1.1-unreachable guard.
+  to `test_base.py` pinning the v1.1-unreachable guard.
   Added `test_tft_config_advanced_field_is_not_none_by_default`
   and `test_tft_advanced_config_default_construction_succeeds`
-  to `test_config_tft.py` pinning the `advanced` slot contract.
+  to `test_tft.py` pinning the `advanced` slot contract.
 - **Phase 6a `_build_config` loss-default injection.** `_build_config`
   now injects `LossParams(strategy=_DEFAULT_LOSS_FOR_TASK[task_type])`
   when `self.loss is None`. New test

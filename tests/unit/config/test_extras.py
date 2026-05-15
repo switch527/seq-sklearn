@@ -12,6 +12,7 @@ import warnings
 import numpy as np
 import pytest
 from pydantic import BaseModel, ConfigDict
+from pydantic_core import PydanticUndefined
 
 from seq_sklearn.config._extras import (
     # Module-private by design; imported here as a test seam so the
@@ -89,12 +90,14 @@ def test_extra_dict_survives_json_roundtrip() -> None:
 
 
 def test_extract_deprecated_extras_meta_promoted_keys_exist() -> None:
-    """Every registered promotion names a real typed field on its family config.
+    """Every registered promotion names a real typed field with a default.
 
-    The v1 registry is empty, so the field-existence loop is vacuous;
-    it becomes load-bearing automatically once a promotion is registered
-    and catches a maintainer who registers one without adding the typed
-    field.
+    The v1 registry is empty, so the loop is vacuous; it becomes
+    load-bearing automatically once a promotion is registered and
+    catches a maintainer who registers one without adding the typed
+    field, or who points it at a no-default field (whose
+    ``FieldInfo.default`` is ``PydanticUndefined``, which makes the
+    helper's "both paths set" detection ambiguous).
     """
     family_cls = {
         "optimizer": OptimizerConfig,
@@ -105,7 +108,9 @@ def test_extract_deprecated_extras_meta_promoted_keys_exist() -> None:
     assert set(_PROMOTED_KEYS_BY_FAMILY) == set(family_cls)
     for family, promoted in _PROMOTED_KEYS_BY_FAMILY.items():
         for _extra_key, typed_name in promoted.items():
-            assert typed_name in family_cls[family].model_fields
+            fields = family_cls[family].model_fields
+            assert typed_name in fields
+            assert fields[typed_name].default is not PydanticUndefined
 
 
 def test_extract_deprecated_extras_both_typed_and_extra_raises_config_error(
