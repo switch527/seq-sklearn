@@ -398,10 +398,19 @@ def test_single_entity_k_gt_lookback_emits_k_sliding_windows() -> None:
         expected_pad = max(0, lookback - 1 - e)
         assert mask[e][:expected_pad].all()
         assert not mask[e][expected_pad:].any()
-    # window_time_index for the single entity is np.arange(k) ascending.
-    per_entity_counts = [k]
-    wti = np.concatenate([np.arange(n) for n in per_entity_counts])
-    np.testing.assert_array_equal(wti, np.arange(k))
+    # The single tv_real column equals the per-entity time counter
+    # (tr == t). The last (right-most, never padded) timestep of each
+    # window is its window-END value. Standard scaling is strictly
+    # monotone, so reading the window-end value out of the ACTUAL
+    # transform output and asserting it is strictly increasing across
+    # the batch proves windows are emitted oldest-to-newest (window i
+    # ends one period later than window i - 1). A regression that
+    # reversed the per-entity time sort would break this.
+    window_end_tr = out["time_varying_real"].numpy()[:, -1, 0]
+    assert np.all(np.diff(window_end_tr) > 0)
+    # Recover the integer time order the scaled values encode and pin
+    # it to 0, 1, ..., k - 1 (oldest window first).
+    assert np.argsort(window_end_tr).tolist() == list(range(k))
 
 
 def test_prediction_step_horizon_cap_and_interior_alignment() -> None:
@@ -495,9 +504,63 @@ def test_inverse_transform_unseen_categorical_round_trips_to_unk() -> None:
     assert recovered["tc"].tolist() == ["<unk>"]
 
 
+def test_entity_id_codes_monotone_with_batch_blocks() -> None:
+    # Integer ids whose stringified sort order ("1", "10", "2") differs
+    # from the raw groupby order (1, 2, 10). Codes must follow the
+    # raw-value batch-emission order, not the stringified sort.
+    rows = []
+    counts = {1: 2, 2: 3, 10: 4}
+    for entity_id, n in counts.items():
+        for t in range(n):
+            rows.append(
+                {
+                    "id": entity_id,
+                    "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                    "sc": "a",
+                    # static real == original id so a block's code can be
+                    # mapped back to its source entity via inverse_transform.
+                    "sr": float(entity_id),
+                    "tr": float(t),
+                    "tc": "x",
+                }
+            )
+    frame = pd.DataFrame(rows)
+    tts = TabularToSequence(_config(), "binary")
+    out = tts.fit_transform(frame, np.zeros(len(rows)))
+    codes = out["entity_id"].numpy()
+    # Monotone non-decreasing across the whole batch.
+    assert np.all(np.diff(codes) >= 0)
+    # groupby(sort=True) emits 1, 2, 10 -> codes 0, 1, 2 with the
+    # per-entity window counts equal to the row counts.
+    np.testing.assert_array_equal(codes, np.array([0, 0, 1, 1, 1, 2, 2, 2, 2]))
+    # Each code maps back to the correct original id. inverse_transform
+    # writes the entity code under cfg.id_col ("id") and unscales the
+    # static real "sr", which was set equal to the original id.
+    recovered = tts.inverse_transform(out)
+    code_to_id = {1: [0, 0], 2: [1, 1, 1], 10: [2, 2, 2, 2]}
+    offset = 0
+    for original_id, expected_codes in code_to_id.items():
+        block = recovered.iloc[offset : offset + len(expected_codes)]
+        assert block["id"].tolist() == expected_codes
+        assert block["sr"].round().tolist() == [float(original_id)] * len(expected_codes)
+        offset += len(expected_codes)
+
+
+# max_examples=15 keeps the hypothesis budget small enough for the dev
+# loop while still sweeping the (1, 60) periods-per-entity range across
+# 12 entities; the synthetic generator's own RNG can trip the too_slow
+# health check on the wide range, so it is suppressed.
 @settings(max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(seed=st.integers(min_value=0, max_value=50))
 def test_property_tv_real_shape(seed: int) -> None:
+    """tv_real shape + the A5 sliding-window emission-order contract.
+
+    Pins the F3 variable-history shape ``(sum n_i, lookback,
+    n_tv_real)``, the A5 per-entity ``entity_id`` block contiguity, and
+    the A5 oldest-to-newest per-entity window order by reading the
+    window-end value of a monotone time-order column out of the actual
+    transform output.
+    """
     gen = SyntheticPanelGenerator(
         num_entities=12,
         periods_per_entity=(1, 60),
@@ -505,12 +568,19 @@ def test_property_tv_real_shape(seed: int) -> None:
         seed=seed,
     )
     panel, y = gen.generate()
+    # Strictly increasing per-entity time counter so the window-END
+    # value of each window is its 0-based time position. Standard
+    # scaling is monotone, so a strictly increasing window-end sequence
+    # within an entity block proves windows are emitted oldest-first.
+    panel = panel.sort_values(["id", "time"]).reset_index(drop=True)
+    panel["t_order"] = panel.groupby("id", sort=True).cumcount().astype(float)
+    tv_real_cols = (*gen.time_varying_real_cols, "t_order")
     cfg = TabularToSequenceConfig(
         id_col="id",
         time_col="time",
         static_categorical_cols=tuple(gen.static_categorical_cols),
         static_real_cols=tuple(gen.static_real_cols),
-        time_varying_real_cols=tuple(gen.time_varying_real_cols),
+        time_varying_real_cols=tv_real_cols,
         time_varying_categorical_cols=tuple(gen.time_varying_categorical_cols),
         lookback=gen.lookback,
         max_categorical_cardinality=10_000,
@@ -522,15 +592,20 @@ def test_property_tv_real_shape(seed: int) -> None:
     assert out["time_varying_real"].shape == (
         total_windows,
         gen.lookback,
-        len(gen.time_varying_real_cols),
+        len(tv_real_cols),
     )
-    # Per entity the windows are contiguous and time-ascending, so the
-    # Trainer's window_time_index reconstruction is np.arange(n_i).
+    t_order_col = len(tv_real_cols) - 1
+    window_end_t_order = out["time_varying_real"].numpy()[:, -1, t_order_col]
     entity_codes = out["entity_id"].numpy()
     offset = 0
     for n_i in per_entity_counts:
         block = entity_codes[offset : offset + n_i]
+        # Per-entity block contiguity (A5): one code across the block.
         assert len(np.unique(block)) == 1
-        wti = np.concatenate([np.arange(n_i)])
-        np.testing.assert_array_equal(wti, np.arange(n_i))
+        # Oldest-to-newest order (A5): the window-end time counter read
+        # from the ACTUAL output is strictly increasing within the
+        # block, so the Trainer's np.arange(n_i) reconstruction holds.
+        end_t_order = window_end_t_order[offset : offset + n_i]
+        if n_i > 1:
+            assert np.all(np.diff(end_t_order) > 0)
         offset += n_i
