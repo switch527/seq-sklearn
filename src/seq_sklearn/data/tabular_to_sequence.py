@@ -55,9 +55,10 @@ class TabularToSequence:
     construction.
 
     The emitted ``entity_id`` tensor carries a contiguous integer code
-    (sorted by the stringified original id) rather than the raw id, so
-    the diagnostic tensor is always a valid ``LongTensor`` regardless of
-    the original id dtype.
+    assigned in batch-emission order (code ``k`` is the ``k``-th entity
+    block in the output) rather than the raw id, so the diagnostic tensor
+    is always a valid ``LongTensor`` regardless of the original id dtype
+    and is monotone non-decreasing across the batch.
     """
 
     def __init__(self, config: TabularToSequenceConfig, task_type: TaskType) -> None:
@@ -227,7 +228,10 @@ class TabularToSequence:
         ``[max(0, e - lookback + 1) .. e]``, left-padded to ``lookback``,
         with target at ``min(e + prediction_step, n - 1)`` and
         ``window_time_index`` value ``e``. Windows for one entity are
-        contiguous and time-ascending in the output batch.
+        contiguous and time-ascending in the output batch. The emitted
+        ``entity_id`` code is assigned in batch-emission order: code
+        ``k`` is the ``k``-th entity block, so ``entity_id`` is monotone
+        non-decreasing across the batch.
 
         The ``min_periods_predict`` gate is per entity on the entity's
         real row count: an entity below the floor still yields all of its
@@ -268,10 +272,7 @@ class TabularToSequence:
         entity_rows: list[int] = []
         below_floor = 0
 
-        ordered_ids = sorted({str(v) for v in ordered[cfg.id_col].to_numpy()})
-        entity_codes = {raw: code for code, raw in enumerate(ordered_ids)}
-
-        for entity_id, group in ordered.groupby(cfg.id_col, sort=True):
+        for entity_code, (_, group) in enumerate(ordered.groupby(cfg.id_col, sort=True)):
             n_rows = len(group)
             below = n_rows < cfg.min_periods_predict
             if below:
@@ -348,7 +349,7 @@ class TabularToSequence:
                 tv_cat_rows.append(tv_cat_window)
                 mask_rows.append(mask)
                 target_rows.append(target)
-                entity_rows.append(entity_codes[str(entity_id)])
+                entity_rows.append(entity_code)
 
         if below_floor > 0:
             emit(
@@ -394,7 +395,7 @@ class TabularToSequence:
         }
 
     def fit_transform(self, X: pd.DataFrame, y: object) -> dict[str, torch.Tensor]:  # noqa: N803
-        """Equivalent to fit followed by transform; encoder and scaler statistics are drawn from X."""
+        """Encoder and scaler statistics are drawn from ``X`` itself."""
         return self.fit(X, y).transform(X)
 
     def _aligned_target(self, group: pd.DataFrame, window_end: int) -> float:

@@ -11,6 +11,13 @@ implementation defaults to ``"id"`` / ``"time"`` (matching
 :class:`~seq_sklearn.config.tabular.TabularToSequenceConfig` defaults,
 the F2-consistent choice) and accepts optional ``id_col`` / ``time_col``
 keyword overrides.
+
+Entities are iterated in stringified-id sort order here. This differs
+from :class:`~seq_sklearn.data.tabular_to_sequence.TabularToSequence`,
+which assigns entity codes in raw-value groupby order; the two are not
+required to share an order because split correctness is per entity
+(train/test disjointness holds independently of the concatenation
+order of the per-entity chunks).
 """
 
 import logging
