@@ -91,6 +91,19 @@ def test_gap_measured_in_windows() -> None:
         assert len(tr_wg) == len(tr_ng) - 5
 
 
+def test_lookback_one_gap_nonzero() -> None:
+    panel = _panel(1, 60)
+    no_gap = EntityTimeSeriesSplit(n_splits=3, gap=0, lookback=1)
+    with_gap = EntityTimeSeriesSplit(n_splits=3, gap=4, lookback=1)
+    ng = list(no_gap.split(panel))
+    wg = list(with_gap.split(panel))
+    for (tr_ng, _), (tr_wg, te_wg) in zip(ng, wg, strict=True):
+        # lookback=1 -> no train/test overlap; gap trims gap windows
+        # off the train tail.
+        assert set(tr_wg).isdisjoint(set(te_wg))
+        assert len(tr_wg) == len(tr_ng) - 4
+
+
 def test_max_train_size_caps_per_entity() -> None:
     panel = _panel(2, 60)
     splitter = EntityTimeSeriesSplit(n_splits=3, lookback=2, max_train_size=7)
