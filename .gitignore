@@ -51,8 +51,8 @@ lightning_logs/
 !tests/_snapshots/.gitkeep
 
 # ─── Data ───────────────────────────────────────────────────────────────────
-data/
-datasets/
+/data/
+/datasets/
 
 # ─── Local config / secrets ─────────────────────────────────────────────────
 .env
