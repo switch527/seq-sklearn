@@ -14,6 +14,8 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from seq_sklearn.config._extras import (
+    # Module-private by design; imported here as a test seam so the
+    # alias-helper tests can monkeypatch a fake promotion. Not public API.
     _PROMOTED_KEYS_BY_FAMILY,
     ExtraDict,
     extract_deprecated_extras,
