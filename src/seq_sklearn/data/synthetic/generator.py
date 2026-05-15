@@ -242,16 +242,31 @@ class SyntheticPanelGenerator:
             post_clip = np.where(last_pre_clip < _W_TEMPORAL_FLOOR, 0.0, last_pre_clip)
         if np.count_nonzero(post_clip) >= _W_TEMPORAL_MIN_LOADED:
             return post_clip / post_clip.sum()
+        # Retry cap reached: post_clip carries fewer than the required
+        # loaded entries, so apply the documented F6 fallback.
+        return self._w_temporal_fallback(last_pre_clip, post_clip)
 
-        # The retry cap was reached, so post_clip carries fewer than
-        # _W_TEMPORAL_MIN_LOADED non-zero entries. F6 then forces the
-        # smallest entries of the most recent pre-clip draw to the
-        # fallback value and renormalizes the full vector. Ties resolve
-        # to the lowest index.
-        chosen = sorted(range(lookback), key=lambda i: (last_pre_clip[i], i))[
-            :_W_TEMPORAL_MIN_LOADED
-        ]
-        fallback = last_pre_clip.copy()
+    @staticmethod
+    def _w_temporal_fallback(pre_clip: np.ndarray, post_clip: np.ndarray) -> np.ndarray:
+        """Apply the F6 step-6 retry-cap fallback to the temporal weights.
+
+        If the most recent post-clip vector has at least three non-zero
+        entries, the three indices of its smallest non-zero values are
+        forced; otherwise the three indices of the smallest values of the
+        full pre-clip draw are forced. Ties resolve to the lowest index
+        in both branches. The chosen entries of the full (pre-clip)
+        vector are set to the fallback value and the vector renormalized.
+        """
+        nonzero = np.flatnonzero(post_clip)
+        if nonzero.size >= _W_TEMPORAL_MIN_LOADED:
+            chosen = sorted(nonzero.tolist(), key=lambda i: (post_clip[i], i))[
+                :_W_TEMPORAL_MIN_LOADED
+            ]
+        else:
+            chosen = sorted(range(len(pre_clip)), key=lambda i: (pre_clip[i], i))[
+                :_W_TEMPORAL_MIN_LOADED
+            ]
+        fallback = pre_clip.copy()
         for idx in chosen:
             fallback[idx] = _W_TEMPORAL_FALLBACK_VALUE
         return fallback / fallback.sum()

@@ -214,6 +214,34 @@ def test_w_temporal_post_loop_success_return() -> None:
     assert stub.calls == 1 + 5
 
 
+def test_w_temporal_fallback_pre_clip_branch_hand_checked() -> None:
+    # post_clip has only 2 non-zero entries (< 3), so the fallback picks
+    # the 3 smallest values of the full pre-clip draw. Ties (the four
+    # 0.001 entries) resolve to the lowest indices: 2, 3, 4.
+    pre_clip = np.array([0.6, 0.396, 0.001, 0.001, 0.001, 0.001])
+    post_clip = np.where(pre_clip < 0.05, 0.0, pre_clip)
+    assert np.count_nonzero(post_clip) == 2
+    w = SyntheticPanelGenerator._w_temporal_fallback(pre_clip, post_clip)
+    forced = pre_clip.copy()
+    forced[[2, 3, 4]] = 0.1
+    np.testing.assert_allclose(w, forced / forced.sum())
+    assert np.isclose(w.sum(), 1.0)
+
+
+def test_w_temporal_fallback_post_clip_branch_hand_checked() -> None:
+    # post_clip has >= 3 non-zero entries, so the fallback picks the 3
+    # smallest NON-ZERO values of the post-clip vector: indices 5, 4, 3
+    # (values 0.05, 0.07, 0.08).
+    pre_clip = np.array([0.4, 0.3, 0.1, 0.08, 0.07, 0.05])
+    post_clip = np.where(pre_clip < 0.05, 0.0, pre_clip)
+    assert np.count_nonzero(post_clip) == 6
+    w = SyntheticPanelGenerator._w_temporal_fallback(pre_clip, post_clip)
+    forced = pre_clip.copy()
+    forced[[3, 4, 5]] = 0.1
+    np.testing.assert_allclose(w, forced / forced.sum())
+    assert np.isclose(w.sum(), 1.0)
+
+
 def test_w_temporal_normal_path_has_three_loaded() -> None:
     gen = SyntheticPanelGenerator(lookback=12, seed=42)
     rng = np.random.Generator(np.random.PCG64(42))
@@ -275,6 +303,34 @@ def test_multiclass_uniform_when_no_distribution() -> None:
     gen = SyntheticPanelGenerator(target_kind="multiclass", num_classes=3, num_entities=10, seed=1)
     _, y = gen.generate()
     assert set(np.unique(y)).issubset({0, 1, 2})
+
+
+def test_only_static_categorical_zero() -> None:
+    gen = SyntheticPanelGenerator(
+        num_static_categorical=0,
+        num_time_varying_categorical=2,
+        num_entities=5,
+        periods_per_entity=10,
+        seed=1,
+    )
+    panel, y = gen.generate()
+    assert gen.static_categorical_cols == []
+    assert len(gen.time_varying_categorical_cols) == 2
+    assert len(panel) == len(y) > 0
+
+
+def test_only_time_varying_categorical_zero() -> None:
+    gen = SyntheticPanelGenerator(
+        num_static_categorical=2,
+        num_time_varying_categorical=0,
+        num_entities=5,
+        periods_per_entity=10,
+        seed=1,
+    )
+    panel, y = gen.generate()
+    assert len(gen.static_categorical_cols) == 2
+    assert gen.time_varying_categorical_cols == []
+    assert len(panel) == len(y) > 0
 
 
 def test_no_categorical_or_real_columns() -> None:
