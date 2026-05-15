@@ -1,8 +1,12 @@
 """Panel-to-sequence transformer (A5 / F3).
 
 Converts a validated panel DataFrame into the batched tensor dict every
-sequence model in the library consumes. One window per valid entity-time
-position, left-padded to ``lookback`` with a ``True = padding`` mask.
+sequence model in the library consumes. Per entity, one sliding window
+per window-end position (``n`` windows for an ``n``-row entity), each
+spanning the most recent ``lookback`` rows ending at that position,
+left-padded to ``lookback`` with a ``True = padding`` mask. Windows for
+one entity are contiguous and time-ascending in the output batch so the
+Trainer can reconstruct ``window_time_index`` as ``np.arange(n)``.
 """
 
 import hashlib
@@ -218,8 +222,17 @@ class TabularToSequence:
     def transform(self, X: pd.DataFrame) -> dict[str, torch.Tensor]:  # noqa: N803
         """Window the panel into the batched tensor dict (A5 transform steps).
 
-        Entities below ``min_periods_predict`` produce a NaN-target window
-        with one aggregated warning per call.
+        Per entity (rows sorted by time, positions ``0..n-1``), emits one
+        window per window-end position ``e``: the window spans rows
+        ``[max(0, e - lookback + 1) .. e]``, left-padded to ``lookback``,
+        with target at ``min(e + prediction_step, n - 1)`` and
+        ``window_time_index`` value ``e``. Windows for one entity are
+        contiguous and time-ascending in the output batch.
+
+        The ``min_periods_predict`` gate is per entity on the entity's
+        real row count: an entity below the floor still yields all of its
+        NaN-target windows and counts once toward the single aggregated
+        warning emitted per call.
 
         Raises:
             NotFittedError: If called before :meth:`fit`.
@@ -260,80 +273,87 @@ class TabularToSequence:
 
         for entity_id, group in ordered.groupby(cfg.id_col, sort=True):
             n_rows = len(group)
-            window = group.iloc[-lookback:] if n_rows > lookback else group
-            w_len = len(window)
-            pad = lookback - w_len
+            below = n_rows < cfg.min_periods_predict
+            if below:
+                below_floor += 1
 
-            tv_real = (
+            entity_tv_real = (
                 self.real_scaler_.transform(
-                    window[list(cfg.time_varying_real_cols)].to_numpy(dtype=float)
+                    group[list(cfg.time_varying_real_cols)].to_numpy(dtype=float)
                 )
                 if n_tv_real
-                else np.zeros((w_len, 0), dtype=np.float64)
+                else np.zeros((n_rows, 0), dtype=np.float64)
             )
             if cfg.clip_features is not None and n_tv_real:
                 clip = cfg.clip_features
-                tv_real = np.clip(tv_real, -clip, clip)
-            if pad > 0 and n_tv_real:
-                tv_real = np.vstack([np.zeros((pad, n_tv_real)), tv_real])
-            elif pad > 0:
-                tv_real = np.zeros((lookback, 0), dtype=np.float64)
+                entity_tv_real = np.clip(entity_tv_real, -clip, clip)
 
             if n_tv_cat:
                 tv_cat_encoded = self.categorical_encoder_.transform(
-                    {c: window[c].to_numpy() for c in cfg.time_varying_categorical_cols}
+                    {c: group[c].to_numpy() for c in cfg.time_varying_categorical_cols}
                 )
-                tv_cat = np.stack(
+                entity_tv_cat = np.stack(
                     [tv_cat_encoded[c] for c in cfg.time_varying_categorical_cols], axis=1
                 )
+            else:
+                entity_tv_cat = np.zeros((n_rows, 0), dtype=np.int64)
+
+            for window_end in range(n_rows):
+                window_start = max(0, window_end - lookback + 1)
+                w_len = window_end - window_start + 1
+                pad = lookback - w_len
+
+                tv_real_window = entity_tv_real[window_start : window_end + 1]
+                if pad > 0 and n_tv_real:
+                    tv_real_window = np.vstack([np.zeros((pad, n_tv_real)), tv_real_window])
+                elif pad > 0:
+                    tv_real_window = np.zeros((lookback, 0), dtype=np.float64)
+
+                tv_cat_window = entity_tv_cat[window_start : window_end + 1]
                 if pad > 0:
-                    tv_cat = np.vstack([np.zeros((pad, n_tv_cat), dtype=np.int64), tv_cat])
-            else:
-                tv_cat = np.zeros((lookback, 0), dtype=np.int64)
+                    tv_cat_window = np.vstack(
+                        [np.zeros((pad, n_tv_cat), dtype=np.int64), tv_cat_window]
+                    )
 
-            mask = np.zeros(lookback, dtype=bool)
-            if pad > 0:
-                mask[:pad] = True
+                mask = np.zeros(lookback, dtype=bool)
+                if pad > 0:
+                    mask[:pad] = True
 
-            last = window.iloc[-1]
-            if n_static_cat:
-                static_cat_encoded = self.categorical_encoder_.transform(
-                    {c: np.array([last[c]]) for c in cfg.static_categorical_cols}
-                )
-                static_cat = np.array(
-                    [static_cat_encoded[c][0] for c in cfg.static_categorical_cols],
-                    dtype=np.int64,
-                )
-            else:
-                static_cat = np.zeros(0, dtype=np.int64)
+                last = group.iloc[window_end]
+                if n_static_cat:
+                    static_cat_encoded = self.categorical_encoder_.transform(
+                        {c: np.array([last[c]]) for c in cfg.static_categorical_cols}
+                    )
+                    static_cat = np.array(
+                        [static_cat_encoded[c][0] for c in cfg.static_categorical_cols],
+                        dtype=np.int64,
+                    )
+                else:
+                    static_cat = np.zeros(0, dtype=np.int64)
 
-            if n_static_real:
-                static_real = self.static_real_scaler_.transform(
-                    np.asarray([[last[c] for c in cfg.static_real_cols]], dtype=float)
-                )[0]
-                if cfg.clip_features is not None:
-                    static_real = np.clip(static_real, -cfg.clip_features, cfg.clip_features)
-            else:
-                static_real = np.zeros(0, dtype=np.float64)
+                if n_static_real:
+                    static_real = self.static_real_scaler_.transform(
+                        np.asarray([[last[c] for c in cfg.static_real_cols]], dtype=float)
+                    )[0]
+                    if cfg.clip_features is not None:
+                        static_real = np.clip(static_real, -cfg.clip_features, cfg.clip_features)
+                else:
+                    static_real = np.zeros(0, dtype=np.float64)
 
-            if n_rows < cfg.min_periods_predict:
-                target = float("nan")
-                below_floor += 1
-            else:
-                target = self._aligned_target(group)
+                target = float("nan") if below else self._aligned_target(group, window_end)
 
-            static_cat_rows.append(static_cat)
-            static_real_rows.append(static_real)
-            tv_real_rows.append(tv_real)
-            tv_cat_rows.append(tv_cat)
-            mask_rows.append(mask)
-            target_rows.append(target)
-            entity_rows.append(entity_codes[str(entity_id)])
+                static_cat_rows.append(static_cat)
+                static_real_rows.append(static_real)
+                tv_real_rows.append(tv_real_window)
+                tv_cat_rows.append(tv_cat_window)
+                mask_rows.append(mask)
+                target_rows.append(target)
+                entity_rows.append(entity_codes[str(entity_id)])
 
         if below_floor > 0:
             emit(
                 logger,
-                Event.DATA_DUPLICATE_FLOOR_BREACH_COUNT,
+                Event.DATA_MIN_PERIODS_PREDICT_BREACH,
                 level=logging.WARNING,
                 count=below_floor,
             )
@@ -374,19 +394,22 @@ class TabularToSequence:
         }
 
     def fit_transform(self, X: pd.DataFrame, y: object) -> dict[str, torch.Tensor]:  # noqa: N803
-        """Fit then transform on the same panel."""
+        """Equivalent to fit followed by transform; encoder and scaler statistics are drawn from X."""
         return self.fit(X, y).transform(X)
 
-    def _aligned_target(self, group: pd.DataFrame) -> float:
-        """Target ``prediction_step`` rows after the window end, capped at horizon.
+    def _aligned_target(self, group: pd.DataFrame, window_end: int) -> float:
+        """Target ``prediction_step`` rows after ``window_end``, capped at horizon.
 
-        Looks the label up in the fit-time ``(id, time)`` target map.
-        Returns NaN when the prediction-step row has no mapped label
-        (predict-time future rows, or rows outside the fitted panel).
+        ``window_end`` is the 0-based position of the window's last real
+        row within the entity. The target row is
+        ``min(window_end + prediction_step, n_rows - 1)`` (the cap keeps
+        the window instead of dropping it). Looks the label up in the
+        fit-time ``(id, time)`` target map; returns NaN when the
+        prediction-step row has no mapped label (predict-time future
+        rows, or rows outside the fitted panel).
         """
         cfg = self.config
         n_rows = len(group)
-        window_end = n_rows - 1
         target_pos = min(window_end + cfg.prediction_step, n_rows - 1)
         target_row = group.iloc[target_pos]
         key = (target_row[cfg.id_col], target_row[cfg.time_col])
