@@ -12,13 +12,7 @@ def test_construction_requires_strategy() -> None:
 
 
 def test_valid_construction_uses_documented_defaults() -> None:
-    """Happy path: strategy is required, the rest default per the schema.
-
-    Not in the original manifest's 3-test loss set (all failure paths);
-    added to hold 100% coverage on the validator's pass branch and to
-    satisfy the testing.md per-config happy-path rule, paralleling the
-    default-construction tests on the other three families.
-    """
+    """Happy path: strategy is required, every other field defaults."""
     cfg = LossConfig(strategy="cross_entropy")
     assert cfg.strategy == "cross_entropy"
     assert cfg.focal_gamma == 2.0
@@ -31,6 +25,13 @@ def test_valid_construction_uses_documented_defaults() -> None:
 def test_reserved_keys_collision_raises() -> None:
     with pytest.raises(ValidationError, match=r"focal_gamma"):
         LossConfig(strategy="focal", extra=(("focal_gamma", 2.5),))
+
+
+@pytest.mark.parametrize("strategy", ["mse", "mae", "pinball"])
+def test_empty_reserved_set_strategies_pass(strategy: str) -> None:
+    """Exercises the _RESERVED_BY_LOSS keys whose reserved set is empty."""
+    cfg = LossConfig(strategy=strategy)  # type: ignore[arg-type]
+    assert cfg.strategy == strategy
 
 
 def test_extra_field_rejected() -> None:

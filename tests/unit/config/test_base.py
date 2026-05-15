@@ -1,12 +1,10 @@
 """Tests for the shared training and model configs at architecture A4.
 
-Post-refactor: construction is nested (``loss=LossConfig(...)``,
-``sampler=SamplerConfig(...)``, ``optimizer=OptimizerConfig(...)``)
-rather than flat. The ``_model`` helper takes the F5 display-label
-arguments (``loss_strategy`` / ``imbalance_strategy``) and translates to
-the nested shape so every prior invariant is still pinned with identical
-intent (the display labels are the F5 bridge vocabulary, allowed in
-tests per the requirements F5 bridge table).
+Construction uses the nested family sub-configs
+(``loss=LossConfig(...)``, ``sampler=SamplerConfig(...)``,
+``optimizer=OptimizerConfig(...)``). The ``_model`` helper accepts the
+F5 display-label arguments (``loss_strategy`` / ``imbalance_strategy``)
+and translates them to the nested form.
 """
 
 import json

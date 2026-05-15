@@ -1,11 +1,9 @@
 """Tests for the Tier 4 ``extra`` escape hatch and deprecation-alias helper.
 
-Commit 1 ships ``_extras.py`` only; the family sub-configs
-(``OptimizerConfig`` et al.) land in commit 2. To exercise the full
-pydantic field path (not a bare ``_normalize_extras`` call) without a
-forward dependency, these tests use a local frozen pydantic stub with an
-``extra: ExtraDict`` field. The coverage intent (BeforeValidator +
-frozen-model interaction) is identical to using a real family config.
+The pure-validator and alias-helper tests use a local frozen pydantic
+stub so they stay isolated from any one family config's other fields and
+validators. The round-trip tests that must exercise the full real
+pydantic field path use ``OptimizerConfig``.
 """
 
 import json
@@ -20,6 +18,10 @@ from seq_sklearn.config._extras import (
     ExtraDict,
     extract_deprecated_extras,
 )
+from seq_sklearn.config.loss import LossConfig
+from seq_sklearn.config.optimizer import OptimizerConfig
+from seq_sklearn.config.sampler import SamplerConfig
+from seq_sklearn.config.scheduler import SchedulerConfig
 from seq_sklearn.errors import ConfigError
 
 
@@ -46,7 +48,7 @@ def test_extra_dict_rejects_non_primitive_value() -> None:
 
 
 def test_extra_dict_round_trips_each_primitive_type() -> None:
-    original = _ExtraHolder(
+    original = OptimizerConfig(
         extra={
             "a_str": "x",
             "b_int": 3,
@@ -56,7 +58,7 @@ def test_extra_dict_round_trips_each_primitive_type() -> None:
         }
     )
     payload = json.loads(json.dumps(original.model_dump(mode="json")))
-    restored = _ExtraHolder.model_validate(payload)
+    restored = OptimizerConfig.model_validate(payload)
     got = dict(restored.extra)
     assert got["a_str"] == "x"
     assert type(got["a_str"]) is str
@@ -78,38 +80,30 @@ def test_extra_dict_stored_as_sorted_tuple() -> None:
 
 
 def test_extra_dict_survives_json_roundtrip() -> None:
-    cfg = _ExtraHolder(extra=(("flag", True), ("count", 3)))
+    cfg = OptimizerConfig(extra=(("flag", True), ("count", 3)))
     payload = json.loads(json.dumps(cfg.model_dump(mode="json")))
-    reconstructed = _ExtraHolder.model_validate(payload)
+    reconstructed = OptimizerConfig.model_validate(payload)
     assert cfg == reconstructed
 
 
 def test_extract_deprecated_extras_meta_promoted_keys_exist() -> None:
     """Every registered promotion names a real typed field on its family config.
 
-    The v1 registry is empty, so the field-existence loop is vacuous
-    today; it becomes substantive automatically once a promotion is
-    registered (post commit 2, when the family configs exist). The
-    family-config import is lazy so this stays green at commit 1.
+    The v1 registry is empty, so the field-existence loop is vacuous;
+    it becomes load-bearing automatically once a promotion is registered
+    and catches a maintainer who registers one without adding the typed
+    field.
     """
-    assert set(_PROMOTED_KEYS_BY_FAMILY) == {
-        "optimizer",
-        "scheduler",
-        "loss",
-        "sampler",
+    family_cls = {
+        "optimizer": OptimizerConfig,
+        "scheduler": SchedulerConfig,
+        "loss": LossConfig,
+        "sampler": SamplerConfig,
     }
+    assert set(_PROMOTED_KEYS_BY_FAMILY) == set(family_cls)
     for family, promoted in _PROMOTED_KEYS_BY_FAMILY.items():
         for _extra_key, typed_name in promoted.items():
-            from seq_sklearn import config as _cfg
-
-            family_cls = {
-                "optimizer": getattr(_cfg, "OptimizerConfig", None),
-                "scheduler": getattr(_cfg, "SchedulerConfig", None),
-                "loss": getattr(_cfg, "LossConfig", None),
-                "sampler": getattr(_cfg, "SamplerConfig", None),
-            }[family]
-            assert family_cls is not None
-            assert typed_name in family_cls.model_fields
+            assert typed_name in family_cls[family].model_fields
 
 
 def test_extract_deprecated_extras_both_typed_and_extra_raises_config_error(
@@ -154,9 +148,12 @@ def test_extract_deprecated_extras_mock_promotion_emits_warning(
     cfg = _PromotionStub(extra=(("fake", True),))  # fake_field left at default
     with pytest.warns(DeprecationWarning, match=r"deprecated"):
         result = extract_deprecated_extras(cfg, "optimizer")
-    # The promoted key is consumed from the returned dict; the typed
-    # field is the canonical home going forward.
+    # Current behavior: the promoted key is removed from the returned
+    # dict and (per the documented pre-condition in
+    # extract_deprecated_extras) the supplied value is discarded rather
+    # than written onto the frozen cfg. The frozen cfg keeps its default.
     assert "fake" not in result
+    assert cfg.fake_field is False
 
 
 def test_extra_dict_rejects_non_string_key() -> None:

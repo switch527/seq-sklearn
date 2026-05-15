@@ -133,7 +133,7 @@ def test_unknown_task_loss_pair_raises_helpful_message() -> None:
         check_combo("regression_point", "cross_entropy", "none", "none")
 
 
-# ---- Literal-to-domain invariant (architecture C3)
+# ---- Literal-to-domain invariant
 #
 # Only LossConfig.strategy and SamplerConfig.strategy feed check_combo,
 # so the F5 failure-mode contract depends on their Literals matching the
@@ -142,8 +142,7 @@ def test_unknown_task_loss_pair_raises_helpful_message() -> None:
 # of at BaseModelConfig._check_validity_matrix (F5 ValueError ->
 # ValidationError), silently changing the documented failure mode.
 # OptimizerConfig.name / SchedulerConfig.name do not feed check_combo
-# and have no _domains tuple to drift against, so they are out of scope
-# for this invariant (and _domains.py is unchanged by this refactor).
+# and have no _domains tuple to pair against, so they are out of scope.
 
 
 @pytest.mark.parametrize(

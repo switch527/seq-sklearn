@@ -25,6 +25,14 @@ def test_reserved_keys_collision_raises() -> None:
         SchedulerConfig(name="cosine_with_warmup", extra=(("warmup_steps", 50),))
 
 
+def test_constant_scheduler_construction_succeeds() -> None:
+    """Exercises the _RESERVED_BY_SCHEDULER["constant"] (empty) key and
+    the no-clash pass branch for a non-default scheduler name."""
+    cfg = SchedulerConfig(name="constant")
+    assert cfg.name == "constant"
+    assert cfg.extra == ()
+
+
 def test_extra_field_rejected() -> None:
     with pytest.raises(ValidationError):
         SchedulerConfig(undocumented_field=1)  # type: ignore[call-arg]

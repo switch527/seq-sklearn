@@ -37,7 +37,7 @@ _ALL_ADAPTERS = [
 ]
 
 
-# ---- Carried-over TabularConfigParams behavior (intent unchanged)
+# ---- TabularConfigParams construction, get/set_params, clone, to_pydantic
 
 
 def test_tabular_config_params_default_construction_mirrors_pydantic_defaults() -> None:
@@ -106,7 +106,7 @@ def test_tabular_config_params_set_params_chains_via_clone() -> None:
     assert cloned.lookback == 18
 
 
-# ---- Per-adapter clone independence (manifest tests 1-6)
+# ---- Clone independence: each adapter produces an independent copy
 
 
 def test_optimizer_params_clone_is_independent() -> None:
@@ -154,7 +154,7 @@ def test_tft_advanced_params_clone_is_independent() -> None:
     assert cloned.extra == {"knob": 2}
 
 
-# ---- Keyword-only-init meta-test (manifest test 7)
+# ---- Keyword-only init: no parameter can be bound positionally
 
 
 @pytest.mark.parametrize("adapter_cls", _ALL_ADAPTERS)
@@ -176,7 +176,7 @@ def test_all_adapters_have_keyword_only_init(adapter_cls: type) -> None:
         )
 
 
-# ---- to_pydantic round-trip per new adapter (manifest tests 8-12)
+# ---- to_pydantic produces the matching frozen pydantic config
 
 
 def test_optimizer_params_to_pydantic_produces_correct_config() -> None:

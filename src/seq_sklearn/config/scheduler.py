@@ -1,17 +1,12 @@
-"""Tier 1 LR-scheduler sub-config (per architecture A4 / strategy doc).
+"""Tier 1 LR-scheduler sub-config (per architecture A4, requirements F5).
 
-Schema copied verbatim from the authoritative source at
-``docs/hyperparameter_strategy.md`` Tier 1; field menu and defaults
-trace to requirements F5.
-
-Design note: the strategy doc enumerates ``_RESERVED_BY_OPTIMIZER``
-explicitly but specifies only that scheduler / loss / sampler carry
-"analogous" reserved sets against their own typed fields. The
-per-``name`` reserved sets below are that delegated design decision: each
-entry lists the typed fields the corresponding scheduler branch consumes
-at build time. The ``constant``-rejects-``warmup_steps`` interaction
-(requirements F5 / arch I10) is intentionally NOT enforced here in
-Phase 1; its enforcement layer is deferred to the Phase 4 design pass.
+``_RESERVED_BY_SCHEDULER`` keys each scheduler name to the typed fields
+its build branch consumes; an ``extra`` key colliding with one of those
+is rejected at construction by :meth:`SchedulerConfig._check_extra_not_reserved`.
+The ``constant``-rejects-``warmup_steps`` interaction (requirements F5 /
+arch I10) is a build-layer concern and is not enforced at this config
+layer; a build-time guard rejects that combination when the scheduler
+factory is implemented.
 """
 
 from typing import Literal, Self
@@ -32,7 +27,7 @@ _RESERVED_BY_SCHEDULER: dict[str, frozenset[str]] = {
 
 
 class SchedulerConfig(BaseModel):
-    """LR-scheduler family sub-config."""
+    """Frozen; the mutable sklearn surface is :class:`SchedulerParams`."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 

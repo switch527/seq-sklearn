@@ -28,6 +28,13 @@ def test_sgd_reserved_keys_collision_raises() -> None:
         OptimizerConfig(name="sgd", extra=(("momentum", 0.5),))
 
 
+def test_adam_uses_its_own_reserved_set() -> None:
+    """Exercises the _RESERVED_BY_OPTIMIZER["adam"] dict key (distinct
+    from "adamw"/"sgd" even though the reserved set overlaps)."""
+    with pytest.raises(ValidationError, match=r"lr"):
+        OptimizerConfig(name="adam", extra=(("lr", 0.1),))
+
+
 def test_extra_field_rejected() -> None:
     with pytest.raises(ValidationError):
         OptimizerConfig(undocumented_field=1)  # type: ignore[call-arg]

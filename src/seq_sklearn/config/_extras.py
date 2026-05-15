@@ -89,6 +89,18 @@ def extract_deprecated_extras(
     ``_PROMOTED_KEYS_BY_FAMILY`` and the alias behavior fires
     automatically.
 
+    Known limitation, and a hard pre-condition for registering the
+    first promotion: when a promoted key is supplied via ``extra`` and
+    the typed field is still at its default, this helper drops the key
+    from the returned dict but cannot write the supplied value onto the
+    frozen ``cfg``. The value is therefore discarded rather than routed
+    to the typed field. ``_PROMOTED_KEYS_BY_FAMILY`` is empty, so this
+    branch never executes and the loop body is unreachable today. Before
+    any entry is added, this must be fixed (return a
+    ``cfg.model_copy(update=...)`` alongside the cleaned dict, or have
+    the family factory read the renamed key from the returned dict).
+    ``_PROMOTED_KEYS_BY_FAMILY`` must stay empty until then.
+
     Raises:
         ConfigError: if a promoted key is supplied via both ``extra``
             and its typed field (ambiguous configuration).
@@ -106,16 +118,17 @@ def extract_deprecated_extras(
                 stacklevel=3,
             )
             # Promoted fields must have an explicit default (the registry
-            # meta-test enforces this). The asymmetric check below: if the
-            # typed value differs from its default, the caller set BOTH
-            # the typed field AND the extra key, which is ambiguous. If
-            # the typed value equals its default, the extra value wins
-            # (existing callers see no behavior change).
+            # meta-test enforces this). If the typed value differs from
+            # its default, the caller set BOTH the typed field AND the
+            # extra key, which is ambiguous and rejected. Otherwise the
+            # key is removed from the returned dict (see the pre-condition
+            # in the docstring: the value is currently discarded, not
+            # routed onto the frozen cfg).
             typed_default = type(cfg).model_fields[typed_name].default
             if existing_typed != typed_default:
                 raise ConfigError(
                     f"{extra_key!r} provided via both extra and the typed "
                     f"{typed_name} field; remove one."
                 )
-            extra.pop(extra_key)  # consumed; typed field carries the value
+            extra.pop(extra_key)
     return extra

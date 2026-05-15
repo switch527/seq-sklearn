@@ -254,12 +254,11 @@ class LossParams(BaseEstimator):
     """Mutable mirror of :class:`LossConfig`.
 
     ``LossConfig.strategy`` has no pydantic default (it is task-type
-    dependent and the estimator's Phase 6a ``_build_config`` injects the
-    task-appropriate value via ``_DEFAULT_LOSS_FOR_TASK``). The sklearn
-    adapter surface still needs a well-formed default so ``get_params``
-    / ``clone`` round-trip; ``"cross_entropy"`` is a neutral placeholder
-    that the estimator overrides per task before ``to_pydantic`` becomes
-    authoritative.
+    dependent; the estimator injects the task-appropriate value at build
+    time). The sklearn adapter surface still needs a well-formed default
+    so ``get_params`` / ``clone`` round-trip; ``"cross_entropy"`` is a
+    placeholder the estimator overrides per task before ``to_pydantic``
+    becomes authoritative.
     """
 
     strategy: Literal["cross_entropy", "focal", "mse", "mae", "huber", "pinball"]

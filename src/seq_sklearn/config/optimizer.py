@@ -1,9 +1,9 @@
-"""Tier 1 optimizer sub-config (per architecture A4 / hyperparameter strategy).
+"""Tier 1 optimizer sub-config (per architecture A4, requirements F5).
 
 Owns the optimizer name, its tunable defaults, and the ALPHA-tier
-``extra`` escape hatch. The reserved-keys collision check lives here (the
-config layer) so it surfaces at construction; ``build_optimizer``
-(Phase 4) trusts the validated config and does not re-check.
+``extra`` escape hatch. The reserved-keys collision check lives at this
+config layer so it surfaces at construction; the optimizer factory
+trusts the validated config and does not re-check.
 """
 
 from typing import Literal, Self
@@ -30,7 +30,7 @@ _RESERVED_BY_OPTIMIZER: dict[str, frozenset[str]] = {
 
 
 class OptimizerConfig(BaseModel):
-    """Optimizer family sub-config."""
+    """Frozen; the mutable sklearn surface is :class:`OptimizerParams`."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 

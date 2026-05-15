@@ -1,14 +1,14 @@
-"""Tier 1 loss sub-config (per architecture A4 / strategy doc).
+"""Tier 1 loss sub-config (per architecture A4, requirements F5).
 
-``strategy`` has no default: the legal value depends on ``task_type``,
+``strategy`` has no default: the legal value depends on ``task_type``
 and the F5 validity matrix on ``BaseModelConfig`` gates the
-``(task_type, strategy)`` pair. The estimator's ``_build_config``
-(Phase 6a) injects the task-appropriate default; Phase 1 keeps the field
-required so ``LossConfig()`` raises.
+``(task_type, strategy)`` pair, so ``LossConfig()`` raises until a
+strategy is supplied. The estimator injects the task-appropriate
+default at build time.
 
-The per-``strategy`` reserved set is the delegated design decision noted
-in ``scheduler.py``: each entry lists the typed fields the corresponding
-loss branch consumes at build time.
+``_RESERVED_BY_LOSS`` keys each strategy to the typed fields its loss
+branch consumes; an ``extra`` key colliding with one is rejected at
+construction.
 """
 
 from typing import Literal, Self
@@ -31,7 +31,7 @@ _RESERVED_BY_LOSS: dict[str, frozenset[str]] = {
 
 
 class LossConfig(BaseModel):
-    """Loss family sub-config."""
+    """Frozen; the mutable sklearn surface is :class:`LossParams`."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 

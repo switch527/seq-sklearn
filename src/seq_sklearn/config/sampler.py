@@ -1,8 +1,8 @@
-"""Tier 1 imbalance-sampler sub-config (per architecture A4 / strategy doc).
+"""Tier 1 imbalance-sampler sub-config (per architecture A4, requirements F5).
 
-The per-``strategy`` reserved set is the delegated design decision noted
-in ``scheduler.py``: each entry lists the typed fields the corresponding
-sampler branch consumes at build time.
+``_RESERVED_BY_SAMPLER`` keys each strategy to the typed fields its
+sampler branch consumes; an ``extra`` key colliding with one is
+rejected at construction.
 """
 
 from typing import Literal, Self
@@ -23,7 +23,7 @@ _RESERVED_BY_SAMPLER: dict[str, frozenset[str]] = {
 
 
 class SamplerConfig(BaseModel):
-    """Imbalance-sampler family sub-config."""
+    """Frozen; the mutable sklearn surface is :class:`SamplerParams`."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
