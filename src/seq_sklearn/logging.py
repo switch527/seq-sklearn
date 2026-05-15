@@ -36,6 +36,7 @@ class Event(StrEnum):
     CALIBRATION_SMALL_SET = "calibration.small_set"
     OPTUNA_TRIAL_PRUNED = "optuna.trial_pruned"
     DATA_DUPLICATE_FLOOR_BREACH_COUNT = "data.duplicate_floor_breach_count"
+    DATA_MIN_PERIODS_PREDICT_BREACH = "data.min_periods_predict_breach"
     DATA_UNSEEN_CATEGORIES = "data.unseen_categories"
     HARDWARE_DETECT = "hardware.detect"
 
