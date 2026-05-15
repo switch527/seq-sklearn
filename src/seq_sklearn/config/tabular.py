@@ -1,7 +1,7 @@
 """TabularToSequence pydantic configuration (per architecture A4 / F3).
 
 Frozen model; the mutable :class:`TabularConfigParams` adapter at
-:mod:`seq_sklearn.config._params_adapter` mirrors these fields for the
+:mod:`seq_sklearn.config._adapters` mirrors these fields for the
 sklearn estimator surface.
 """
 
