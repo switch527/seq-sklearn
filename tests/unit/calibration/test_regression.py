@@ -79,6 +79,15 @@ def test_conformal_non_monotone_raises_training_error() -> None:
         ConformalCalibrator(_Q).fit(pred, y)
 
 
+def test_conformal_two_quantile_crossing_raises_training_error() -> None:
+    # Q == 2 with pred[:, 0] > pred[:, 1] every row: pins the
+    # `pred.shape[1] > 1` guard (a `> 2` mutation would skip this).
+    pred = torch.tensor([[0.9, 0.1]], dtype=torch.float64).expand(50, 2)
+    y = torch.zeros(50, dtype=torch.float64)
+    with pytest.raises(TrainingError, match="non-monotone"):
+        ConformalCalibrator((0.25, 0.75)).fit(pred, y)
+
+
 def test_conformal_single_quantile_skips_monotone_check() -> None:
     g = torch.Generator().manual_seed(3)
     pred = torch.randn(50, 1, generator=g, dtype=torch.float64)
@@ -180,7 +189,9 @@ def test_regression_calibrators_preserve_shape(pred_np: np.ndarray) -> None:
     pred = torch.from_numpy(np.sort(pred_np, axis=1))
     g = torch.Generator().manual_seed(9)
     y = pred[:, 1] + 0.2 * torch.randn(pred.shape[0], generator=g, dtype=torch.float64)
-    for cal in (IsotonicQuantileCalibrator(_Q),):
+    # Pre-sorted columns => the F9 crossing guard never fires, so both
+    # regression strategies are exercised (implementation_plan.md:780).
+    for cal in (ConformalCalibrator(_Q), IsotonicQuantileCalibrator(_Q)):
         assert isinstance(cal, _Calibrator)
         cal.fit(pred, y)
         out = cal.transform(pred)

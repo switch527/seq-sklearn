@@ -95,6 +95,18 @@ def test_temperature_large_set_no_small_set_warning(
     assert [r for r in caplog.records if r.event == Event.CALIBRATION_FIT]
 
 
+def test_calibration_small_set_boundary_is_exclusive_at_100(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # cal_size == 100 is NOT < _MIN_RECOMMENDED_CAL_SIZE: no warning.
+    # Pins the off-by-one in `cal_size < 100`.
+    logits, y = _binary_data(100)
+    with caplog.at_level(logging.INFO, logger=_CAL):
+        TemperatureScaling("binary").fit(logits, y)
+    assert not [r for r in caplog.records if r.event == Event.CALIBRATION_SMALL_SET]
+    assert [r for r in caplog.records if r.event == Event.CALIBRATION_FIT]
+
+
 def test_temperature_non_finite_input_raises_training_error() -> None:
     logits, y = _binary_data()
     logits[0] = float("inf")

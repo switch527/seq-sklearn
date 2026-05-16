@@ -32,7 +32,7 @@ from seq_sklearn.errors import NotFittedError, TrainingError
 
 __all__ = ["IsotonicCalibrator", "PlattScaling", "TemperatureScaling"]
 
-logger = logging.getLogger("seq_sklearn.calibration")
+logger = logging.getLogger(__name__)
 
 # LBFGS budget for the scalar/2-param convex fits. Implementation
 # constants (cf. _NAN_ABORT_LIMIT), not user hyperparameters: there is
@@ -61,11 +61,11 @@ class TemperatureScaling:
         self.task = task
         self._temperature: float | None = None
 
-    def fit(self, logits: Tensor, y_true: Tensor) -> None:
+    def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
         log_t = torch.zeros(1, dtype=torch.float64, requires_grad=True)
         opt = torch.optim.LBFGS([log_t], lr=_LBFGS_LR, max_iter=_LBFGS_MAX_ITER)
         if self.task == "binary":
-            x = _as_binary_logits(logits)
+            x = _as_binary_logits(raw_output)
             y = y_true.detach().reshape(-1).to(torch.float64)
 
             def closure() -> Tensor:
@@ -74,7 +74,7 @@ class TemperatureScaling:
                 loss.backward()
                 return loss
         else:
-            x = logits.detach().to(torch.float64)
+            x = raw_output.detach().to(torch.float64)
             y = y_true.detach().reshape(-1).long()
 
             def closure() -> Tensor:
@@ -93,14 +93,14 @@ class TemperatureScaling:
             )
         self._temperature = temperature
         cal_size = int(y_true.reshape(-1).shape[0])
-        pre = expected_calibration_error(_probs(logits, self.task, 1.0), y_true)
-        post = expected_calibration_error(self.transform(logits), y_true)
+        pre = expected_calibration_error(_probs(raw_output, self.task, 1.0), y_true)
+        post = expected_calibration_error(self.transform(raw_output), y_true)
         emit_calibration_fit(logger, "temperature", cal_size, pre_ece=pre, post_ece=post)
 
-    def transform(self, logits: Tensor) -> Tensor:
+    def transform(self, raw_output: Tensor) -> Tensor:
         if self._temperature is None:
             raise NotFittedError("TemperatureScaling.transform before fit")
-        return _probs(logits, self.task, self._temperature)
+        return _probs(raw_output, self.task, self._temperature)
 
     def serialize(self) -> dict[str, object]:
         if self._temperature is None:
@@ -140,8 +140,8 @@ class PlattScaling:
         self._a: float | None = None
         self._b: float | None = None
 
-    def fit(self, logits: Tensor, y_true: Tensor) -> None:
-        x = _as_binary_logits(logits)
+    def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
+        x = _as_binary_logits(raw_output)
         y = y_true.detach().reshape(-1).to(torch.float64)
         a = torch.ones(1, dtype=torch.float64, requires_grad=True)
         b = torch.zeros(1, dtype=torch.float64, requires_grad=True)
@@ -162,13 +162,13 @@ class PlattScaling:
         self._a, self._b = a_val, b_val
         cal_size = int(y.shape[0])
         pre = expected_calibration_error(torch.sigmoid(x), y_true)
-        post = expected_calibration_error(self.transform(logits), y_true)
+        post = expected_calibration_error(self.transform(raw_output), y_true)
         emit_calibration_fit(logger, "platt", cal_size, pre_ece=pre, post_ece=post)
 
-    def transform(self, logits: Tensor) -> Tensor:
+    def transform(self, raw_output: Tensor) -> Tensor:
         if self._a is None or self._b is None:
             raise NotFittedError("PlattScaling.transform before fit")
-        x = _as_binary_logits(logits)
+        x = _as_binary_logits(raw_output)
         return torch.sigmoid(self._a * x + self._b)
 
     def serialize(self) -> dict[str, object]:
@@ -210,31 +210,31 @@ class IsotonicCalibrator:
     def _new_regressor() -> IsotonicRegression:
         return IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
 
-    def fit(self, logits: Tensor, y_true: Tensor) -> None:
+    def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
         y = y_true.detach().reshape(-1).long().numpy()
         if self.task == "binary":
-            p = torch.sigmoid(_as_binary_logits(logits)).numpy()
+            p = torch.sigmoid(_as_binary_logits(raw_output)).numpy()
             model = self._new_regressor().fit(p, (y == 1).astype(np.float64))
             self._models = [model]
         else:
-            probs = torch_functional.softmax(logits.detach().to(torch.float64), dim=1).numpy()
+            probs = torch_functional.softmax(raw_output.detach().to(torch.float64), dim=1).numpy()
             n_classes = probs.shape[1]
             self._models = [
                 self._new_regressor().fit(probs[:, k], (y == k).astype(np.float64))
                 for k in range(n_classes)
             ]
         cal_size = int(y.shape[0])
-        pre = expected_calibration_error(_raw_probs(logits, self.task), y_true)
-        post = expected_calibration_error(self.transform(logits), y_true)
+        pre = expected_calibration_error(_raw_probs(raw_output, self.task), y_true)
+        post = expected_calibration_error(self.transform(raw_output), y_true)
         emit_calibration_fit(logger, "isotonic", cal_size, pre_ece=pre, post_ece=post)
 
-    def transform(self, logits: Tensor) -> Tensor:
+    def transform(self, raw_output: Tensor) -> Tensor:
         if self._models is None:
             raise NotFittedError("IsotonicCalibrator.transform before fit")
         if self.task == "binary":
-            p = torch.sigmoid(_as_binary_logits(logits)).numpy()
+            p = torch.sigmoid(_as_binary_logits(raw_output)).numpy()
             return torch.from_numpy(self._models[0].predict(p)).to(torch.float64)
-        probs = torch_functional.softmax(logits.detach().to(torch.float64), dim=1).numpy()
+        probs = torch_functional.softmax(raw_output.detach().to(torch.float64), dim=1).numpy()
         cols = np.stack(
             [m.predict(probs[:, k]) for k, m in enumerate(self._models)],
             axis=1,

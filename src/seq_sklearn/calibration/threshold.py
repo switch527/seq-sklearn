@@ -24,7 +24,7 @@ from seq_sklearn.errors import NotFittedError
 
 __all__ = ["ThresholdTuner"]
 
-logger = logging.getLogger("seq_sklearn.calibration")
+logger = logging.getLogger(__name__)
 
 _GRID = np.linspace(0.0, 1.0, 101)
 _METRICS = ("f1", "balanced_accuracy", "youden_j")

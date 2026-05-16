@@ -37,7 +37,7 @@ from seq_sklearn.errors import NotFittedError, TrainingError
 
 __all__ = ["ConformalCalibrator", "IsotonicQuantileCalibrator"]
 
-logger = logging.getLogger("seq_sklearn.calibration")
+logger = logging.getLogger(__name__)
 
 
 def _validate_quantiles(quantiles: tuple[float, ...]) -> tuple[float, ...]:
@@ -81,8 +81,8 @@ class ConformalCalibrator:
         self.quantiles = _validate_quantiles(quantiles)
         self._offsets: list[float] | None = None
 
-    def fit(self, logits: Tensor, y_true: Tensor) -> None:
-        pred = _as_pred_matrix(logits, len(self.quantiles), "ConformalCalibrator.fit")
+    def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
+        pred = _as_pred_matrix(raw_output, len(self.quantiles), "ConformalCalibrator.fit")
         if pred.shape[1] > 1 and bool(np.any(np.diff(pred, axis=1) < 0.0)):
             raise TrainingError(
                 "non-monotone quantiles: the regressor's predicted "
@@ -97,14 +97,14 @@ class ConformalCalibrator:
         ]
         self._offsets = offsets
         cal_size = int(y.shape[0])
-        pre = mean_quantile_coverage(logits, y_true)
-        post = mean_quantile_coverage(self.transform(logits), y_true)
+        pre = mean_quantile_coverage(raw_output, y_true)
+        post = mean_quantile_coverage(self.transform(raw_output), y_true)
         emit_calibration_fit(logger, "conformal", cal_size, pre_coverage=pre, post_coverage=post)
 
-    def transform(self, logits: Tensor) -> Tensor:
+    def transform(self, raw_output: Tensor) -> Tensor:
         if self._offsets is None:
             raise NotFittedError("ConformalCalibrator.transform before fit")
-        pred = _as_pred_matrix(logits, len(self.quantiles), "ConformalCalibrator.transform")
+        pred = _as_pred_matrix(raw_output, len(self.quantiles), "ConformalCalibrator.transform")
         return torch.from_numpy(pred + np.asarray(self._offsets)).to(torch.float64)
 
     def serialize(self) -> dict[str, object]:
@@ -140,8 +140,8 @@ class IsotonicQuantileCalibrator:
         self.quantiles = _validate_quantiles(quantiles)
         self._offsets: list[float] | None = None
 
-    def fit(self, logits: Tensor, y_true: Tensor) -> None:
-        pred = _as_pred_matrix(logits, len(self.quantiles), "IsotonicQuantileCalibrator.fit")
+    def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
+        pred = _as_pred_matrix(raw_output, len(self.quantiles), "IsotonicQuantileCalibrator.fit")
         y = y_true.detach().to(torch.float64).reshape(-1, 1).numpy()
         residuals = y - pred  # (N, Q)
         n = residuals.shape[0]
@@ -156,8 +156,8 @@ class IsotonicQuantileCalibrator:
             offsets.append(float(r_sorted[idx]))
         self._offsets = offsets
         cal_size = int(y.shape[0])
-        pre = mean_quantile_coverage(logits, y_true)
-        post = mean_quantile_coverage(self.transform(logits), y_true)
+        pre = mean_quantile_coverage(raw_output, y_true)
+        post = mean_quantile_coverage(self.transform(raw_output), y_true)
         emit_calibration_fit(
             logger,
             "isotonic_quantile",
@@ -166,10 +166,12 @@ class IsotonicQuantileCalibrator:
             post_coverage=post,
         )
 
-    def transform(self, logits: Tensor) -> Tensor:
+    def transform(self, raw_output: Tensor) -> Tensor:
         if self._offsets is None:
             raise NotFittedError("IsotonicQuantileCalibrator.transform before fit")
-        pred = _as_pred_matrix(logits, len(self.quantiles), "IsotonicQuantileCalibrator.transform")
+        pred = _as_pred_matrix(
+            raw_output, len(self.quantiles), "IsotonicQuantileCalibrator.transform"
+        )
         return torch.from_numpy(pred + np.asarray(self._offsets)).to(torch.float64)
 
     def serialize(self) -> dict[str, object]:

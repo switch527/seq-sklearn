@@ -9,9 +9,9 @@ Two semantics are load-bearing and pinned by the Phase 5 deliverable
 tests:
 
 * **What ``transform`` consumes and returns.** ``fit`` / ``transform``
-  take the model's RAW outputs (the protocol names the argument
-  ``logits`` after the classifier case, but a regression calibrator
-  receives the predicted-quantile matrix). ``transform`` returns
+  take the model's RAW outputs in a ``raw_output`` argument: class
+  logits for a classification calibrator, the predicted-quantile matrix
+  for a regression calibrator. ``transform`` returns
   CALIBRATED PROBABILITIES for classification calibrators and
   CALIBRATED QUANTILE VALUES for regression calibrators, never logits.
   The estimator's ``predict_proba`` / ``predict_quantiles`` consumes
@@ -44,17 +44,17 @@ class _Calibrator(Protocol):
     importing every concrete class.
     """
 
-    def fit(self, logits: Tensor, y_true: Tensor) -> None:
+    def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
         """Fit calibrator state on the held-out calibration fold.
 
-        ``logits`` is the model's raw output on the calibration fold
+        ``raw_output`` is the model's raw output on the calibration fold
         (class logits for classification, the predicted-quantile matrix
         for regression); ``y_true`` is the aligned ground truth. Fitting
         mutates the instance in place and returns nothing.
         """
         ...
 
-    def transform(self, logits: Tensor) -> Tensor:
+    def transform(self, raw_output: Tensor) -> Tensor:
         """Map raw model output to calibrated probabilities / quantiles.
 
         Returns calibrated probabilities for classification calibrators

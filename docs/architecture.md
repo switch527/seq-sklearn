@@ -1230,12 +1230,21 @@ the train fold; multiclass uses `CrossEntropyLoss(weight=per_class_weights)`.
 
 ```python
 class _Calibrator(Protocol):
-    def fit(self, logits: Tensor, y_true: Tensor) -> None: ...
-    def transform(self, logits: Tensor) -> Tensor: ...
+    def fit(self, raw_output: Tensor, y_true: Tensor) -> None: ...
+    def transform(self, raw_output: Tensor) -> Tensor: ...
     def serialize(self) -> dict[str, object]: ...
     @classmethod
     def deserialize(cls, blob: dict[str, object]) -> "_Calibrator": ...
 ```
+
+`raw_output` is the model's raw output on the calibration fold: class
+logits for a classification calibrator, the predicted-quantile matrix
+for a regression calibrator (the argument was named `logits` in the
+original draft; renamed in Phase 5 so the regression case is not
+misleading). `transform` returns calibrated probabilities
+(classification) / calibrated quantile values (regression), never
+logits, so the estimator's `predict_proba` / `predict_quantiles`
+consumes the return value directly.
 
 Concrete classes:
 
@@ -1248,12 +1257,16 @@ Concrete classes:
   prediction errors).
 
 Each calibrator is testable standalone with hand-crafted
-`(logits, y_true)` tensors; the architecture does NOT require
+`(raw_output, y_true)` tensors; the architecture does NOT require
 instantiating an Estimator to exercise the calibrator path.
 `ConformalCalibrator.fit` raises
 `TrainingError("non-monotone quantiles: <details>")` if the
-calibrated quantile vector is not monotone increasing across the
-calibration set (F9 contract). The non-monotone unit test feeds a
+regressor's RAW predicted quantiles are not monotone non-decreasing
+across the calibration set (F9 contract). The check runs on the raw
+predictions BEFORE the per-quantile recentring offset, since the
+offset would otherwise mask the crossing (a per-column offset can
+re-center each column independently and hide an undertrained
+regressor's quantile inversion). The non-monotone unit test feeds a
 deliberately non-monotone tensor of shape `(N, len(quantiles))`,
 e.g. `torch.tensor([[0.5, 0.3, 0.7]]).expand(64, 3)`, and asserts
 the `TrainingError` raises with a message matching `r"non-monotone"`.
@@ -2632,6 +2645,36 @@ Phase 4 (post-Gemini re-confirmation swarm):
   asserting the record fires with the full F11:1195 payload through a
   real `pl.Trainer.fit`.
 
+Phase 5 (calibration Claude swarm, round 1):
+
+- **`_Calibrator` argument renamed `logits` -> `raw_output` (arch-opus
+  I1 / arch-sonnet IMPROVEMENT-2 / code-sonnet).** The protocol param
+  was named `logits` after the classifier case, misleading for the
+  regression calibrators that receive a predicted-quantile matrix.
+  Renamed across the A9 protocol, `_protocol.py`, and all five
+  concrete calibrators before Phase 6 imports the protocol; the A9
+  doc block is updated to match.
+- **A9 conformal wording reconciled with the code (arch-opus I2).**
+  A9 said the check is on the "calibrated" vector; the code checks the
+  RAW predicted quantiles before the offset (the offset would mask the
+  crossing). A9 reworded to state the raw-pre-offset check explicitly.
+- **Module loggers use `__name__` (code-sonnet I2 / arch-sonnet
+  NITPICK-1).** `classification.py` / `regression.py` / `threshold.py`
+  switched from the hardcoded `"seq_sklearn.calibration"` to
+  `logging.getLogger(__name__)` per `.claude/rules/python.md`; tests
+  capture on the parent logger and child records propagate.
+- **Empty-fold guard (code-opus I1).** `expected_calibration_error`
+  and `mean_quantile_coverage` raise `ValueError` on a zero-row fold
+  instead of silently returning `0.0` / `nan` (testing.md empty-input
+  rule); two tests added.
+- **Regression hypothesis property now covers `ConformalCalibrator`
+  (code-sonnet I1 / qa-opus I1 / qa-sonnet I1).** The pre-sorted
+  hypothesis input keeps the F9 guard quiet so both regression
+  strategies are exercised per implementation_plan.md:780.
+- **Mutation-pinning tests added (qa-sonnet I2 / qa N3).** A 2-quantile
+  crossing test pins the `pred.shape[1] > 1` guard; a `cal_size == 100`
+  boundary test pins the exclusive `< 100` small-set threshold.
+
 ## Deferred
 
 Round 1 (design-review swarm):
@@ -2970,3 +3013,53 @@ Phase 4 (post-Gemini re-confirmation swarm):
   `optuna.TrialPruned` when an Optuna trial is active is the Phase 8
   `optuna_trial_guard`'s job (A16:1893+), not `training_step`'s.
   `_LightningModule` stays Optuna-agnostic on the abort path by design.
+
+Phase 5 (calibration Claude swarm, round 1):
+
+- **Single-class calibration fold not guarded (code-opus IMPROVEMENT-3).**
+  Deferred to Phase 6: a degenerate single-class calibration fold is the
+  estimator's F2 three-way-split concern, not the calibrator's. No Phase 5
+  spec line mandates a symmetric guard (F9 mandates only the conformal
+  non-monotone check); the Phase 6 estimator owns calibration-fold
+  composition and is where the guard, if any, belongs.
+- **`mean_quantile_coverage` is a single mean scalar (arch-opus I3).**
+  Deferred: requirements.md F11:1201 specifies the `calibration.fit`
+  payload carries a single `pre_coverage` / `post_coverage` scalar. The
+  per-quantile-column comparison is documented as the calibrator's own
+  job and is out of the F11 payload contract; richer per-column
+  diagnostics would exceed the spec'd payload shape.
+- **No explicit shape validator on the classification calibrators
+  (arch-opus I4).** Deferred: classification calibrators disambiguate
+  binary vs multiclass by the `task` constructor argument, not by input
+  shape; the Phase 6 estimator controls the logit tensor it passes. No
+  spec line mandates a regression-style `_as_pred_matrix` guard on the
+  classification side.
+- **NaN/inf-input-raises untested on the non-LBFGS calibrators and the
+  metrics helpers (qa-opus).** Deferred: mirrors the Phase 4a
+  `losses.py` deferral. Runtime NaN ownership is the F2/F3
+  data-contract layer (`DataContractError`) plus F9 in the training
+  loop; calibrators are not input validators, and the calibration fold
+  is model output on validated data. A NaN-input-raises test here would
+  assert a contract the spec assigns elsewhere.
+- **Platt `and`-vs-`or` divergence mutation untested (qa-sonnet I3).**
+  Deferred: the joint LBFGS fit over `(a, b)` diverges both parameters
+  together on a non-finite calibration set; isolating exactly one
+  requires monkeypatching `LBFGS.step` to pin a runtime state the
+  optimizer cannot actually produce. The guard
+  `not (isfinite(a) and isfinite(b))` is correct (raise if either is
+  non-finite); a contrived test would not exercise a reachable path.
+- **Double-JSON-roundtrip idempotency untested (qa-opus).** Deferred:
+  the single round-trip already asserts byte-equality via `torch.equal`
+  after `json.dumps`/`json.loads` (N1 exact-equality), which proves the
+  serialize/deserialize inverse is exact; a second round-trip is
+  implied transitively.
+- **`fit`-side `_as_pred_matrix` shape-mismatch message untested
+  (qa-opus).** Deferred: `fit` and `transform` call the identical
+  `_as_pred_matrix` helper; the transform-side shape-mismatch test
+  already exercises that exact code path and message.
+- **`ThresholdTuner` uses a plain `logger.info`, not a structured
+  `Event` (code-opus I2 / arch).** Deferred: the requirements.md F11
+  table defines no `threshold.*` event; emitting a structured record
+  would invent an unspecified event. The plain INFO line is consistent
+  with that deliberate F11 omission (threshold tuning's durable output
+  is `decision_threshold_` on the estimator, not a log event).

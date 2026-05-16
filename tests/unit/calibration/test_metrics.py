@@ -1,5 +1,6 @@
 """Calibration quality scalars (``calibration.fit`` payload, F11)."""
 
+import pytest
 import torch
 
 from seq_sklearn.calibration._metrics import (
@@ -41,3 +42,13 @@ def test_mean_quantile_coverage_matches_hand_count() -> None:
     y = torch.tensor([0.5, 2.0])
     # row0: 0.5<=0 F, 0.5<=1 T; row1: 2<=0 F, 2<=1 F -> 1/4
     assert mean_quantile_coverage(pred, y) == 0.25
+
+
+def test_ece_empty_fold_raises() -> None:
+    with pytest.raises(ValueError, match="empty calibration fold"):
+        expected_calibration_error(torch.empty(0), torch.empty(0))
+
+
+def test_coverage_empty_fold_raises() -> None:
+    with pytest.raises(ValueError, match="empty calibration fold"):
+        mean_quantile_coverage(torch.empty(0, 3), torch.empty(0))
