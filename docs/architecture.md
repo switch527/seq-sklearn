@@ -724,7 +724,10 @@ def compute_three_way_split(
 
     Returns:
     - (train_idx, val_idx, cal_idx) when calibration_set_provided=False
-      AND cal_fraction > 0. cal_idx is non-empty.
+      AND cal_fraction > 0. cal_idx holds the tail cal_fraction windows
+      per entity; it is empty only in the degenerate case where every
+      entity is too short for round(cal_fraction * m) to reach 1, in
+      which case a UserWarning is emitted.
     - (train_idx, val_idx, np.empty(0, dtype=int)) when
       calibration_set_provided=True AND cal_fraction == 0.0. cal_idx
       is an empty array; the calibration fold is supplied externally

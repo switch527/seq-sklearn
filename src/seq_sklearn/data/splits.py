@@ -43,7 +43,10 @@ def compute_three_way_split(
     Return shapes:
 
     * ``calibration_set_provided=False`` and ``cal_fraction > 0``:
-      ``cal_idx`` is non-empty.
+      ``cal_idx`` holds the tail ``cal_fraction`` windows per entity. It
+      is empty only in the degenerate case where every entity is too
+      short for ``round(cal_fraction * m)`` to reach 1, in which case a
+      :class:`UserWarning` is emitted.
     * ``calibration_set_provided=True`` and ``cal_fraction == 0.0``:
       ``cal_idx`` is ``np.empty(0, dtype=int)``; calibration is supplied
       externally via the ``calibration_set`` keyword to ``fit``.
@@ -106,6 +109,14 @@ def _random_split(
     cal_idx = order[n - n_cal :] if n_cal else np.empty(0, dtype=int)
     val_idx = order[n - n_cal - n_val : n - n_cal] if n_val else np.empty(0, dtype=int)
     train_idx = order[: n - n_cal - n_val]
+    if cal_fraction > 0 and cal_idx.size == 0:
+        warnings.warn(
+            f"cal_fraction={cal_fraction} but the panel is too short for "
+            "round(cal_fraction * n) to reach 1; cal_idx is empty and the "
+            "calibration windows folded back into train",
+            UserWarning,
+            stacklevel=3,
+        )
     return train_idx, val_idx, cal_idx
 
 
@@ -132,4 +143,12 @@ def _time_ordered_split(
     train_idx = np.concatenate(train_parts) if train_parts else np.empty(0, dtype=int)
     val_idx = np.concatenate(val_parts) if val_parts else np.empty(0, dtype=int)
     cal_idx = np.concatenate(cal_parts) if cal_parts else np.empty(0, dtype=int)
+    if cal_fraction > 0 and cal_idx.size == 0:
+        warnings.warn(
+            f"cal_fraction={cal_fraction} but every entity is too short for "
+            "round(cal_fraction * m) to reach 1; cal_idx is empty and the "
+            "calibration windows folded back into train",
+            UserWarning,
+            stacklevel=3,
+        )
     return train_idx, val_idx, cal_idx

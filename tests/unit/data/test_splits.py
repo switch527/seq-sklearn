@@ -228,3 +228,43 @@ def test_random_with_zero_fractions_all_train() -> None:
     assert len(train) == 8
     assert val.size == 0
     assert cal.size == 0
+
+
+def test_all_short_entities_empty_cal_warns_time_ordered() -> None:
+    # Four entities of 1-2 windows each. round(0.1 * m) is 0 for every
+    # entity, so cal_idx is empty even though cal_fraction > 0; the
+    # would-be-cal windows fall back into train (train + val cover all
+    # windows) and a UserWarning flags the silent-empty-cal case.
+    entity_ids = np.array([0, 1, 1, 2, 3, 3])
+    window_time_index = np.array([0, 0, 1, 0, 0, 1])
+    with pytest.warns(UserWarning, match="cal_fraction"):
+        train, val, cal = compute_three_way_split(
+            entity_ids,
+            window_time_index,
+            val_fraction=0.1,
+            cal_fraction=0.1,
+            val_split_strategy="time_ordered",
+            calibration_set_provided=False,
+        )
+    assert cal.size == 0
+    assert len(train) + len(val) == len(entity_ids)
+    assert {int(i) for i in train} | {int(i) for i in val} == set(range(len(entity_ids)))
+
+
+def test_all_short_entities_empty_cal_warns_random() -> None:
+    # n == 1 makes round(0.1 * 1) == 0 so cal_idx is empty under the
+    # random policy as well; a single entity avoids the panel-leakage
+    # warning so the empty-cal UserWarning is the only one raised.
+    entity_ids = np.array([0])
+    window_time_index = np.array([0])
+    with pytest.warns(UserWarning, match="cal_fraction"):
+        train, _val, cal = compute_three_way_split(
+            entity_ids,
+            window_time_index,
+            val_fraction=0.0,
+            cal_fraction=0.1,
+            val_split_strategy="random",
+            calibration_set_provided=False,
+        )
+    assert cal.size == 0
+    assert len(train) == 1
