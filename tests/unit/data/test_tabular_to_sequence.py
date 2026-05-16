@@ -609,3 +609,55 @@ def test_property_tv_real_shape(seed: int) -> None:
         if n_i > 1:
             assert np.all(np.diff(end_t_order) > 0)
         offset += n_i
+
+
+def test_static_unseen_categorical_logs_once_per_entity_not_per_window(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fit_rows = []
+    fit_y = []
+    for t in range(4):
+        fit_rows.append(
+            {
+                "id": 0,
+                "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                "sc": "known",
+                "sr": 1.0,
+                "tr": float(t),
+                "tc": "c0",
+            }
+        )
+        fit_y.append(0)
+    fit_frame = pd.DataFrame(fit_rows)
+    tts = TabularToSequence(_config(), "binary").fit(fit_frame, np.asarray(fit_y))
+
+    # One entity, six rows -> six windows. Its static-categorical value
+    # is unseen at fit time. The static encode is hoisted out of the
+    # window loop, so exactly one DATA_UNSEEN_CATEGORIES record is
+    # emitted for the entity (payload count == 1, the single distinct
+    # unseen static value), not one per window. Moving the static encode
+    # back inside the window loop would emit six records and fail this.
+    n_windows = 6
+    xform_rows = []
+    for t in range(n_windows):
+        xform_rows.append(
+            {
+                "id": 0,
+                "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                "sc": "novel",
+                "sr": 1.0,
+                "tr": float(t),
+                "tc": "c0",
+            }
+        )
+    xform_frame = pd.DataFrame(xform_rows)
+
+    with caplog.at_level(logging.WARNING, logger="seq_sklearn"):
+        out = tts.transform(xform_frame)
+
+    assert out["static_categorical"].shape == (n_windows, 1)
+    unseen = [
+        r for r in caplog.records if getattr(r, "event", None) == Event.DATA_UNSEEN_CATEGORIES
+    ]
+    assert len(unseen) == 1
+    assert unseen[0].payload["count"] == 1
