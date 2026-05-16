@@ -2715,6 +2715,33 @@ Phase 5 (calibration Claude swarm, round 3):
   `TemperatureScaling("multiclass")` and `IsotonicCalibrator("multiclass")`
   added to the empty-fold parametrization for symmetry.
 
+Phase 5 (Gemini cross-family final-pass):
+
+- **Calibrators are now explicitly CPU-internal (gemini CRITICAL x3,
+  one root cause).** Gemini's cross-family pass caught what 4 same-family
+  rounds missed (every test is CPU; N1 emphasises the CPU path): the
+  calibrators are numpy / sklearn bound but did not normalize input
+  device, so a CUDA `raw_output` from a GPU-trained backbone (the
+  A11/N5 hardware path, wired in Phase 6) crashes the fit path, a
+  cross-device op (`x / log_t.exp()` with a CPU `log_t`) for the LBFGS
+  calibrators and `Tensor.numpy()` on CUDA for the
+  isotonic/conformal/threshold paths. Added a `_cpu` boundary
+  normalization at every public `fit` / `transform` across
+  `classification.py`, `regression.py`, `threshold.py`, and the
+  `_metrics` helpers; `transform` returns a CPU `float64` tensor and
+  the A9 `_Calibrator` docstring now pins the CPU-internal +
+  CPU-return contract (Phase 6 owns moving predictions back to its
+  API/device). Pinned by `tests/unit/calibration/test_device.py`
+  (CPU return-tensor + float32-input assertions run everywhere; a
+  `pytest.mark.gpu` CUDA round-trip enforces it where a GPU exists).
+- **Redundant `.astype(float)` dropped from `IsotonicCalibrator.serialize`
+  (gemini IMPROVEMENT, rationale corrected).** Gemini claimed
+  `ndarray.astype(float)` raises in numpy 2.0; that is false (the repo
+  runs numpy 2.4.5 and the byte-equal round-trip tests are green on
+  it). The call was merely redundant: `X_thresholds_` is already a
+  `float64` array and `.tolist()` yields Python floats. Removed for
+  clarity, not for the stated reason.
+
 ## Deferred
 
 Round 1 (design-review swarm):
@@ -3103,3 +3130,31 @@ Phase 5 (calibration Claude swarm, round 1):
   would invent an unspecified event. The plain INFO line is consistent
   with that deliberate F11 omission (threshold tuning's durable output
   is `decision_threshold_` on the estimator, not a log event).
+
+Phase 5 (Gemini cross-family final-pass):
+
+- **`pre_ece` computed in float64, not the model's float32 (gemini
+  IMPROVEMENT I1).** Deferred: `pre_ece` and `post_ece` are both
+  computed in float64, so the pre/post comparison stays
+  apples-to-apples (the only contract on these fields). The
+  float32->float64 activation delta is orders of magnitude below the
+  15-bin ECE resolution, and `pre_ece` is a logged diagnostic, not a
+  contract output. Measuring both legs in one precision is the correct
+  choice; matching the model's float32 only on the pre leg would skew
+  the comparison.
+- **No upper bound on the fitted temperature (gemini IMPROVEMENT
+  I4).** Deferred: a large finite `T` is mathematically valid
+  recalibration, temperature scaling is monotone, preserves
+  argmax/ranking/AUC, and only flattens overconfidence (the intended
+  effect). No spec line mandates an upper bound, and any cutoff
+  (Gemini suggested `1e4`) would reject legitimate strong recalibration
+  of a heavily overconfident network. The existing guard correctly
+  rejects only non-finite / non-positive `T` (the genuine divergence).
+- **Isotonic knot-refit byte-equality "drift" (gemini IMPROVEMENT
+  I3).** Not a finding: refuted. sklearn sets
+  `IsotonicRegression.X_thresholds_[0] == X_min_` and `[-1] == X_max_`,
+  so refitting on the persisted knots reproduces identical clipping
+  bounds. The `torch.equal` JSON round-trip tests
+  (`test_isotonic_*_roundtrip`) pass and the Phase 5 qa swarm
+  experimentally measured max-abs-diff `0.0` across the round trip.
+  No code change.

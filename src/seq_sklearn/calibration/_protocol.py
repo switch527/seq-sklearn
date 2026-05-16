@@ -26,6 +26,14 @@ tests:
   same); ``deserialize`` is its exact inverse. The round-trip test
   asserts equality AFTER ``json.dumps`` / ``json.loads`` so any
   float-precision loss in JSON encoding surfaces.
+* **Calibrators are CPU-internal.** Concrete calibrators are numpy /
+  sklearn bound, so ``fit`` / ``transform`` accept a ``raw_output`` on
+  any device but normalize it to CPU at the boundary, and ``transform``
+  returns a CPU ``float64`` tensor. A GPU-trained backbone yields CUDA
+  calibration-fold outputs; the estimator (Phase 6) owns moving the
+  calibrated result back to whatever device / array form its public
+  API needs (``predict_proba`` returns a numpy array regardless). The
+  calibrator never assumes its input is already on CPU.
 """
 
 from typing import Protocol, runtime_checkable

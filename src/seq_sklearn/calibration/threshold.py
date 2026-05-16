@@ -73,8 +73,11 @@ class ThresholdTuner:
         ``proba`` is ``(N,)`` / ``(N, 1)`` calibrated positive-class
         probability; ``y_true`` is ``(N,)`` binary labels.
         """
-        p = proba.detach().reshape(-1).to(torch.float64).numpy()
-        y = y_true.detach().reshape(-1).long().numpy()
+        # .cpu() before .numpy(): the tuner is sklearn/numpy bound and
+        # CPU-internal, so a CUDA proba / y_true from a GPU estimator
+        # does not crash Tensor.numpy().
+        p = proba.detach().cpu().reshape(-1).to(torch.float64).numpy()
+        y = y_true.detach().cpu().reshape(-1).long().numpy()
         scores = [_score(self.metric, y, (p >= t).astype(int)) for t in _GRID]
         best = int(np.argmax(scores))
         self.threshold_ = float(_GRID[best])

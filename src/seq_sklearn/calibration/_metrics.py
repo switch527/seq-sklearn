@@ -26,8 +26,8 @@ def expected_calibration_error(probs: Tensor, y_true: Tensor) -> float:
     confidence-vs-accuracy gap binned into :data:`_ECE_BINS` equal-width
     bins on ``[0, 1]`` and weighted by bin population.
     """
-    probs = probs.detach().to(torch.float64)
-    y_true = y_true.detach().reshape(-1)
+    probs = probs.detach().cpu().to(torch.float64)
+    y_true = y_true.detach().cpu().reshape(-1)
     if probs.shape[0] == 0:
         raise ValueError("expected_calibration_error: empty calibration fold")
     if probs.ndim == 1:
@@ -61,8 +61,8 @@ def mean_quantile_coverage(pred_quantiles: Tensor, y_true: Tensor) -> float:
     those empirical coverages so a single number can sit in the F11
     payload (the per-column comparison is the calibrator's own job).
     """
-    pred = pred_quantiles.detach().to(torch.float64)
+    pred = pred_quantiles.detach().cpu().to(torch.float64)
     if pred.shape[0] == 0:
         raise ValueError("mean_quantile_coverage: empty calibration fold")
-    y = y_true.detach().reshape(-1, 1).to(torch.float64)
+    y = y_true.detach().cpu().reshape(-1, 1).to(torch.float64)
     return float((y <= pred).to(torch.float64).mean())

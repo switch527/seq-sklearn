@@ -53,8 +53,14 @@ def _validate_quantiles(quantiles: tuple[float, ...]) -> tuple[float, ...]:
 
 
 def _as_pred_matrix(pred_quantiles: Tensor, n_quantiles: int, where: str) -> np.ndarray:
-    """Detach to a float64 ``(N, Q)`` numpy array, validating ``Q``."""
-    arr = pred_quantiles.detach().to(torch.float64).numpy()
+    """Detach to a float64 ``(N, Q)`` numpy array, validating ``Q``.
+
+    ``.cpu()`` before ``.numpy()``: regression calibrators are numpy
+    bound and CPU-internal (cf. ``classification._cpu``); a CUDA
+    predicted-quantile matrix from a GPU backbone would otherwise crash
+    ``Tensor.numpy()``.
+    """
+    arr = pred_quantiles.detach().cpu().to(torch.float64).numpy()
     if arr.ndim != 2 or arr.shape[1] != n_quantiles:
         raise ValueError(
             f"{where}: expected predicted quantiles of shape (N, {n_quantiles}), "
@@ -84,6 +90,7 @@ class ConformalCalibrator:
         self._offsets: list[float] | None = None
 
     def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
+        raw_output, y_true = raw_output.detach().cpu(), y_true.detach().cpu()
         pred = _as_pred_matrix(raw_output, len(self.quantiles), "ConformalCalibrator.fit")
         if pred.shape[1] > 1 and bool(np.any(np.diff(pred, axis=1) < 0.0)):
             raise TrainingError(
@@ -143,6 +150,7 @@ class IsotonicQuantileCalibrator:
         self._offsets: list[float] | None = None
 
     def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
+        raw_output, y_true = raw_output.detach().cpu(), y_true.detach().cpu()
         pred = _as_pred_matrix(raw_output, len(self.quantiles), "IsotonicQuantileCalibrator.fit")
         y = y_true.detach().to(torch.float64).reshape(-1, 1).numpy()
         residuals = y - pred  # (N, Q)

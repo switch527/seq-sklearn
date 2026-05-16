@@ -41,9 +41,24 @@ _LBFGS_MAX_ITER = 100
 _LBFGS_LR = 0.1
 
 
+def _cpu(t: Tensor) -> Tensor:
+    """Detach to CPU.
+
+    Calibrators are numpy / sklearn bound, so they are CPU-internal:
+    every public ``fit`` / ``transform`` normalizes its input device
+    here before any optimizer tensor or ``.numpy()`` call, and returns
+    a CPU tensor. The Phase 6 estimator owns moving predictions back to
+    the device / array form its API needs (``predict_proba`` returns a
+    numpy array anyway). Without this, a CUDA ``raw_output`` from a
+    GPU-trained backbone crashes the fit path (cross-device op or
+    ``Tensor.numpy()`` on CUDA).
+    """
+    return t.detach().cpu()
+
+
 def _as_binary_logits(logits: Tensor) -> Tensor:
     """Flatten ``(N,)`` / ``(N, 1)`` binary logits to ``(N,)`` float64."""
-    return logits.detach().reshape(-1).to(torch.float64)
+    return _cpu(logits).reshape(-1).to(torch.float64)
 
 
 def _require_nonempty(raw_output: Tensor, where: str) -> None:
@@ -74,6 +89,7 @@ class TemperatureScaling:
 
     def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
         _require_nonempty(raw_output, "TemperatureScaling.fit")
+        raw_output, y_true = _cpu(raw_output), _cpu(y_true)
         log_t = torch.zeros(1, dtype=torch.float64, requires_grad=True)
         opt = torch.optim.LBFGS([log_t], lr=_LBFGS_LR, max_iter=_LBFGS_MAX_ITER)
         if self.task == "binary":
@@ -134,7 +150,7 @@ def _probs(logits: Tensor, task: str, temperature: float) -> Tensor:
     """Temperature-scaled activation: sigmoid (binary) / softmax (mc)."""
     if task == "binary":
         return torch.sigmoid(_as_binary_logits(logits) / temperature)
-    scaled = logits.detach().to(torch.float64) / temperature
+    scaled = _cpu(logits).to(torch.float64) / temperature
     return torch_functional.softmax(scaled, dim=1)
 
 
@@ -154,6 +170,7 @@ class PlattScaling:
 
     def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
         _require_nonempty(raw_output, "PlattScaling.fit")
+        raw_output, y_true = _cpu(raw_output), _cpu(y_true)
         x = _as_binary_logits(raw_output)
         y = y_true.detach().reshape(-1).to(torch.float64)
         a = torch.ones(1, dtype=torch.float64, requires_grad=True)
@@ -225,7 +242,8 @@ class IsotonicCalibrator:
 
     def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
         _require_nonempty(raw_output, "IsotonicCalibrator.fit")
-        y = y_true.detach().reshape(-1).long().numpy()
+        raw_output, y_true = _cpu(raw_output), _cpu(y_true)
+        y = y_true.reshape(-1).long().numpy()
         if self.task == "binary":
             p = torch.sigmoid(_as_binary_logits(raw_output)).numpy()
             model = self._new_regressor().fit(p, (y == 1).astype(np.float64))
@@ -245,10 +263,11 @@ class IsotonicCalibrator:
     def transform(self, raw_output: Tensor) -> Tensor:
         if self._models is None:
             raise NotFittedError("IsotonicCalibrator.transform before fit")
+        raw_output = _cpu(raw_output)
         if self.task == "binary":
             p = torch.sigmoid(_as_binary_logits(raw_output)).numpy()
             return torch.from_numpy(self._models[0].predict(p)).to(torch.float64)
-        probs = torch_functional.softmax(raw_output.detach().to(torch.float64), dim=1).numpy()
+        probs = torch_functional.softmax(raw_output.to(torch.float64), dim=1).numpy()
         cols = np.stack(
             [m.predict(probs[:, k]) for k, m in enumerate(self._models)],
             axis=1,
@@ -271,8 +290,8 @@ class IsotonicCalibrator:
             "task": self.task,
             "models": [
                 {
-                    "x": m.X_thresholds_.astype(float).tolist(),
-                    "y": m.y_thresholds_.astype(float).tolist(),
+                    "x": m.X_thresholds_.tolist(),
+                    "y": m.y_thresholds_.tolist(),
                 }
                 for m in self._models
             ],
