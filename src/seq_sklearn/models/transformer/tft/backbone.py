@@ -27,7 +27,7 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from seq_sklearn.config.tft import TFTConfig
 from seq_sklearn.errors import PredictionError
-from seq_sklearn.models._backbone import BaseBackbone
+from seq_sklearn.models._backbone import BackboneOutput, BaseBackbone
 from seq_sklearn.models._layers import make_embedding, make_linear
 from seq_sklearn.models.transformer._backbone import TransformerBackboneOutput
 from seq_sklearn.models.transformer._interpretable_attention import (
@@ -217,14 +217,27 @@ class TFTBackbone(BaseBackbone):
             static_var_selection_weights=static_weights,
         )
 
-    def compute_training_metrics(self, output: TransformerBackboneOutput) -> dict[str, object]:
+    def compute_training_metrics(self, output: BackboneOutput) -> dict[str, object]:
         """Reduce the introspection tensors to F11 entropy payloads (A15).
 
         The ``padding_mask`` is applied to the temporal and attention
         reductions so padded timesteps (max-entropy uniform VSN rows and
         zeroed attention rows by construction) do not bias the metrics.
         The static branch has no time axis and skips the mask.
+
+        The parameter is typed as the base ``BackboneOutput`` so the
+        override stays Liskov-compatible with ``BaseBackbone``; this
+        backbone only ever produces a ``TransformerBackboneOutput``, so
+        a narrower input is a programming error.
+
+        Raises:
+            TypeError: ``output`` is not a ``TransformerBackboneOutput``.
         """
+        if not isinstance(output, TransformerBackboneOutput):
+            raise TypeError(
+                "TFTBackbone.compute_training_metrics requires a "
+                f"TransformerBackboneOutput, got {type(output).__name__}"
+            )
         mask = output.padding_mask  # (B, L); True = padding
         valid = (~mask).float()  # (B, L); 1 at valid timesteps
         valid_count = valid.sum().clamp_min(1.0)  # scalar; >= 1 per the A6 mask invariant

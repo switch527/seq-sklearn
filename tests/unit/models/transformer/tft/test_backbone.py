@@ -9,6 +9,7 @@ import torch.nn as nn
 
 from seq_sklearn.config.tft import TFTConfig
 from seq_sklearn.errors import PredictionError
+from seq_sklearn.models._backbone import BackboneOutput
 from seq_sklearn.models.transformer._backbone import TransformerBackboneOutput
 from seq_sklearn.models.transformer.tft.backbone import TFTBackbone
 
@@ -223,3 +224,15 @@ def test_empty_feature_sides_use_synthetic_variable(
     assert out.var_selection_weights.shape == (2, 5, 1)  # one synthetic tv var
     assert out.static_var_selection_weights.shape == (2, 1)  # one synthetic static var
     assert not torch.isnan(out.representation).any()
+
+
+def test_compute_training_metrics_rejects_base_backbone_output(
+    make_tft_config: Callable[..., TFTConfig],
+) -> None:
+    model = _backbone(make_tft_config)
+    base_only = BackboneOutput(
+        representation=torch.zeros(2, 8),
+        padding_mask=torch.zeros(2, 4, dtype=torch.bool),
+    )
+    with pytest.raises(TypeError, match="TransformerBackboneOutput"):
+        model.compute_training_metrics(base_only)
