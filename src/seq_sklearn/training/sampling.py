@@ -56,7 +56,7 @@ def oversample_minority(
     """
     by_class = _class_indices(labels)
     majority = max(len(idx) for idx in by_class.values())
-    target = int(round(oversample_ratio * majority))
+    target = round(oversample_ratio * majority)
 
     pieces: list[np.ndarray] = []
     for _cls, idx in sorted(by_class.items()):

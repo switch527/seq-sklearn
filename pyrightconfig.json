@@ -23,6 +23,7 @@
     "executionEnvironments": [
         {
             "root": "tests",
+            "extraPaths": ["."],
             "reportArgumentType": "warning",
             "reportAttributeAccessIssue": "warning",
             "reportUnknownMemberType": "none",
