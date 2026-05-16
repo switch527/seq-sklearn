@@ -14,6 +14,7 @@ from pathlib import Path
 
 import lightning.pytorch as pl
 import numpy as np
+import optuna
 import pytest
 import torch
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
@@ -289,8 +290,93 @@ def test_tensor_dict_dataset_indexes_per_row() -> None:
 
 def test_configure_loss_builds_bce_for_binary_cross_entropy() -> None:
     trainer = Trainer(_StubTransformer(), _config(), _model_factory)  # type: ignore[arg-type]
-    loss = trainer._configure_loss()
+    loss = trainer._configure_loss(None)
     assert isinstance(loss, nn.BCEWithLogitsLoss)
+    assert loss.pos_weight is None
+
+
+def test_configure_loss_warns_on_unrecognized_loss_extra(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cfg = _config(loss=LossConfig(strategy="cross_entropy", extra={"unknown_key": "v"}))
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    with caplog.at_level("WARNING", logger="seq_sklearn.training.trainer"):
+        trainer._configure_loss(None)
+    assert any(
+        "unknown_key" in r.message and "loss.extra" in r.message
+        for r in caplog.records
+        if r.levelname == "WARNING"
+    )
+
+
+# --- F5 class_weighted: weights derived from the train fold ------------
+
+
+def test_class_weights_none_for_default_strategy() -> None:
+    trainer = Trainer(_StubTransformer(), _config(), _model_factory)  # type: ignore[arg-type]
+    assert trainer._class_weights(np.arange(4), torch.zeros(4, 1)) is None
+
+
+def test_class_weighted_binary_sets_pos_weight_from_fold() -> None:
+    cfg = _config(sampler=SamplerConfig(strategy="class_weighted"))
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    # Imbalanced fold: 6 negatives, 2 positives -> pos_weight = 6/2 = 3.
+    targets = torch.tensor([0, 0, 0, 0, 0, 0, 1, 1], dtype=torch.float32).reshape(-1, 1)
+    weights = trainer._class_weights(np.arange(8), targets)
+    assert weights is not None
+    assert torch.allclose(weights, torch.tensor([3.0]))
+    loss = trainer._configure_loss(weights)
+    assert isinstance(loss, nn.BCEWithLogitsLoss)
+    assert loss.pos_weight is not None
+    assert torch.allclose(loss.pos_weight, torch.tensor([3.0]))
+
+
+def test_class_weighted_multiclass_sets_non_uniform_weight() -> None:
+    cfg = _config(task_type="multiclass", sampler=SamplerConfig(strategy="class_weighted"))
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    # 3-class imbalanced fold: counts [4, 2, 2] -> inverse-frequency weights.
+    targets = torch.tensor([0, 0, 0, 0, 1, 1, 2, 2], dtype=torch.int64)
+    weights = trainer._class_weights(np.arange(8), targets)
+    assert weights is not None
+    assert weights.numel() == 3
+    assert not torch.allclose(weights, weights[0].expand_as(weights))
+    expected = torch.tensor([8.0 / 4.0, 8.0 / 2.0, 8.0 / 2.0])
+    assert torch.allclose(weights, expected)
+    loss = trainer._configure_loss(weights)
+    assert isinstance(loss, nn.CrossEntropyLoss)
+    assert loss.weight is not None
+    assert torch.allclose(loss.weight, expected)
+
+
+# --- A16: optuna_trial threads from Trainer.fit into _LightningModule --
+
+
+def test_fit_threads_optuna_trial_and_prunes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_cpu(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    trial = optuna.trial.FixedTrial({})
+    monkeypatch.setattr(trial, "should_prune", lambda: True)
+    cfg = _config(scheduler=_constant_scheduler())
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    with pytest.raises(optuna.TrialPruned):
+        trainer.fit(object(), optuna_trial=trial)
+
+
+# --- named-branch pins (qa-sonnet IMPROVEMENT 9) -----------------------
+
+
+def test_train_sampler_none_for_class_weighted_strategy() -> None:
+    cfg = _config(sampler=SamplerConfig(strategy="class_weighted"))
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    assert trainer._train_sampler(np.arange(4), torch.zeros(4, 1)) is None
+
+
+def test_total_steps_none_for_reduce_on_plateau_scheduler() -> None:
+    cfg = _config(scheduler=SchedulerConfig(name="reduce_on_plateau"))
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    assert trainer._total_steps(8) is None
 
 
 # --- end-to-end fit + resume threading ---------------------------------

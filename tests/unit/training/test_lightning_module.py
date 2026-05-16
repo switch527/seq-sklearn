@@ -46,9 +46,28 @@ class _EntropyBackbone(_DummyBackbone):
         }
 
 
+class _TwoEventBackbone(_DummyBackbone):
+    """``_DummyBackbone`` whose ``compute_training_metrics`` emits TWO events.
+
+    Pins the A15 delegation loop against a single-emit / break-after-first
+    mutant: a loop that stops after the first entry would drop the second
+    payload and fail this test.
+    """
+
+    def compute_training_metrics(self, output: BackboneOutput) -> dict[str, object]:
+        del output
+        return {
+            "train.var_selection_entropy": {
+                "static_entropy": 1.0,
+                "temporal_entropy": 0.5,
+            },
+            "train.hidden_norm": {"mean_norm": 2.0},
+        }
+
+
 def make_test_module(
     loss: torch.nn.Module | None = None,
-    optuna_trial: optuna.Trial | None = None,
+    optuna_trial: optuna.trial.BaseTrial | None = None,
     backbone: _DummyBackbone | None = None,
     scheduler_factory: Callable[[Any], dict[str, object]] | None = None,
 ) -> _LightningModule:
@@ -106,6 +125,29 @@ def test_on_train_epoch_end_emits_events_from_compute_metrics(
     assert any(r.event == Event.TRAIN_EPOCH for r in caplog.records)
 
 
+def test_on_train_epoch_end_emits_every_metric_event(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The A15 loop emits one event per returned key, not just the first.
+
+    A two-key ``compute_training_metrics`` payload makes a
+    single-emit / break-after-first mutant fail: BOTH events must be
+    present with their own payloads.
+    """
+    module = make_test_module(backbone=_TwoEventBackbone())
+    module.training_step(_batch(), batch_idx=0)
+
+    with caplog.at_level(logging.INFO, logger="seq_sklearn.training"):
+        module.on_train_epoch_end()
+
+    entropy = [r for r in caplog.records if r.event == Event.TRAIN_VAR_SELECTION_ENTROPY]
+    hidden = [r for r in caplog.records if r.event == Event.TRAIN_HIDDEN_NORM]
+    assert len(entropy) == 1
+    assert len(hidden) == 1
+    assert entropy[0].payload == {"static_entropy": 1.0, "temporal_entropy": 0.5}
+    assert hidden[0].payload == {"mean_norm": 2.0}
+
+
 def test_on_train_epoch_end_deferred_prune_raises_after_logging(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
@@ -145,10 +187,21 @@ def test_training_step_stashes_backbone_output() -> None:
 def test_validation_step_logs_val_metric() -> None:
     module = make_test_module()
     logged: dict[str, object] = {}
-    module.log = lambda name, value, **kw: logged.update({name: value})  # type: ignore[method-assign]
+    captured_kw: dict[str, object] = {}
+
+    def _log(name: str, value: object, **kw: object) -> None:
+        logged[name] = value
+        captured_kw.update(kw)
+
+    module.log = _log  # type: ignore[method-assign]
     loss = module.validation_step(_batch(), batch_idx=0)
     assert "val_loss" in logged
     assert torch.equal(logged["val_loss"], loss)  # type: ignore[arg-type]
+    # on_step=False / on_epoch=True are load-bearing: they populate
+    # trainer.callback_metrics for the prune hook / EarlyStopping /
+    # ModelCheckpoint, which read the epoch-aggregated metric.
+    assert captured_kw["on_step"] is False
+    assert captured_kw["on_epoch"] is True
 
 
 def test_configure_optimizers_without_scheduler() -> None:
