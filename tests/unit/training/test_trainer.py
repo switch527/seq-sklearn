@@ -33,6 +33,7 @@ from seq_sklearn.training.callbacks import (
     GradScalerWatchdog,
     RngStateCallback,
 )
+from seq_sklearn.training.losses import _ScalarOutputLoss
 from seq_sklearn.training.trainer import Trainer, _TensorDictDataset
 from tests._test_models._dummy_modules import _DummyBackbone, _DummyHead
 
@@ -311,8 +312,9 @@ def test_tensor_dict_dataset_indexes_per_row() -> None:
 def test_configure_loss_builds_bce_for_binary_cross_entropy() -> None:
     trainer = Trainer(_StubTransformer(), _config(), _model_factory)  # type: ignore[arg-type]
     loss = trainer._configure_loss(None)
-    assert isinstance(loss, nn.BCEWithLogitsLoss)
-    assert loss.pos_weight is None
+    assert isinstance(loss, _ScalarOutputLoss)  # binary head bridge (Phase 6a)
+    assert isinstance(loss.inner, nn.BCEWithLogitsLoss)
+    assert loss.inner.pos_weight is None
 
 
 def test_configure_loss_warns_on_unrecognized_loss_extra(
@@ -346,9 +348,10 @@ def test_class_weighted_binary_sets_pos_weight_from_fold() -> None:
     assert weights is not None
     assert torch.allclose(weights, torch.tensor([3.0]))
     loss = trainer._configure_loss(weights)
-    assert isinstance(loss, nn.BCEWithLogitsLoss)
-    assert loss.pos_weight is not None
-    assert torch.allclose(loss.pos_weight, torch.tensor([3.0]))
+    assert isinstance(loss, _ScalarOutputLoss)  # binary head bridge (Phase 6a)
+    assert isinstance(loss.inner, nn.BCEWithLogitsLoss)
+    assert loss.inner.pos_weight is not None
+    assert torch.allclose(loss.inner.pos_weight, torch.tensor([3.0]))
 
 
 def test_class_weighted_multiclass_sets_non_uniform_weight() -> None:
