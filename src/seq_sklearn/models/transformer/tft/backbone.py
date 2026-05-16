@@ -205,6 +205,11 @@ class TFTBackbone(BaseBackbone):
             ("time_varying_categorical", self.tv_cat_embeddings),
         ):
             codes = batch[name]
+            # Range only, not column order: ordering correctness between
+            # the cardinality list and the encoder columns is the Phase 4
+            # estimator's responsibility (it owns the fitted
+            # TabularToSequence). This guard just prevents an opaque
+            # embedding-kernel abort for a direct caller.
             for i, module in enumerate(embeddings):
                 emb = cast(nn.Embedding, module)
                 col = codes[..., i]

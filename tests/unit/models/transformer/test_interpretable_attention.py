@@ -1,10 +1,16 @@
 """Tests for shared-V interpretable multi-head attention (A6 / N1)."""
 
+import pytest
 import torch
 
 from seq_sklearn.models.transformer._interpretable_attention import (
     InterpretableMultiHeadAttention,
 )
+
+
+def test_init_rejects_indivisible_hidden_size() -> None:
+    with pytest.raises(ValueError, match="divisible by n_heads"):
+        InterpretableMultiHeadAttention(hidden_size=10, n_heads=4)
 
 
 def _seeded_input(batch: int, seq_len: int, hidden: int, *, seed: int = 0) -> torch.Tensor:

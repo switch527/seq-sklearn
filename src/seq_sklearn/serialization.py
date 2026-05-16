@@ -41,6 +41,9 @@ type Migration = Callable[[WeightDict, StateDict], tuple[WeightDict, StateDict]]
 
 CURRENT_SCHEMA_VERSION: int = 1
 OLDEST_SUPPORTED_SCHEMA_VERSION: int = 1  # v1 supports only itself
+# A compile-time constant invariant. Kept as assert (not if/raise) so it
+# does not introduce an uncoverable always-false branch under the 100%
+# branch-coverage gate; both constants are literals in v1.
 assert OLDEST_SUPPORTED_SCHEMA_VERSION <= CURRENT_SCHEMA_VERSION, (
     "OLDEST_SUPPORTED_SCHEMA_VERSION must be <= CURRENT_SCHEMA_VERSION"
 )

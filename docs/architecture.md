@@ -1746,7 +1746,14 @@ def on_train_epoch_end(self) -> None:
 
 Four named tests pin this contract. They share a common naming
 convention with the plan to avoid the cross-doc drift the prior
-Gemini pass surfaced:
+Gemini pass surfaced. The two `_LightningModule`-side tests
+(`test_on_train_epoch_end_skips_entropy_when_no_output`,
+`test_on_train_epoch_end_emits_events_from_compute_metrics`) land
+with Phase 4: `_LightningModule` does not exist in Phase 3, so they
+are deferred to the Phase 4 training-loop work. The two backbone-side
+tests (`test_compute_training_metrics_ignores_padded_positions`,
+`test_base_backbone_compute_training_metrics_returns_empty`) are
+delivered in Phase 3.
 
 - `test_on_train_epoch_end_skips_entropy_when_no_output` asserts
   `caplog` contains no entropy records when

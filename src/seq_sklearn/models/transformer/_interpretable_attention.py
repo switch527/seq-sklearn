@@ -38,6 +38,10 @@ class InterpretableMultiHeadAttention(nn.Module):
 
     def __init__(self, hidden_size: int, n_heads: int) -> None:
         super().__init__()
+        if hidden_size % n_heads != 0:
+            raise ValueError(
+                f"hidden_size ({hidden_size}) must be divisible by n_heads ({n_heads})"
+            )
         self.hidden_size = hidden_size
         self.n_heads = n_heads
         self.head_dim = hidden_size // n_heads
