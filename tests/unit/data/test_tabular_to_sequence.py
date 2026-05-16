@@ -1,5 +1,6 @@
 """Tests for the panel-to-sequence transformer (A5 / F3)."""
 
+import json
 import logging
 
 import numpy as np
@@ -661,3 +662,70 @@ def test_static_unseen_categorical_logs_once_per_entity_not_per_window(
     ]
     assert len(unseen) == 1
     assert unseen[0].payload["count"] == 1
+
+
+# --- A17 serialize / deserialize (Phase 6a save/load) ----------------
+
+
+def _assert_features_equal(a: dict[str, torch.Tensor], b: dict[str, torch.Tensor]) -> None:
+    # Every key EXCEPT ``target`` must be byte-equal across a save/load
+    # round trip. ``target`` is deliberately excluded: the fit-time
+    # target map is not persisted (a model artifact must not carry
+    # training labels), so a reloaded transformer emits the NaN sentinel
+    # for it. predict never reads ``target``; the feature/mask/id tensors
+    # that prediction consumes are what must round-trip exactly.
+    assert a.keys() == b.keys()
+    for key in a:
+        if key == "target":
+            continue
+        assert torch.equal(a[key], b[key]), key
+
+
+def test_serialize_deserialize_round_trip_byte_equal() -> None:
+    frame, y = _panel()
+    cfg = _config()
+    src = TabularToSequence(cfg, "binary").fit(frame, y)
+    blob = json.loads(json.dumps(src.serialize()))
+    restored = TabularToSequence.deserialize(blob, cfg, "binary")
+    _assert_features_equal(restored.transform(frame), src.transform(frame))
+    assert restored.feature_schema_fingerprint_ == src.feature_schema_fingerprint_
+    assert restored.embedding_dims_ == src.embedding_dims_
+    assert restored.__sklearn_is_fitted__() is True
+
+
+def test_serialize_deserialize_no_real_columns_scalers_unfitted() -> None:
+    # No tv_real / static_real cols: fit leaves both scalers unfitted;
+    # serialize stores None for each and reload mirrors that exactly.
+    frame, y = _panel()
+    cfg = _config(static_real_cols=(), time_varying_real_cols=())
+    src = TabularToSequence(cfg, "binary").fit(frame, y)
+    state = src.serialize()
+    assert state["real_scaler"] is None
+    assert state["static_real_scaler"] is None
+    restored = TabularToSequence.deserialize(json.loads(json.dumps(state)), cfg, "binary")
+    _assert_features_equal(restored.transform(frame), src.transform(frame))
+
+
+def test_serialize_deserialize_hashed_column_round_trip() -> None:
+    frame, y = _panel()
+    cfg = _config(max_categorical_cardinality=1, hash_high_cardinality=True)
+    src = TabularToSequence(cfg, "binary").fit(frame, y)
+    assert src.hashed_columns_
+    blob = json.loads(json.dumps(src.serialize()))
+    restored = TabularToSequence.deserialize(blob, cfg, "binary")
+    assert restored.hashed_columns_ == src.hashed_columns_
+    _assert_features_equal(restored.transform(frame), src.transform(frame))
+
+
+def test_serialize_before_fit_raises() -> None:
+    with pytest.raises(NotFittedError):
+        TabularToSequence(_config(), "binary").serialize()
+
+
+def test_deserialize_tolerates_null_fingerprint() -> None:
+    frame, y = _panel()
+    cfg = _config()
+    blob = TabularToSequence(cfg, "binary").fit(frame, y).serialize()
+    blob["feature_schema_fingerprint"] = None
+    restored = TabularToSequence.deserialize(blob, cfg, "binary")
+    assert restored.feature_schema_fingerprint_ is None
