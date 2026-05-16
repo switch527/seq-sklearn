@@ -37,6 +37,21 @@ logger = logging.getLogger(__name__)
 UNK_TOKEN = "<unk>"
 UNK_INDEX = 0
 
+
+def _jsonable(value: object) -> object:
+    """Coerce a numpy scalar / array to a JSON primitive (A17).
+
+    The save / load path persists scaler statistics in ``state.json``;
+    numpy arrays become nested lists and numpy scalars become Python
+    ``int`` / ``float`` so the JSON encoder never sees a numpy type.
+    """
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
 ScalerStrategy = Literal["standard", "robust", "quantile_uniform", "none"]
 
 
@@ -127,15 +142,48 @@ class CategoricalEncoder:
             out[name] = np.array([vocab[i] for i in idx], dtype=object)
         return out
 
+    def get_fitted_state(self) -> dict[str, object]:
+        """Return the per-column vocabularies as a JSON-primitive dict (A17).
+
+        ``_index_`` is derived from the vocabularies on load, so only the
+        ordered vocabulary lists are persisted.
+        """
+        if not self._fitted:
+            raise NotFittedError("CategoricalEncoder must be fitted before get_fitted_state")
+        return {"vocabularies": {name: list(vocab) for name, vocab in self.vocabularies_.items()}}
+
+    def set_fitted_state(self, state: dict[str, object]) -> "CategoricalEncoder":
+        """Rebuild from :meth:`get_fitted_state` output (vocab + derived index)."""
+        vocabs = state["vocabularies"]
+        if not isinstance(vocabs, dict):
+            raise ValueError("CategoricalEncoder state 'vocabularies' must be a dict")
+        self.vocabularies_ = {name: list(vocab) for name, vocab in vocabs.items()}
+        self._index_ = {
+            name: {level: i for i, level in enumerate(vocab)}
+            for name, vocab in self.vocabularies_.items()
+        }
+        self._fitted = True
+        return self
+
 
 class Scaler(Protocol):
-    """Common scaler surface: fit / transform / inverse_transform on 2-D arrays."""
+    """Common scaler surface: fit / transform / inverse_transform on 2-D arrays.
+
+    ``get_fitted_state`` / ``set_fitted_state`` are the A17 save / load
+    hooks: the fitted statistics round-trip through ``state.json`` as
+    JSON primitives so the scaler is reconstructed without re-fitting
+    and without pickling the backing sklearn object.
+    """
 
     def fit(self, x: np.ndarray) -> "Scaler": ...
 
     def transform(self, x: np.ndarray) -> np.ndarray: ...
 
     def inverse_transform(self, x: np.ndarray) -> np.ndarray: ...
+
+    def get_fitted_state(self) -> dict[str, object]: ...
+
+    def set_fitted_state(self, state: dict[str, object]) -> "Scaler": ...
 
 
 class _SklearnBackedScaler:
@@ -179,9 +227,35 @@ class _SklearnBackedScaler:
             dtype=np.float64,
         )
 
+    # sklearn public fitted attributes that fully determine transform /
+    # inverse_transform. Restored verbatim on load so the scaler is
+    # reconstructed without re-fitting (no data at load time) and
+    # without pickling the sklearn object (A17: no pickle in artifacts).
+    _FITTED_ATTRS: tuple[str, ...] = ()
+
+    def get_fitted_state(self) -> dict[str, object]:
+        if not self._fitted:
+            raise NotFittedError(f"{type(self).__name__} must be fitted before get_fitted_state")
+        return {
+            attr: _jsonable(getattr(self._impl, attr))  # type: ignore[arg-type]
+            for attr in self._FITTED_ATTRS
+        }
+
+    def set_fitted_state(self, state: dict[str, object]) -> "Scaler":
+        impl = self._make()
+        for attr in self._FITTED_ATTRS:
+            value = state[attr]
+            restored = np.asarray(value, dtype=np.float64) if isinstance(value, list) else value
+            setattr(impl, attr, restored)
+        self._impl = impl
+        self._fitted = True
+        return self
+
 
 class StandardScalerWrapper(_SklearnBackedScaler):
     """Zero-mean unit-variance scaling backed by sklearn ``StandardScaler``."""
+
+    _FITTED_ATTRS = ("mean_", "var_", "scale_", "n_samples_seen_", "n_features_in_")
 
     def _make(self) -> object:
         return StandardScaler()
@@ -190,12 +264,16 @@ class StandardScalerWrapper(_SklearnBackedScaler):
 class RobustScalerWrapper(_SklearnBackedScaler):
     """Median / IQR scaling backed by sklearn ``RobustScaler``."""
 
+    _FITTED_ATTRS = ("center_", "scale_", "n_features_in_")
+
     def _make(self) -> object:
         return RobustScaler()
 
 
 class QuantileUniformScaler(_SklearnBackedScaler):
     """Rank-to-uniform scaling backed by sklearn ``QuantileTransformer``."""
+
+    _FITTED_ATTRS = ("n_quantiles_", "quantiles_", "references_", "n_features_in_")
 
     def _make(self) -> object:
         return QuantileTransformer(output_distribution="uniform")
@@ -227,6 +305,15 @@ class IdentityScaler:
         if not self._fitted:
             raise NotFittedError("IdentityScaler must be fitted before inverse_transform")
         return np.asarray(x, dtype=np.float64)
+
+    def get_fitted_state(self) -> dict[str, object]:
+        if not self._fitted:
+            raise NotFittedError("IdentityScaler must be fitted before get_fitted_state")
+        return {}
+
+    def set_fitted_state(self, state: dict[str, object]) -> "Scaler":  # noqa: ARG002
+        self._fitted = True
+        return self
 
 
 def make_scaler(strategy: ScalerStrategy) -> Scaler:
