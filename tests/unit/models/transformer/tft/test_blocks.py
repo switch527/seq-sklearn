@@ -90,7 +90,14 @@ def test_vsn_mask_correctness(make_tft_config: Callable[..., TFTConfig]) -> None
             sel_unpadded, _ = vsn(entity, context, unpadded_mask)
             sel_padded, _ = vsn(padded, context, pad_mask)
         valid_slice = sel_padded[:, total_len - valid_len :, :]
-        assert torch.equal(valid_slice, sel_unpadded)
+        # The N1 property is non-leakage of padded positions into valid
+        # outputs. The VSN flatten step is a single Linear over the
+        # (B * L, n_vars * hidden) matrix; PyTorch CPU deterministic mode
+        # pins same-shape reproducibility, not cross-shape (L = 4 vs
+        # L = 7) GEMM tiling, so bitwise torch.equal is unachievable here.
+        # A tight allclose verifies the masking property without a false
+        # negative from low-order GEMM-tiling bits.
+        assert torch.allclose(valid_slice, sel_unpadded, atol=1e-6, rtol=0.0)
     finally:
         torch.use_deterministic_algorithms(False)
 
