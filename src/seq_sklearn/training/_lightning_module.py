@@ -146,9 +146,18 @@ class _LightningModule(pl.LightningModule):
         """Emit ``train.grad_norm`` (F11) before each optimizer step.
 
         DEBUG, every step, payload ``step`` / ``grad_norm`` / ``lr``. The
-        2-norm is over the post-backward gradients; a NaN/inf step never
-        reaches here because :meth:`training_step` returned ``None``.
+        2-norm is over the post-backward gradients. Lightning fires this
+        hook unconditionally, including on a step where
+        :meth:`training_step` returned ``None`` (the F9 non-finite skip):
+        the hook is not gated on a finite loss, only backward and
+        ``optimizer.step()`` are. On a skipped step no gradient was
+        computed, so emitting here would record a spurious
+        ``train.grad_norm=0.0``; the ``_consecutive_nan`` guard
+        suppresses that. A finite step always has ``_consecutive_nan == 0``
+        (reset in :meth:`training_step`) and emits normally.
         """
+        if self._consecutive_nan > 0:
+            return
         grads = [p.grad.detach().norm(2) for p in self.parameters() if p.grad is not None]
         grad_norm = float(torch.norm(torch.stack(grads), 2)) if grads else 0.0
         emit(

@@ -248,6 +248,21 @@ def test_on_before_optimizer_step_emits_grad_norm(
     assert rec[0].payload["grad_norm"] > 0.0
 
 
+def test_on_before_optimizer_step_silent_after_skipped_step(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # F9/F11: Lightning fires on_before_optimizer_step unconditionally,
+    # including after a non-finite training_step that returned None. No
+    # gradient was computed on that step, so no spurious train.grad_norm
+    # must be emitted (it would record grad_norm=0.0).
+    module = make_test_module(loss=_ConstLoss(float("nan")))
+    opt = torch.optim.SGD(module.parameters(), lr=0.05)
+    with caplog.at_level(logging.DEBUG, logger="seq_sklearn.training"):
+        assert module.training_step(_batch(), batch_idx=0) is None
+        module.on_before_optimizer_step(opt)
+    assert not [r for r in caplog.records if r.event == Event.TRAIN_GRAD_NORM]
+
+
 def test_on_train_epoch_end_train_epoch_payload_has_f11_keys(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

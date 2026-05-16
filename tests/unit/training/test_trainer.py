@@ -9,6 +9,7 @@ F5 DataLoader defaults, the A20-item-6 sampler dispatch, the A20-item-1
 ``ckpt_path`` threading with :class:`RngStateCallback` restore on resume.
 """
 
+import logging
 import random
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from seq_sklearn.config.sampler import SamplerConfig
 from seq_sklearn.config.scheduler import SchedulerConfig
 from seq_sklearn.errors import ConfigError
 from seq_sklearn.hardware import HardwareTier
+from seq_sklearn.logging import Event
 from seq_sklearn.training.callbacks import (
     EventEmitter,
     GradScalerWatchdog,
@@ -525,6 +527,24 @@ def test_fit_runs_one_epoch_and_returns_module(
     trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
     module = trainer.fit(object())
     assert module._last_train_output is not None
+
+
+def test_fit_emits_train_epoch_with_f11_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # End-to-end (real pl.Trainer.fit, not a hand-driven hook): the F11
+    # train.epoch INFO record fires on the epoch boundary with the full
+    # requirements.md:1195 payload. Closes the unit-test gap where
+    # on_train_epoch_end was only exercised in isolation.
+    _force_cpu(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    cfg = _config(scheduler=_constant_scheduler())
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    with caplog.at_level(logging.INFO, logger="seq_sklearn.training"):
+        trainer.fit(object())
+    epoch_rec = [r for r in caplog.records if getattr(r, "event", None) == Event.TRAIN_EPOCH]
+    assert len(epoch_rec) >= 1
+    assert set(epoch_rec[0].payload) == {"epoch", "train_loss", "val_loss", "val_metric"}
 
 
 def test_fit_passes_train_idx_not_full_panel_to_class_weights(

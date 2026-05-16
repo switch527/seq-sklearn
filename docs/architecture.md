@@ -2612,6 +2612,26 @@ Phase 4 (Gemini final-pass):
   would collapse it. Left as-is: two explicit branches read clearer
   than an `or`-defaulted sampler and the duplication is two lines.
 
+Phase 4 (post-Gemini re-confirmation swarm):
+
+- **`on_before_optimizer_step` no longer emits a spurious
+  `train.grad_norm` on a skipped step (code-opus / code-sonnet
+  IMPROVEMENT).** Both code reviewers verified against Lightning 2.6.1
+  source that the hook fires unconditionally, including after a
+  non-finite `training_step` returned `None` (only backward +
+  `optimizer.step()` are gated, not the hook). The old docstring's "a
+  NaN/inf step never reaches here" was false, and a skipped step
+  recorded `train.grad_norm=0.0` (no gradient was computed). Added a
+  `_consecutive_nan > 0` early-return guard (a finite step always has
+  `_consecutive_nan == 0`, reset in `training_step`) and corrected the
+  docstring; pinned with
+  `test_on_before_optimizer_step_silent_after_skipped_step`.
+- **End-to-end `train.epoch` assertion added (code-opus I2).** F11
+  `train.epoch` was only exercised through a hand-driven
+  `on_train_epoch_end`; added `test_fit_emits_train_epoch_with_f11_payload`
+  asserting the record fires with the full F11:1195 payload through a
+  real `pl.Trainer.fit`.
+
 ## Deferred
 
 Round 1 (design-review swarm):
@@ -2923,3 +2943,30 @@ Phase 4a (training Claude swarm):
   modules in `losses.py` are deliberately not input validators under
   the F5 design, so a NaN-input-raises test there would assert a
   contract the spec assigns elsewhere.
+
+Phase 4 (post-Gemini re-confirmation swarm):
+
+- **`train.epoch` suppressed on an all-non-finite epoch (arch-opus
+  IMP-1).** Deferred: correct as designed. When every step of an epoch
+  is non-finite, `_last_train_output is None`, so `on_train_epoch_end`
+  emits no `train.epoch`. F11:1195 specifies `train.epoch` as an
+  end-of-epoch summary of a completed training pass; an all-skipped
+  epoch had no pass, and `train.nan_step_skipped` (WARNING, every step)
+  plus the 3-consecutive `TrainingError` already make the condition
+  observable. Emitting `train.epoch` with four `None` payload fields
+  would be a fabricated summary. Revisit only if an operator metric
+  explicitly needs a per-epoch skipped-only marker.
+- **F11 payload-shape mismatches on `train.mixed_precision_diverged`,
+  `optuna.trial_pruned`, and the `train.var_selection_entropy` epoch
+  key (pre-existing).** Deferred to Phase 9: these are governed by the
+  requirements.md F11 event-payload table and are not introduced by the
+  Phase 4 work (they predate it on the v1 -> v3 logging surface). The
+  Phase 9 F11-table conformance test owns a single systematic
+  pass over every `Event` payload against the spec table; piecemeal
+  fixes here would duplicate that effort and risk drift.
+- **F9 Optuna path raises `optuna.TrialPruned`, not `TrainingError`
+  (code-sonnet question).** Not a finding: correct per A16. The
+  3-consecutive-non-finite abort raises `TrainingError`; translation to
+  `optuna.TrialPruned` when an Optuna trial is active is the Phase 8
+  `optuna_trial_guard`'s job (A16:1893+), not `training_step`'s.
+  `_LightningModule` stays Optuna-agnostic on the abort path by design.
