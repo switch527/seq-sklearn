@@ -46,6 +46,17 @@ def _as_binary_logits(logits: Tensor) -> Tensor:
     return logits.detach().reshape(-1).to(torch.float64)
 
 
+def _require_nonempty(raw_output: Tensor, where: str) -> None:
+    """Reject a zero-row calibration fold at the ``fit`` boundary.
+
+    Raised before any optimizer step or state mutation so a degenerate
+    fold fails loud with a ``ValueError`` and never leaves a
+    partially-fitted calibrator.
+    """
+    if raw_output.shape[0] == 0:
+        raise ValueError(f"{where}: calibration fold is empty (N=0)")
+
+
 class TemperatureScaling:
     """Single-scalar temperature on the calibration-set NLL (A9).
 
@@ -62,6 +73,7 @@ class TemperatureScaling:
         self._temperature: float | None = None
 
     def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
+        _require_nonempty(raw_output, "TemperatureScaling.fit")
         log_t = torch.zeros(1, dtype=torch.float64, requires_grad=True)
         opt = torch.optim.LBFGS([log_t], lr=_LBFGS_LR, max_iter=_LBFGS_MAX_ITER)
         if self.task == "binary":
@@ -141,6 +153,7 @@ class PlattScaling:
         self._b: float | None = None
 
     def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
+        _require_nonempty(raw_output, "PlattScaling.fit")
         x = _as_binary_logits(raw_output)
         y = y_true.detach().reshape(-1).to(torch.float64)
         a = torch.ones(1, dtype=torch.float64, requires_grad=True)
@@ -211,6 +224,7 @@ class IsotonicCalibrator:
         return IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
 
     def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
+        _require_nonempty(raw_output, "IsotonicCalibrator.fit")
         y = y_true.detach().reshape(-1).long().numpy()
         if self.task == "binary":
             p = torch.sigmoid(_as_binary_logits(raw_output)).numpy()

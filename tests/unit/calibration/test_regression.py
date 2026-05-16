@@ -112,6 +112,34 @@ def test_conformal_transform_shape_mismatch_raises(bad: torch.Tensor) -> None:
         cal.transform(bad)
 
 
+@pytest.mark.parametrize(
+    ("cal", "where"),
+    [
+        (ConformalCalibrator(_Q), "ConformalCalibrator.fit"),
+        (IsotonicQuantileCalibrator(_Q), "IsotonicQuantileCalibrator.fit"),
+    ],
+)
+def test_empty_fold_raises_valueerror_not_indexerror(
+    cal: ConformalCalibrator | IsotonicQuantileCalibrator, where: str
+) -> None:
+    # _as_pred_matrix guards the empty fold at the fit boundary: a
+    # ValueError, not a leaked numpy IndexError, and no partial state.
+    with pytest.raises(ValueError, match=rf"{where}: calibration fold is empty"):
+        cal.fit(torch.empty(0, 3, dtype=torch.float64), torch.empty(0))
+    with pytest.raises(NotFittedError):
+        cal.transform(torch.zeros(4, 3, dtype=torch.float64))
+
+
+def test_conformal_equal_adjacent_quantiles_pass_monotone_check() -> None:
+    # Flat adjacent quantiles (q0 == q1) are non-decreasing, NOT a
+    # crossing: pins `np.diff(...) < 0.0` against a `<= 0.0` mutation.
+    pred = torch.tensor([[0.3, 0.3, 0.9]], dtype=torch.float64).expand(40, 3)
+    y = torch.zeros(40, dtype=torch.float64)
+    cal = ConformalCalibrator(_Q)
+    cal.fit(pred, y)
+    assert cal.transform(pred).shape == (40, 3)
+
+
 def test_conformal_before_fit_errors() -> None:
     cal = ConformalCalibrator(_Q)
     with pytest.raises(NotFittedError):

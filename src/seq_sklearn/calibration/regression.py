@@ -60,6 +60,8 @@ def _as_pred_matrix(pred_quantiles: Tensor, n_quantiles: int, where: str) -> np.
             f"{where}: expected predicted quantiles of shape (N, {n_quantiles}), "
             f"got {tuple(arr.shape)}"
         )
+    if arr.shape[0] == 0:
+        raise ValueError(f"{where}: calibration fold is empty (N=0)")
     return arr
 
 

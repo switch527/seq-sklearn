@@ -1,7 +1,7 @@
 """Classification calibrators (A9 / F5 / N1).
 
 Each calibrator is exercised standalone with hand-crafted
-``(logits, y_true)`` tensors (no estimator, per A9). Coverage includes
+``(raw_output, y_true)`` tensors (no estimator, per A9). Coverage includes
 the JSON-roundtripped serialize / deserialize byte-equality (N1), the
 F11 ``calibration.fit`` / ``calibration.small_set`` emission, the
 pre-fit error paths, and a hypothesis shape/finiteness property.
@@ -262,3 +262,26 @@ def test_binary_calibrators_preserve_shape_and_finiteness(logits_np: np.ndarray)
         out = cal.transform(logits)
         assert out.shape == (logits.shape[0],)
         assert torch.isfinite(out).all()
+
+
+# --- empty-fold boundary (no partial state) ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("cal", "where"),
+    [
+        (TemperatureScaling("binary"), "TemperatureScaling.fit"),
+        (PlattScaling(), "PlattScaling.fit"),
+        (IsotonicCalibrator("binary"), "IsotonicCalibrator.fit"),
+    ],
+)
+def test_empty_fold_raises_valueerror_and_leaves_calibrator_unfitted(
+    cal: _Calibrator, where: str
+) -> None:
+    # The guard fires at the fit boundary, before any optimizer step or
+    # state mutation: a degenerate fold raises ValueError (not a leaked
+    # numpy/torch error) and the instance stays unfitted.
+    with pytest.raises(ValueError, match=rf"{where}: calibration fold is empty"):
+        cal.fit(torch.empty(0), torch.empty(0))
+    with pytest.raises(NotFittedError):
+        cal.transform(torch.zeros(4))

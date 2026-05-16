@@ -2675,6 +2675,28 @@ Phase 5 (calibration Claude swarm, round 1):
   crossing test pins the `pred.shape[1] > 1` guard; a `cal_size == 100`
   boundary test pins the exclusive `< 100` small-set threshold.
 
+Phase 5 (calibration Claude swarm, round 2):
+
+- **Empty-fold guarded at the `fit` boundary, no partial state
+  (arch-opus IMPROVEMENT / arch-sonnet IMPROVEMENT-1).** Round 1 added
+  empty-fold `ValueError`s in `_metrics`, but those fire only after
+  `fit` has run the optimizer and set `self._*`, leaving a
+  partially-fitted instance after `fit` raised, and `ConformalCalibrator`
+  raised a leaked numpy `IndexError` before reaching `_metrics`. Added
+  a `_require_nonempty` guard at the top of every classification `fit`
+  and an `arr.shape[0] == 0` guard in regression's `_as_pred_matrix`
+  (its first call in `fit`/`transform`), so a zero-row fold raises a
+  boundary `ValueError` (python.md "raise `ValueError` for bad data")
+  before any state mutation. Tests pin the raise AND that the
+  calibrator stays unfitted (`transform` -> `NotFittedError`) for all
+  five calibrators.
+- **Stale `(logits, y_true)` test docstring fixed (style-opus
+  NITPICK).** `test_classification.py` module docstring now reads
+  `(raw_output, y_true)` to match the round-1 rename.
+- **Flat-adjacent-quantile test added (qa NITPICK).** Pins
+  `np.diff(...) < 0.0` (ties are non-decreasing, not a crossing)
+  against a `<= 0.0` mutation, per the F9 "non-decreasing" reading.
+
 ## Deferred
 
 Round 1 (design-review swarm):
