@@ -47,9 +47,7 @@ class _PooledLinearBackbone(BaseBackbone):
         valid = (~mask).to(tv_real.dtype).unsqueeze(-1)  # (B, L, 1)
         denom = valid.sum(dim=1).clamp_min(1.0)  # (B, 1)
         tv_mean = (tv_real * valid).sum(dim=1) / denom  # (B, n_tr)
-        const = torch.ones(
-            static_real.shape[0], 1, dtype=tv_real.dtype, device=tv_real.device
-        )
+        const = torch.ones(static_real.shape[0], 1, dtype=tv_real.dtype, device=tv_real.device)
         feats = torch.cat([static_real.to(tv_real.dtype), tv_mean, const], dim=1)
         representation = self.proj(feats)  # (B, in_dim) -> (B, hidden)
         return BackboneOutput(representation=representation, padding_mask=mask)

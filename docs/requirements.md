@@ -393,12 +393,15 @@ and mutate the returned `sklearn.utils.Tags` dataclass.
 
 The v1 tag block reads roughly:
 
+sklearn 1.6+ `InputTags` has NO `dataframe` field (the original draft
+below assumed one); the panel-DataFrame contract is expressed via the
+real fields (Phase 6a Addressed reconciliation):
+
 ```python
 def __sklearn_tags__(self) -> Tags:
     tags = super().__sklearn_tags__()
-    tags.input_tags.dataframe = True       # accepts pandas DataFrame
-    tags.input_tags.two_d_array = False    # NOT a numpy-array estimator
-    tags.input_tags.allow_nan = False
+    tags.input_tags.two_d_array = False    # NOT a plain numpy-array estimator
+    tags.input_tags.allow_nan = False      # F2 no-NaN contract
     tags.target_tags.required = True
     tags.requires_fit = True
     tags.non_deterministic = False         # CPU FP32; flipped True on mixed precision (N5)

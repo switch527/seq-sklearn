@@ -110,6 +110,13 @@ def test_build_config_wraps_validation_error_as_config_error() -> None:
         est._build_config()
 
 
+def test_window_time_index_empty_returns_empty() -> None:
+    from seq_sklearn.models._base import _window_time_index
+
+    out = _window_time_index(np.empty(0, dtype=int))
+    assert out.shape == (0,)
+
+
 def test_calibration_set_with_positive_cal_fraction_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

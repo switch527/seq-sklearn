@@ -268,6 +268,14 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
                 "three-way split carve the calibration fold (F2)"
             )
         config = self._build_config()
+        # Seed before any randomness (backbone weight init in
+        # model_factory, the SubsetRandomSampler in Trainer.fit) so two
+        # same-seed fits in one process are bit-identical (N1). The N4
+        # deterministic-algorithm gate is the Trainer's job (it fires on
+        # precision='32-true' + a set seed); the estimator owns only the
+        # seed thread (A7 / F5).
+        torch.manual_seed(self.seed)
+        np.random.seed(self.seed)
         tts_config = self.tabular_config.to_pydantic()
         transformer = TabularToSequence(tts_config, self.task_type)  # type: ignore[arg-type]
         transformer.fit(X, y)
@@ -424,6 +432,15 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         BaseEstimator.__init__(obj)
         obj.task_type = cast("str", state["task_type"])
         obj.calibration_strategy = cast("str", state["calibration_strategy"])
+        # Restore the hyperparameter attributes the prediction path and
+        # the family head-sizing (`_build_backbone_head`) read; the
+        # frozen config is the source of truth (no adapters on a loaded
+        # instance).
+        obj.quantiles = config.quantiles
+        obj.threshold_tuning = config.threshold_tuning
+        obj.threshold_metric = config.threshold_metric
+        obj.precision = config.precision
+        obj.seed = config.seed
         obj.config_ = config
         obj.feature_names_in_ = np.asarray(state["feature_names_in_"], dtype=object)
         obj.n_features_in_ = len(obj.feature_names_in_)

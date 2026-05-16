@@ -341,6 +341,12 @@ estimator. The canonical pattern derived for seq-sklearn:
            hidden_size: int = 128,
            # ... TFTConfig flat fields (model-shape only) mirrored
        ) -> None:
+           # NOTE (Phase 6a Addressed): the sklearn.base.clone(...) calls
+           # below are SUPERSEDED. They break sklearn.base.clone (which
+           # rejects a constructor that modifies a param and already
+           # deep-clones nested params). __init__ stores params verbatim
+           # with the None-default-instance idiom; see the Phase 6a
+           # ledger entry.
            self.task_type = task_type
            self.tabular_config = (
                sklearn.base.clone(tabular_config)
@@ -2768,6 +2774,59 @@ Phase 5 (Gemini-fix re-establishment swarm, round 5):
   it). The call was merely redundant: `X_thresholds_` is already a
   `float64` array and `.tolist()` yields Python floats. Removed for
   clarity, not for the stated reason.
+
+Phase 6a (estimator-shell implementation):
+
+- **A17 needs encoder/scaler + TabularToSequence fitted-state
+  serialization (cross-phase, user-approved).** The save/load layer
+  requires the fitted transformer in `state.json`. Added
+  `get_fitted_state` / `set_fitted_state` to `CategoricalEncoder` and
+  the scalers (the `encoders.py` docstring already promised this
+  contract) and `serialize` / `deserialize` to `TabularToSequence`.
+  Deliberate Phase 2 touch reviewed by the 6a swarm; A5 / A17 updated
+  to name `tabular_to_sequence_state` as the transformer's
+  `serialize()` JSON dict. The fit-time `(id, time)` target map is NOT
+  persisted (a model artifact must not carry training labels;
+  `_aligned_target` already NaN-falls-back for unmapped rows, so
+  predict on a reloaded model is unaffected).
+- **A4 "clone each adapter inside `__init__`" reconciled with
+  `sklearn.base.clone`.** The A4 step-3 draft (clone adapters in
+  `__init__`) is incompatible with sklearn: `clone` re-checks param
+  identity and rejects any constructor that "modifies a parameter",
+  AND `clone` already deep-clones every nested param before
+  re-construction, so the in-`__init__` clone is both breaking and
+  redundant. `__init__` now stores params verbatim with the
+  None-default-instance idiom; clone-safety is sklearn's job. A4 step 3
+  is corrected to describe this; the A4 example block is illustrative
+  only and its `clone(...)` lines are superseded by this entry.
+- **F1.1 tag pseudo-code reconciled with the real sklearn 1.6+ API.**
+  The F1.1 draft set `tags.input_tags.dataframe = True`; sklearn 1.6+
+  `InputTags` has no `dataframe` field. The panel-DataFrame contract is
+  expressed with the real fields: `input_tags.two_d_array = False`
+  (not a plain numpy-array estimator) + `input_tags.allow_nan = False`
+  + `target_tags.required = True` + `requires_fit = True` +
+  `non_deterministic` flipped on mixed precision (N5). F1.1's tag block
+  is updated to the real field set.
+- **`_ScalarOutputLoss` loss-factory bridge (Phase 4 `losses.py`
+  touch).** The `(B, 1)` binary / point head (the F1.1 `out_dim=1`
+  contract) and the `(B,)` scalar-target losses
+  (`BCEWithLogitsLoss` / `BinaryFocalLoss` / `MSELoss` / `L1Loss` /
+  `HuberLoss`) need shape + dtype alignment; the factory now wraps
+  those four families in `_ScalarOutputLoss` (flatten both to `(B,)`,
+  cast target to the prediction dtype). Multiclass CE and pinball keep
+  their `(B, K)` head and are unwrapped. The affected Phase 4 loss /
+  trainer tests were updated to assert the wrapper's `.inner`.
+- **`predict` / `predict_quantiles` median consistency.** A quantile
+  regressor's `predict` returns the CALIBRATED median column (the same
+  matrix `predict_quantiles` reports), not the raw median, so the
+  point estimate and the median quantile agree.
+- **Estimator owns the RNG seed thread (A7 / F5 / N1).** `fit` calls
+  `torch.manual_seed(seed)` / `np.random.seed(seed)` before backbone
+  init and the sampler so two same-seed fits in one process are
+  bit-identical; the N4 deterministic-algorithm gate stays the
+  Trainer's job. The `implementation_plan.md` Phase 6a module list is
+  noted as also touching `data/encoders.py`, `data/tabular_to_sequence.py`,
+  and `training/losses.py` for the above (beyond the `models/` files).
 
 ## Deferred
 

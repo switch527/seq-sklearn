@@ -80,9 +80,22 @@ class BaseSequenceRegressor(RegressorMixin, BaseSequenceEstimator):
         raw = self._predict_raw(X)
         return raw.reshape(raw.shape[0], -1)
 
+    def _calibrated_matrix(self, X: pd.DataFrame) -> Tensor:  # noqa: N803
+        """The quantile matrix `predict` / `predict_quantiles` both report.
+
+        Calibrated when a calibrator is fitted, else raw. Shared so the
+        point estimate (``predict``) is the same median ``predict_quantiles``
+        returns; otherwise the two would disagree by the calibration
+        offset.
+        """
+        raw = self._raw_predict_matrix(X)
+        if self.calibrator_ is not None:
+            return self.calibrator_.transform(raw)
+        return raw
+
     def predict(self, X: pd.DataFrame) -> np.ndarray:  # noqa: N803
-        """Point predictions; quantile mode returns the median column (F1)."""
-        mat = self._raw_predict_matrix(X)
+        """Point predictions; quantile mode returns the calibrated median (F1)."""
+        mat = self._calibrated_matrix(X)
         if not self._is_quantile():
             return mat.reshape(-1).numpy()
         q = np.asarray(self.quantiles_, dtype=np.float64)
@@ -110,10 +123,7 @@ class BaseSequenceRegressor(RegressorMixin, BaseSequenceEstimator):
                 "use predict instead"
             )
         fit_q = np.asarray(self.quantiles_, dtype=np.float64)
-        raw = self._raw_predict_matrix(X)
-        calibrated = (
-            self.calibrator_.transform(raw) if self.calibrator_ is not None else raw
-        ).numpy()
+        calibrated = self._calibrated_matrix(X).numpy()
         if quantiles is None:
             return calibrated
         requested = np.asarray(quantiles, dtype=np.float64)
