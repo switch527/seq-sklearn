@@ -69,7 +69,13 @@ def oversample_minority(
 
     pieces: list[np.ndarray] = []
     for _cls, idx in sorted(by_class.items()):
-        if replacement:
+        if len(idx) == majority and oversample_ratio == 1.0:
+            # Majority class at the default ratio: kept whole (each
+            # index exactly once), matching the docstring contract and
+            # standard oversampling. Resampling it here would feed the
+            # Phase 4b sampler duplicated/dropped majority indices.
+            draw = idx
+        elif replacement:
             draw = rng.choice(idx, size=target, replace=True)
         else:
             take = min(target, len(idx))

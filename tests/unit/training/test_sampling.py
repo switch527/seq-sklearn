@@ -101,6 +101,18 @@ def test_undersample_three_class_cuts_all_classes() -> None:
     assert counts.tolist() == [10, 10, 10]
 
 
+def test_oversample_keeps_majority_class_whole_at_ratio_one() -> None:
+    # Contract: at oversample_ratio=1.0 the majority class passes
+    # through unchanged (each index exactly once), even with the
+    # default replacement=True. Only the minority is bootstrapped.
+    labels = _imbalanced_labels()  # 90 class-0 (majority), 10 class-1
+    idx = oversample_minority(labels, _rng(), oversample_ratio=1.0)
+    majority_positions = idx[labels[idx] == 0]
+    assert sorted(majority_positions.tolist()) == list(range(90))
+    counts = np.bincount(labels[idx])
+    assert counts.tolist() == [90, 90]
+
+
 def test_oversample_empty_labels_raises() -> None:
     with pytest.raises(ValueError, match=r"labels is empty"):
         oversample_minority(np.array([], dtype=int), _rng())

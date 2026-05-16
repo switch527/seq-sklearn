@@ -2482,6 +2482,22 @@ Phase 4a (training Claude swarm):
 - **build_sampler shape (arch-sonnet r2-I3).** A20 item 6 records
   that 4a ships raw index builders and 4b's Trainer owns the
   `build_sampler` dispatch.
+- **oversample majority kept whole (arch-sonnet r3-I).** At
+  `oversample_ratio=1.0` the majority class now passes through
+  unchanged (each index once) instead of being bootstrap-resampled,
+  matching the docstring and standard oversampling; otherwise the
+  Phase 4b `SubsetRandomSampler` would see duplicated/dropped majority
+  indices. Test pins the unique-majority invariant.
+- **cosine min_lr equal boundary (qa r3-I).** Added
+  `test_cosine_with_warmup_min_lr_equal_base_lr_raises` so the `>=`
+  guard cannot relax to `>` undetected.
+- **DEFERRED, overlapping class-weight guards (arch-opus r3-I).** The
+  focal-specific `class_weights` guard and the general
+  non-`cross_entropy` guard overlap on the focal path. Kept both
+  intentionally: the focal-specific message is more actionable for
+  the common focal+weights mistake; the general guard defends every
+  other non-cross_entropy strategy. Redundancy is for message
+  clarity, not an oversight.
 
 ## Deferred
 

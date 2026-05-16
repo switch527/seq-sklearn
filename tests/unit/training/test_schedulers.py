@@ -45,6 +45,14 @@ def test_cosine_with_warmup_min_lr_ge_base_lr_raises() -> None:
         build_scheduler(_opt(lr=1e-4), config=cfg, monitor="val_loss", total_steps=100)
 
 
+def test_cosine_with_warmup_min_lr_equal_base_lr_raises() -> None:
+    # Pins the >= boundary: min_lr == base_lr must also raise, so a
+    # relaxation of the guard to > is caught.
+    cfg = SchedulerConfig(name="cosine_with_warmup", min_lr=1e-3)
+    with pytest.raises(ConfigError, match=r"min_lr .* must be < the optimizer"):
+        build_scheduler(_opt(lr=1e-3), config=cfg, monitor="val_loss", total_steps=100)
+
+
 def test_reduce_on_plateau_builds_plateau_epoch_interval() -> None:
     cfg = SchedulerConfig(name="reduce_on_plateau")
     out = build_scheduler(_opt(), config=cfg, monitor="val_loss")
