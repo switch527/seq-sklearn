@@ -821,27 +821,29 @@ Interpretable multi-head self-attention (custom, shared-V):
       out = out_per_head.mean(dim=1)                # average across heads
       out = out_proj(out)                           # (B, L, hidden_size)
 
-  (b) Interpretable path (predict_with_attention only): replaces SDPA
+  (b) Interpretable path (TFTBackbone always uses this): replaces SDPA
       with a manual softmax to capture the per-head score tensor.
       scores = (q @ k.transpose(-2, -1)) / sqrt(d)  # (B, H, L, L)
       scores = scores.masked_fill(~attn_mask_bool[:, None, None, :], -inf)
       attn_weights = scores.softmax(dim=-1)         # (B, H, L, L); post-softmax, pre-V
       # NaN safety: softmax over an all-(-inf) key row produces NaN.
-      # The architecture's mask.any(dim=1).all() check guarantees at
-      # least one valid key per batch element, so this should never
-      # fire. The torch.nan_to_num is defensive belt-and-braces against
-      # an upstream mask bug; it costs one O(BHLL) pass and zeroes any
-      # NaN before it propagates into v_broadcast.
+      # nan_to_num zeros such a row so a fully-masked query contributes
+      # nothing instead of poisoning v_broadcast. The A6
+      # mask.any(dim=1).all() check keeps this off the TFTBackbone path;
+      # direct callers of forward_interpretable are still covered. One
+      # O(BHLL) pass.
       attn_weights = torch.nan_to_num(attn_weights, nan=0.0)
       out_per_head = attn_weights @ v_broadcast     # (B, H, L, d)
       out = out_per_head.mean(dim=1)
       out = out_proj(out)
       attn_weights is returned alongside the output for TransformerBackboneOutput.
 
-  The fast path skips capture entirely; the interpretable path
-  materializes attn_weights once, on demand. predict_with_attention
-  routes through (b); fit / predict / predict_proba route through (a).
-  The shared-V correctness test asserts equality of outputs between
+  TFTBackbone always routes through (b): F11 attention-entropy metrics
+  consume attn_weights every training step, so fit / predict /
+  predict_proba / predict_with_attention all use the interpretable
+  path. The fast path (a) skips capture entirely and is reserved for
+  future family backbones that do not expose per-step attention
+  weights. The shared-V correctness test asserts equality of outputs between
   (a) and (b) on a fixed input within float tolerance.
 
   Mathematically equivalent to a per-head V where all per-head V
@@ -2117,7 +2119,7 @@ def _migrate(weights: WeightDict, state: StateDict) -> tuple[WeightDict, StateDi
         except KeyError:
             raise PredictionError(
                 f"no migration registered from schema {src} to {src + 1}"
-            )
+            ) from None
         weights, state = step(weights, state)
         post = state.get("schema_version", src)
         if not isinstance(post, int) or post <= src:
@@ -2155,10 +2157,13 @@ def test_migrate_detects_no_op_registration(monkeypatch):
 `_migrate` advances `state["schema_version"]` by exactly one per
 step, BUT the loop terminates only when `src == CURRENT_SCHEMA_VERSION`.
 A no-op step would not advance `src`, the loop would spin forever.
-The implementation MUST bound the loop by `CURRENT_SCHEMA_VERSION
-- src + 1` iterations and raise `PredictionError("migration step
-(X, Y) did not advance schema_version")` if the post-step value is
-unchanged. This invariant is what the meta-test catches.
+The implementation guarantees termination via a strictly-increasing
+post-step check rather than an explicit iteration counter: each step
+must raise `schema_version` above its entry value, so the loop runs
+at most `CURRENT_SCHEMA_VERSION - src` times and a step that does not
+advance it raises `PredictionError("migration step (X, Y) did not
+advance schema_version ...")`. This invariant is what the meta-test
+catches.
 
 ## A18: Dependencies and version pins
 

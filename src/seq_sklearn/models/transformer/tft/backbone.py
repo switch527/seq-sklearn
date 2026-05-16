@@ -19,6 +19,7 @@ per-column ``<unk>`` slot at index 0.
 """
 
 import logging
+from typing import cast
 
 import torch
 import torch.nn as nn
@@ -141,6 +142,17 @@ class TFTBackbone(BaseBackbone):
         seq_len = vsn_out.shape[1]
         valid = ~mask  # (B, L); True at valid positions
         lengths = valid.sum(dim=1)  # (B,); valid timesteps per element
+        # F3 guarantees padding is a contiguous LEADING block. Interior
+        # or leading-valid padding would make the argsort gather
+        # silently reorder timesteps, so reject it rather than corrupt
+        # the LSTM with a wrong sequence order.
+        positions = torch.arange(seq_len, device=mask.device)
+        expected = positions[None, :] >= (seq_len - lengths)[:, None]  # (B, L)
+        if not bool((valid == expected).all()):
+            raise PredictionError(
+                "padding_mask is not a contiguous leading block; the F3 "
+                "left-pad contract is required for the packed LSTM"
+            )
         order = torch.argsort(  # (B, L); valid indices first, original order kept
             (~valid).int(), dim=1, stable=True
         )
@@ -176,9 +188,11 @@ class TFTBackbone(BaseBackbone):
         """Run the A6 pipeline and return a TransformerBackboneOutput.
 
         Raises:
-            PredictionError: A real-valued input contains NaN or inf, or
-                a window has zero valid timesteps after preprocessing
-                (the A6 ``mask.any(dim=1).all()`` readout precondition,
+            PredictionError: A real-valued input contains NaN or inf, a
+                categorical index is outside its embedding table (a
+                direct caller bypassing ``TabularToSequence``), or a
+                window has zero valid timesteps after preprocessing (the
+                A6 ``mask.any(dim=1).all()`` readout precondition,
                 checked up front since the packed LSTM rejects a
                 zero-length sequence).
         """
@@ -186,10 +200,24 @@ class TFTBackbone(BaseBackbone):
             feat = batch[name]
             if feat.numel() and not bool(torch.isfinite(feat).all()):
                 raise PredictionError(f"{name} contains NaN or inf; clean or impute before predict")
+        for name, embeddings in (
+            ("static_categorical", self.static_cat_embeddings),
+            ("time_varying_categorical", self.tv_cat_embeddings),
+        ):
+            codes = batch[name]
+            for i, module in enumerate(embeddings):
+                emb = cast(nn.Embedding, module)
+                col = codes[..., i]
+                if not bool(((col >= 0) & (col < emb.num_embeddings)).all()):
+                    raise PredictionError(
+                        f"{name} column {i} has an index outside "
+                        f"[0, {emb.num_embeddings}); fit and transform via "
+                        "TabularToSequence before predict"
+                    )
         mask = batch["padding_mask"]  # (B, L); True = padding
         all_pad = (~mask).any(dim=1).logical_not()  # (B,); True where row is all padding
         if bool(all_pad.any()):
-            bad_rows = torch.nonzero(all_pad, as_tuple=False).flatten().tolist()
+            bad_rows = [int(r) for r in torch.nonzero(all_pad, as_tuple=False).flatten()]
             raise PredictionError(
                 f"window had zero valid timesteps after preprocessing (rows {bad_rows})"
             )

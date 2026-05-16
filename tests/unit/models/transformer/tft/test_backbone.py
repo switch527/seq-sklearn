@@ -171,8 +171,12 @@ def test_compute_training_metrics_ignores_padded_positions(
     uniform = torch.full((n_vars,), 1.0 / n_vars)
     var_w = torch.stack([uniform, sharp, sharp]).unsqueeze(0)  # (1, 3, n_vars)
 
-    # Zero attention rows at the padded query, sharp rows elsewhere.
+    # Uniform (max-entropy) attention at the padded query, sharp rows
+    # at the valid queries. A zero row would have entropy 0 too, making
+    # the valid_h mask undetectable; a uniform padded row (entropy
+    # ln(3)) is only excluded if valid_h actually masks it.
     attn = torch.zeros(1, n_heads, 3, 3)
+    attn[:, :, 0, :] = 1.0 / 3.0
     attn[:, :, 1, 1] = 1.0
     attn[:, :, 2, 2] = 1.0
 
@@ -198,6 +202,26 @@ def test_compute_training_metrics_ignores_padded_positions(
     assert isinstance(ae, dict)
     # Sharp attention at the two valid queries -> per-head entropy 0.
     assert ae["entropy_per_head"] == pytest.approx([0.0, 0.0], abs=1e-6)
+
+
+def test_readout_last_valid_selects_last_not_first(
+    make_tft_config: Callable[..., TFTConfig],
+) -> None:
+    # Direct _readout test: the pipeline-level mask-correctness tests
+    # copy data into the padded tail, so first-valid and last-valid
+    # carry identical content and a first/last swap is invisible. Here
+    # the first and last valid positions hold distinct sentinels, so
+    # last_valid must return the LAST one.
+    model = _backbone(make_tft_config)
+    hidden = model.hidden_size
+    seq_len = 4
+    hidden_seq = torch.zeros(1, seq_len, hidden)
+    hidden_seq[0, 1] = 1.0  # first valid position
+    hidden_seq[0, 2] = 5.0
+    hidden_seq[0, 3] = 9.0  # last valid position
+    mask = torch.tensor([[True, False, False, False]])  # pos 0 padded
+    out = model._readout(hidden_seq, mask)
+    assert torch.equal(out, torch.full((1, hidden), 9.0))
 
 
 def test_empty_feature_sides_use_synthetic_variable(
@@ -286,20 +310,66 @@ def test_lstm_mixed_per_row_valid_lengths(
                     out_row.representation,
                     atol=1e-5,
                 )
+                # var_selection_weights is produced directly by the
+                # gather/scatter permutation; a bad inverse permutation
+                # would corrupt it even if the readout coincidentally
+                # matched. Compare the valid slice per row.
+                assert torch.allclose(
+                    out_full.var_selection_weights[r : r + 1, p:],
+                    out_row.var_selection_weights,
+                    atol=1e-5,
+                )
     finally:
         torch.use_deterministic_algorithms(False)
 
 
+@pytest.mark.parametrize(
+    ("name", "index"),
+    [("time_varying_real", (0, 1, 0)), ("static_real", (0, 0))],
+)
 def test_forward_rejects_nan_and_inf_inputs(
     make_tft_config: Callable[..., TFTConfig],
+    name: str,
+    index: tuple[int, ...],
 ) -> None:
     model = _backbone(make_tft_config)
     model.eval()
     for bad in (float("nan"), float("inf")):
         batch = _batch(2, 4, seed=81)
-        batch["time_varying_real"][0, 1, 0] = bad
+        batch[name][index] = bad
         with pytest.raises(PredictionError, match="NaN or inf"):
             model.forward(batch)
+
+
+def test_forward_rejects_out_of_range_categorical_index(
+    make_tft_config: Callable[..., TFTConfig],
+) -> None:
+    # A direct caller that did not route through TabularToSequence
+    # could emit an index past the embedding table; that must be a
+    # PredictionError, not an opaque embedding-kernel crash.
+    model = _backbone(make_tft_config)
+    model.eval()
+    for name, oob_index in (
+        ("static_categorical", (0, 0)),
+        ("time_varying_categorical", (0, 1, 0)),
+    ):
+        batch = _batch(2, 4, seed=82)
+        batch[name][oob_index] = 9999
+        with pytest.raises(PredictionError, match="outside"):
+            model.forward(batch)
+
+
+def test_forward_rejects_non_contiguous_padding(
+    make_tft_config: Callable[..., TFTConfig],
+) -> None:
+    # Interior padding violates the F3 left-pad contract the packed
+    # LSTM gather/scatter relies on.
+    model = _backbone(make_tft_config)
+    model.eval()
+    batch = _batch(1, 4, seed=83)
+    batch["padding_mask"] = torch.tensor([[False, True, False, False]])
+    with pytest.raises(PredictionError, match="contiguous leading block"):
+        model.forward(batch)
 
 
 def test_empty_side_synthetic_pad_params_receive_gradient(
