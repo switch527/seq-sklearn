@@ -1014,7 +1014,7 @@ class _LightningModule(pl.LightningModule):
         scheduler_factory: Callable[[optim.Optimizer], dict[str, object]] | None,
         val_metric_name: str = "val_loss",
         bptt_window: int | None = None,
-        optuna_trial: optuna.Trial | None = None,
+        optuna_trial: optuna.trial.BaseTrial | None = None,
     ) -> None:
         super().__init__()
         self.backbone = backbone
@@ -1989,7 +1989,7 @@ the `extra` tuple round-trip under `mode="json"`).
 
 The trial reaches `_LightningModule` via `fit`, not via the pydantic
 config. `BaseSequenceEstimator.fit` accepts `optuna_trial:
-optuna.Trial | None = None` as a keyword argument and forwards it
+optuna.trial.BaseTrial | None = None` as a keyword argument and forwards it
 to the Trainer, which threads it into the LightningModule's
 constructor. This preserves `BaseModelConfig`'s `extra="forbid"`
 contract (Phase 7's test that unknown kwargs raise stays valid) and
@@ -2498,6 +2498,56 @@ Phase 4a (training Claude swarm):
   the common focal+weights mistake; the general guard defends every
   other non-cross_entropy strategy. Redundancy is for message
   clarity, not an oversight.
+
+Phase 4b (training Claude swarm):
+
+- **class_weighted train-fold weights (round 1, code/qa).**
+  `Trainer._class_weights` derives the binary `pos_weight` and the
+  multiclass inverse-frequency vector from `targets[train_idx]` so the
+  held-out folds never leak into the weighting (A8 architecture.md:1208).
+- **optuna_trial threading (round 1, A16).** `Trainer.fit` accepts
+  `optuna_trial: optuna.trial.BaseTrial | None` and threads it into the
+  `_LightningModule` constructor, never through the pydantic config
+  (A16 ~1990-1994). Widened from `optuna.Trial` to
+  `optuna.trial.BaseTrial` (only `.report` / `.should_prune` used;
+  enables `FixedTrial` in tests); A7 ~1017 and A16 ~1991-1992 synced.
+- **multiclass weight-vector vocabulary size (round 2 CRITICAL,
+  code-reviewer x2).** The multiclass branch sized `n_classes` from
+  `targets[train_idx].max()`, so a top class held entirely out of the
+  train fold produced a `CrossEntropyLoss(weight=...)` shorter than K
+  and an opaque first-forward shape mismatch. Vocabulary is now sized
+  from the full transformed `targets` while frequencies are still
+  counted only over the train fold (A8 ~1209). Test pins a 3-class
+  fold excluding the top class still yields a length-3 vector.
+- **all-positive / all-negative binary fold guard (round 2
+  IMPROVEMENT, code-opus/qa).** The prior `if pos > 0 else 1.0` guarded
+  only the all-negative fold; an all-positive fold gave `neg/pos = 0.0`,
+  silently discarding every positive in `BCEWithLogitsLoss`. Both
+  degenerate folds now log a warning naming the absent class and fall
+  back to `pos_weight = 1.0`.
+- **no-leakage mutation tests (round 2 CRITICAL, qa-opus).** The F5
+  `targets[train_idx]` contract in `_class_weights` and `_train_sampler`
+  was mutation-insensitive: every test passed `train_idx = arange(N)`,
+  making the slice an identity no-op. Added strict-subset `train_idx`
+  tests whose fold balance differs from the panel balance; they fail if
+  the slice is replaced with `targets`. Production slicing unchanged.
+- **_window_time_index precondition error path (round 2 IMPROVEMENT,
+  code-sonnet/code-opus).** The round-1 monotone-non-decreasing
+  `assert` had no test exercising the failure path. Added
+  `test_window_time_index_non_monotone_raises`; the assert is unchanged.
+- **_class_weights docstring authority (round 2 IMPROVEMENT, arch-opus).**
+  Docstring cited "F5 requirements.md ~786-787" as the train-fold-only
+  authority; the actual authority is A8 architecture.md:1208 (F5 only
+  says "frequency-based per-class weights"). Citation corrected; added
+  a line that the F5 validity matrix guarantees
+  `loss.strategy == "cross_entropy"` on this branch and `build_loss`
+  re-asserts.
+- **DEFERRED, `_ModuleBuildSpec` collapse (arch-opus round 2
+  IMPROVEMENT-1).** The `class_weights` / `optuna_trial` passthroughs
+  are threaded as positional `_build_module` params. Collapsing them
+  into a `_ModuleBuildSpec` now is premature abstraction with no second
+  consumer (a 2-param seam); revisit if Phase 6 adds a third
+  module-construction input.
 
 ## Deferred
 
