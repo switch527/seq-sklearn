@@ -86,6 +86,37 @@ def test_oversample_balanced_input_is_a_noop_in_size() -> None:
     assert idx.shape[0] == labels.shape[0]
 
 
+def test_oversample_three_class_balances_all_classes() -> None:
+    # Exercises the per-class loop body three times, not just two.
+    labels = np.array([0] * 100 + [1] * 30 + [2] * 10)
+    idx = oversample_minority(labels, _rng(), oversample_ratio=1.0)
+    counts = np.bincount(labels[idx])
+    assert counts.tolist() == [100, 100, 100]
+
+
+def test_undersample_three_class_cuts_all_classes() -> None:
+    labels = np.array([0] * 100 + [1] * 30 + [2] * 10)
+    idx = undersample_majority(labels, _rng())
+    counts = np.bincount(labels[idx])
+    assert counts.tolist() == [10, 10, 10]
+
+
+def test_oversample_single_class_is_size_preserving_noop() -> None:
+    # Degenerate fold: one class. majority == the only class, target ==
+    # its own count, so the result is a same-size shuffled resample.
+    labels = np.array([0] * 8)
+    idx = oversample_minority(labels, _rng(), oversample_ratio=1.0)
+    assert idx.shape[0] == 8
+    assert np.array_equal(np.unique(labels[idx]), np.array([0]))
+
+
+def test_undersample_single_class_is_size_preserving_noop() -> None:
+    labels = np.array([0] * 8)
+    idx = undersample_majority(labels, _rng())
+    assert idx.shape[0] == 8
+    assert np.array_equal(np.unique(labels[idx]), np.array([0]))
+
+
 @pytest.mark.parametrize("ratio", [0.5, 1.0, 1.5])
 def test_oversample_target_matches_ratio_times_majority(ratio: float) -> None:
     labels = _imbalanced_labels()

@@ -116,3 +116,13 @@ def test_extra_kwargs_pass_through_constant() -> None:
     cfg = SchedulerConfig(name="constant", warmup_steps=0, extra=(("last_epoch", -1),))
     out = build_scheduler(_opt(), config=cfg, monitor="val_loss")
     assert isinstance(out["scheduler"], optim.lr_scheduler.LambdaLR)
+
+
+def test_extra_kwargs_pass_through_reduce_on_plateau() -> None:
+    # Exercises the extra-passthrough on a different branch than
+    # `constant` (the four scheduler branches splat `extra` separately).
+    cfg = SchedulerConfig(name="reduce_on_plateau", extra=(("cooldown", 2),))
+    out = build_scheduler(_opt(), config=cfg, monitor="val_loss")
+    sched = out["scheduler"]
+    assert isinstance(sched, optim.lr_scheduler.ReduceLROnPlateau)
+    assert sched.cooldown == 2

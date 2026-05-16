@@ -12,7 +12,20 @@ from typing import Final
 
 from seq_sklearn.config._domains import V1_1_TASK_TYPES
 
-__all__ = ["check_combo"]
+__all__ = ["check_combo", "legal_task_loss_pairs"]
+
+
+def legal_task_loss_pairs(*, include_v1_1: bool = False) -> frozenset[tuple[str, str]]:
+    """Return the legal ``(task_type, loss_strategy)`` pairs.
+
+    Derived from the single ``_LEGAL_CELLS`` table so callers (the
+    config validator, the loss factory, the Optuna sampler) never
+    hand-maintain a parallel copy of the F5 validity matrix. v1.1 task
+    pairs are excluded unless ``include_v1_1`` is set.
+    """
+    return frozenset(
+        (task, loss) for (task, loss) in _LEGAL_CELLS if include_v1_1 or task not in V1_1_TASK_TYPES
+    )
 
 
 # Legal cells per the F5 validity matrix. Keyed by (task_type,

@@ -67,10 +67,17 @@ def test_nan_guard_three_consecutive_raise_with_batch_idx(
             guard.on_train_batch_end(trainer, module, nan, {}, batch_idx=2)
 
     skip_records = [r for r in caplog.records if r.event == Event.TRAIN_NAN_STEP_SKIPPED]
-    assert skip_records
+    # Three per-step INFO records (consecutive 1, 2, 3) plus one ERROR
+    # abort record. A bug that emits only on the abort step would fail
+    # this rather than pass a non-empty-list check.
+    assert len(skip_records) == 4
+    info = [r for r in skip_records if r.levelno == logging.INFO]
+    assert [r.payload["consecutive"] for r in info] == [1, 2, 3]
+    assert [r.payload["batch_idx"] for r in info] == [0, 1, 2]
     abort = [r for r in skip_records if r.payload.get("aborting")]
     assert len(abort) == 1
     assert abort[0].payload["batch_idx"] == 2
+    assert abort[0].payload["consecutive"] == 3
     assert abort[0].levelno == logging.ERROR
 
 

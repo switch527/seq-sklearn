@@ -1493,14 +1493,18 @@ appears as a nightly alert. v2 may add a fast-cell gate.
   `logging.getLogger("seq_sklearn").propagate is True` and attaches a
   handler that feeds `caplog`. F11-event-emission tests silently
   catch zero records without this.
-- `strict_mode_globals` (function-scoped, autouse on
-  `tests/unit/training/test_determinism.py`) snapshots
+- `strict_mode_globals` (function-scoped, autouse on EVERY test under
+  `tests/unit/training/`) snapshots
   `torch.are_deterministic_algorithms_enabled()`,
   `torch.backends.cudnn.deterministic`,
   `torch.backends.cudnn.benchmark`, and
   `os.environ.get("CUBLAS_WORKSPACE_CONFIG")` at setup, restores at
-  teardown. `pytest-randomly` permutes test order; without
-  restoration, Scenario B's preconditions become non-deterministic.
+  teardown. It is NOT scoped to `test_determinism.py` alone:
+  `enable_strict_mode` mutates true process globals, so under
+  `pytest-randomly` ordering a determinism test running before a
+  sibling callback/factory test leaks strict-mode state and the suite
+  goes nondeterministically red. The snapshot is four attribute reads;
+  the directory-wide isolation guarantee is worth that cost.
 - The hypothesis profile registration:
   - `inner_loop` (default): `settings(deadline=2000, max_examples=50,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large])`.

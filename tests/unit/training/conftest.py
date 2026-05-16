@@ -1,12 +1,14 @@
 """Training-unit fixtures.
 
 Declares ``strict_mode_globals`` per architecture A14: an autouse
-fixture that snapshots and restores the four process-global N4 flags,
-scoped to ``test_determinism.py`` only (a marker check inside the
-fixture body) so the snapshot / restore overhead does not apply to the
-other training-unit tests in the same directory. ``pytest-randomly``
-permutes test order; without restoration, Scenario B's preconditions
-become non-deterministic.
+fixture that snapshots and restores the four process-global N4 flags
+around EVERY training-unit test. ``enable_strict_mode`` mutates true
+process globals; under ``pytest-randomly`` test order a determinism
+test can run before a sibling callback or factory test, so the
+snapshot/restore must wrap all tests in this directory (not just
+``test_determinism.py``) or strict-mode state leaks and the suite goes
+nondeterministically red. The snapshot is four attribute reads; the
+isolation guarantee is worth that cost.
 """
 
 import os
@@ -17,20 +19,16 @@ import torch
 
 
 @pytest.fixture(autouse=True)
-def strict_mode_globals(request: pytest.FixtureRequest) -> Generator[None]:
-    """Snapshot / restore the four N4 process globals around determinism tests.
+def strict_mode_globals() -> Generator[None]:
+    """Snapshot / restore the four N4 process globals around each test.
 
-    Active only for ``test_determinism.py`` (scoped via an fspath check
-    so the other training-unit tests skip the snapshot work). Captures
-    ``torch.are_deterministic_algorithms_enabled()``,
+    Captures ``torch.are_deterministic_algorithms_enabled()``,
     ``torch.backends.cudnn.deterministic``,
     ``torch.backends.cudnn.benchmark``, and
     ``os.environ.get("CUBLAS_WORKSPACE_CONFIG")`` at setup; restores all
-    four at teardown.
+    four at teardown so no training-unit test can leak strict-mode state
+    into another under ``pytest-randomly`` ordering.
     """
-    if "test_determinism" not in request.node.fspath.basename:
-        yield
-        return
     det_algorithms = torch.are_deterministic_algorithms_enabled()
     cudnn_deterministic = torch.backends.cudnn.deterministic
     cudnn_benchmark = torch.backends.cudnn.benchmark

@@ -4,7 +4,11 @@
 concrete ``nn.Module`` per the F5 loss-class table. It is a string-in
 boundary: callers in the LightningModule extract the string values from
 the frozen pydantic config via the F5 bridge (``cfg.loss.strategy``,
-``cfg.sampler.strategy``). Any pair not in the v1 validity matrix raises
+``cfg.sampler.strategy``) AFTER routing ``cfg.loss`` through
+``extract_deprecated_extras``. This factory is intentionally
+post-extras (it takes resolved strings, not a ``LossConfig``), so the
+ALPHA->BETA promotion contract is owned by that Phase 4b call site, not
+here. Any pair not in the v1 validity matrix raises
 :class:`ConfigError`; v1.1 task types raise with a "scheduled for v1.1"
 message rather than failing later on shape mismatch.
 
@@ -23,6 +27,7 @@ from torch import Tensor
 from torch.nn import functional as torch_functional
 
 from seq_sklearn.config._domains import V1_1_TASK_TYPES
+from seq_sklearn.config._validity import legal_task_loss_pairs
 from seq_sklearn.errors import ConfigError
 
 __all__ = ["BinaryFocalLoss", "MulticlassFocalLoss", "PinballLoss", "build_loss"]
@@ -30,21 +35,11 @@ __all__ = ["BinaryFocalLoss", "MulticlassFocalLoss", "PinballLoss", "build_loss"
 logger = logging.getLogger(__name__)
 
 
-# Legal v1 (task_type, loss_strategy) pairs per the F5 validity matrix.
-# The factory only needs the (task, loss) granularity; imbalance and
-# calibration legality is the config-layer validator's job.
-_LEGAL_TASK_LOSS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("binary", "cross_entropy"),
-        ("binary", "focal"),
-        ("multiclass", "cross_entropy"),
-        ("multiclass", "focal"),
-        ("regression_point", "mse"),
-        ("regression_point", "mae"),
-        ("regression_point", "huber"),
-        ("regression_quantile", "pinball"),
-    }
-)
+# Legal v1 (task_type, loss_strategy) pairs, derived from the single
+# _LEGAL_CELLS validity-matrix table so this factory cannot drift from
+# the config-layer validator. Imbalance/calibration legality remains the
+# config validator's job; the factory only needs (task, loss).
+_LEGAL_TASK_LOSS: frozenset[tuple[str, str]] = legal_task_loss_pairs()
 
 
 class BinaryFocalLoss(nn.Module):
