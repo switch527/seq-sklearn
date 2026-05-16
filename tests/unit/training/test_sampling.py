@@ -101,6 +101,26 @@ def test_undersample_three_class_cuts_all_classes() -> None:
     assert counts.tolist() == [10, 10, 10]
 
 
+def test_oversample_empty_labels_raises() -> None:
+    with pytest.raises(ValueError, match=r"labels is empty"):
+        oversample_minority(np.array([], dtype=int), _rng())
+
+
+def test_undersample_empty_labels_raises() -> None:
+    with pytest.raises(ValueError, match=r"labels is empty"):
+        undersample_majority(np.array([], dtype=int), _rng())
+
+
+def test_oversample_three_class_without_replacement_caps_each_class() -> None:
+    # replacement=False with 3 classes: the min(target, len(idx)) cap
+    # must apply per class, including the third (smallest) one.
+    labels = np.array([0] * 100 + [1] * 30 + [2] * 10)
+    idx = oversample_minority(labels, _rng(), oversample_ratio=1.0, replacement=False)
+    counts = np.bincount(labels[idx])
+    # Each class capped at its own size (cannot reach the 100 target).
+    assert counts.tolist() == [100, 30, 10]
+
+
 def test_oversample_single_class_is_size_preserving_noop() -> None:
     # Degenerate fold: one class. majority == the only class, target ==
     # its own count, so the result is a same-size shuffled resample.

@@ -35,10 +35,8 @@ __all__ = ["BinaryFocalLoss", "MulticlassFocalLoss", "PinballLoss", "build_loss"
 logger = logging.getLogger(__name__)
 
 
-# Legal v1 (task_type, loss_strategy) pairs, derived from the single
-# _LEGAL_CELLS validity-matrix table so this factory cannot drift from
-# the config-layer validator. Imbalance/calibration legality remains the
-# config validator's job; the factory only needs (task, loss).
+# Imbalance/calibration legality stays the config validator's job; the
+# factory only needs the (task, loss) granularity.
 _LEGAL_TASK_LOSS: frozenset[tuple[str, str]] = legal_task_loss_pairs()
 
 
@@ -125,8 +123,10 @@ def build_loss(
     Raises:
         ConfigError: the pair is not in the v1 validity matrix, a v1.1
             task type was passed, ``pinball`` was requested without
-            ``quantiles``, or ``class_weights`` was supplied alongside a
-            ``focal`` strategy (F5 forbids in-loss weighting for focal).
+            ``quantiles``, ``class_weights`` was supplied alongside a
+            ``focal`` strategy (F5 forbids in-loss weighting for focal),
+            or ``class_weights`` was supplied with a non-``cross_entropy``
+            strategy (F5 ties class weighting to cross-entropy).
     """
     if task_type in V1_1_TASK_TYPES:
         raise ConfigError(
@@ -143,6 +143,12 @@ def build_loss(
         raise ConfigError(
             "class_weights must be None when loss_strategy='focal': F5 "
             "moves imbalance handling to the sampler side for focal."
+        )
+    if class_weights is not None and loss_strategy != "cross_entropy":
+        raise ConfigError(
+            f"class_weights is only valid with loss_strategy='cross_entropy', "
+            f"got {loss_strategy!r}: F5 ties class_weighted imbalance to "
+            "cross-entropy."
         )
 
     if task_type == "binary" and loss_strategy == "cross_entropy":

@@ -156,6 +156,12 @@ def build_scheduler(
     # base_lr is always > 0: OptimizerConfig.learning_rate is gt=0.0 and
     # build_optimizer writes it into every param group's "lr".
     base_lr = optimizer.param_groups[0]["lr"]
+    if config.min_lr >= base_lr:
+        raise ConfigError(
+            f"scheduler min_lr ({config.min_lr}) must be < the optimizer "
+            f"learning_rate ({base_lr}) for cosine_with_warmup; otherwise "
+            "the post-warmup multiplier climbs instead of decaying."
+        )
     min_lr_ratio = config.min_lr / base_lr
     cosine = optim.lr_scheduler.LambdaLR(
         optimizer,

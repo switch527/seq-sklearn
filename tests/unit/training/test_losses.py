@@ -103,6 +103,14 @@ def test_focal_with_class_weights_raises() -> None:
         _build("binary", "focal", class_weights=torch.tensor(2.0))
 
 
+def test_class_weights_with_non_cross_entropy_raises() -> None:
+    # Converse of the focal guard: F5 ties class weighting to
+    # cross_entropy. Unreachable on legal v1 configs (check_combo
+    # rejects first) but the factory boundary must defend it.
+    with pytest.raises(ConfigError, match=r"only valid with loss_strategy='cross_entropy'"):
+        _build("regression_point", "mse", class_weights=torch.ones(2))
+
+
 def test_pinball_without_quantiles_raises() -> None:
     with pytest.raises(ConfigError, match=r"requires quantiles"):
         _build("regression_quantile", "pinball", quantiles=None)

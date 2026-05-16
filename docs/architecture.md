@@ -1086,9 +1086,16 @@ class _LightningModule(pl.LightningModule):
 1. Estimator `fit` builds `self.config_` (frozen pydantic) from its
    flat attribute dict.
 2. Estimator passes `self.config_` to the `Trainer` wrapper.
-3. The `Trainer` wrapper builds the curried factories:
-   `optimizer_factory = partial(build_optimizer, config=self.config_)` and
-   `scheduler_factory = partial(build_scheduler, config=self.config_)`.
+3. The `Trainer` wrapper builds the curried factories. Each factory
+   takes its nested family sub-config (per the F5 bridge), not the
+   root config, and the scheduler factory must also bind `monitor`
+   and `total_steps` so the residual matches the
+   `Callable[[optim.Optimizer], dict]` `_LightningModule` type:
+   `optimizer_factory = partial(build_optimizer, config=self.config_.optimizer)` and
+   `scheduler_factory = partial(build_scheduler, config=self.config_.scheduler,
+   monitor=self._val_metric_name, total_steps=self._total_steps)`
+   (`total_steps` is the accumulation-adjusted optimizer-step count;
+   `None` for non-step schedulers).
 4. The `Trainer` constructs `_LightningModule(backbone, head, loss,
    optimizer_factory, scheduler_factory, ...)`. The factories close
    over the post-fit `config_`; the LightningModule never reads the
@@ -1135,10 +1142,12 @@ real Trainer is needed.
   scalar tensor returned by `training_step` when
   `automatic_optimization=True`; the callback checks
   `torch.isnan(outputs)`. On a NaN, increments an internal counter and
-  emits `train.nan_step_skipped`. On the third consecutive NaN,
-  raises `TrainingError("3 consecutive NaN training steps; aborting
-  per F9")` with the offending `batch_idx` in the log payload. A
-  non-NaN step resets the counter to zero.
+  emits `train.nan_step_skipped` at INFO with the running `consecutive`
+  count. On the third consecutive NaN, emits a second
+  `train.nan_step_skipped` at ERROR with `aborting=True` before raising
+  `TrainingError("3 consecutive NaN training steps; aborting per F9")`
+  with the offending `batch_idx` in the log payload. A non-NaN step
+  resets the counter to zero.
 - **`GradScalerWatchdog`** (mixed precision only) implements
   `on_train_batch_end`. Defensively checks
   `hasattr(trainer.precision_plugin, "scaler")` and is a no-op when
@@ -2323,6 +2332,15 @@ architecture phase:
    are clean (a clone with the same `resume_path` resumes from the
    same checkpoint deterministically). `fit` does NOT accept
    `resume_path` as a keyword.
+6. **`build_sampler` factory shape**: A4 lists `build_sampler`
+   alongside the other three family factories, but Phase 4a ships the
+   sampler side as the raw index builders `oversample_minority` /
+   `undersample_majority` (pure numpy), not a config-dispatching
+   `build_sampler(config) -> Sampler`. **RESOLVED**: Phase 4b's
+   Trainer constructs the `SubsetRandomSampler` /
+   `WeightedRandomSampler` from these builders plus `SamplerConfig`;
+   the `build_sampler` dispatch entry in A4 is the 4b Trainer's
+   responsibility, not a standalone 4a factory.
 
 ## Addressed
 
@@ -2428,6 +2446,42 @@ Phase 3 doc-sync (post-Gemini final-pass code/doc drift audit):
   skeleton so a Phase 4 author does not ship a `_collect_state` that
   omits `schema_version` and hits the confusing "older than oldest
   supported" load failure. DOC-ONLY.
+
+Phase 4a (training Claude swarm):
+
+- **strict_mode_globals fixture leak (arch-opus r1-C1).**
+  `tests/unit/training/conftest.py` fixture was fspath-scoped to
+  `test_determinism.py`, so `enable_strict_mode`'s four process
+  globals leaked into sibling training tests and the suite went
+  nondeterministically red under default `pytest` (pytest-randomly).
+  Fixture now wraps every training-unit test; A14 synced; verified
+  green across repeated default-randomized full-suite runs.
+- **legal_task_loss_pairs SSOT (arch-opus r1-I2).** `build_loss`'s
+  hand-maintained legal-pair frozenset now derives from the single
+  `_validity._LEGAL_CELLS` via `legal_task_loss_pairs()`; direct
+  tests pin the v1.1 exclusion and the `include_v1_1` branch
+  (qa-opus r2-C1/I1).
+- **build_loss post-extras boundary (arch-opus r1-I1).** Documented
+  as intentionally string-in; routing `cfg.loss` through
+  `extract_deprecated_extras` is the Phase 4b `_LightningModule`
+  call-site obligation.
+- **cosine_with_warmup min_lr guard (code-sonnet r2-I).** `min_lr >=
+  base_lr` raised an inverted (climbing) post-warmup schedule; now a
+  `ConfigError`, symmetric to the constant+warmup guard.
+- **class_weighted requires cross_entropy (arch r2-I2).** `build_loss`
+  now rejects `class_weights` with a non-`cross_entropy` strategy
+  (converse of the focal guard); unreachable on legal v1 configs but
+  the factory boundary defends it.
+- **sampling empty-labels (arch-sonnet r2-I2).** `_class_indices`
+  raises a clear `ValueError` instead of an opaque `max([])`.
+- **A7 scheduler-factory curry / NaNLossGuard ERROR emit
+  (arch-sonnet r2-C1/I1).** A7 now shows the full
+  `partial(build_scheduler, config=.scheduler, monitor=, total_steps=)`
+  curry matching the `_LightningModule` callable type, and documents
+  the ERROR-level abort emit the NaN guard performs before raising.
+- **build_sampler shape (arch-sonnet r2-I3).** A20 item 6 records
+  that 4a ships raw index builders and 4b's Trainer owns the
+  `build_sampler` dispatch.
 
 ## Deferred
 
@@ -2727,3 +2781,14 @@ Phase 2 (data-layer Claude swarm):
   impact until a Phase 4+ splitter-consumer scores predictions. The
   Phase 4 splitter-consumer review must verify those rows are masked
   from loss before scoring.
+
+Phase 4a (training Claude swarm):
+
+- **Loss-module NaN/inf-input test (arch-opus r1-I3).** Deferred:
+  out of scope by design. F2/F3 own NaN-in-features (raise
+  `DataContractError` at the data-contract layer, requirements.md
+  1113-1124); runtime NaN-loss is `NaNLossGuard`'s job (the
+  3-consecutive guard, tested and mutation-verified). The loss
+  modules in `losses.py` are deliberately not input validators under
+  the F5 design, so a NaN-input-raises test there would assert a
+  contract the spec assigns elsewhere.

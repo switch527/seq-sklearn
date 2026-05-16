@@ -25,7 +25,11 @@ from seq_sklearn.config._domains import (
     TASK_TYPES,
     V1_1_TASK_TYPES,
 )
-from seq_sklearn.config._validity import _LEGAL_CELLS, check_combo
+from seq_sklearn.config._validity import (
+    _LEGAL_CELLS,
+    check_combo,
+    legal_task_loss_pairs,
+)
 from seq_sklearn.config.base import BaseModelConfig
 from seq_sklearn.config.loss import LossConfig
 from seq_sklearn.config.sampler import SamplerConfig
@@ -157,3 +161,27 @@ def test_family_config_strategy_literals_match_domains(
 ) -> None:
     annotation = config_cls.model_fields[field].annotation
     assert get_args(annotation) == tuple(domain)
+
+
+def test_legal_task_loss_pairs_excludes_v1_1_by_default() -> None:
+    # The accessor's reason for existing is F5/Optuna closure: it must
+    # not leak v1.1 pairs by default. A mutation flipping the filter to
+    # admit v1.1 must fail here (the only other guard is a separate
+    # one in build_loss, which does not cover this function's contract).
+    pairs = legal_task_loss_pairs()
+    assert all(task not in V1_1_TASK_TYPES for task, _ in pairs)
+    assert ("multilabel", "cross_entropy") not in pairs
+    assert ("regression_multioutput", "mse") not in pairs
+    # Every default pair traces back to a non-v1.1 _LEGAL_CELLS entry.
+    assert pairs == frozenset((t, lo) for (t, lo) in _LEGAL_CELLS if t not in V1_1_TASK_TYPES)
+    assert ("binary", "cross_entropy") in pairs
+    assert ("regression_quantile", "pinball") in pairs
+
+
+def test_legal_task_loss_pairs_include_v1_1_adds_v1_1_pairs() -> None:
+    default = legal_task_loss_pairs()
+    full = legal_task_loss_pairs(include_v1_1=True)
+    assert default < full  # strict superset
+    assert full == frozenset(_LEGAL_CELLS)
+    assert ("multilabel", "cross_entropy") in full
+    assert any(task in V1_1_TASK_TYPES for task, _ in full)

@@ -28,7 +28,13 @@ logger = logging.getLogger(__name__)
 
 
 def _class_indices(labels: np.ndarray) -> dict[int, np.ndarray]:
-    """Map each class value to the positions where it occurs."""
+    """Map each class value to the positions where it occurs.
+
+    Raises:
+        ValueError: ``labels`` is empty (no class to resample over).
+    """
+    if labels.size == 0:
+        raise ValueError("labels is empty; nothing to resample")
     return {int(c): np.flatnonzero(labels == c) for c in np.unique(labels)}
 
 
@@ -53,6 +59,9 @@ def oversample_minority(
     ``replacement=False`` caps a class draw at its own size, so a
     minority class cannot reach the target; this matches sklearn-style
     "no-replacement oversampling is a no-op past the class size".
+
+    Raises:
+        ValueError: ``labels`` is empty.
     """
     by_class = _class_indices(labels)
     majority = max(len(idx) for idx in by_class.values())
@@ -85,6 +94,9 @@ def undersample_majority(
     ``replacement=True`` the per-class draw samples with replacement (it
     still yields ``minority_count`` indices per class, just possibly with
     repeats). The returned array is shuffled.
+
+    Raises:
+        ValueError: ``labels`` is empty.
     """
     by_class = _class_indices(labels)
     minority = min(len(idx) for idx in by_class.values())
