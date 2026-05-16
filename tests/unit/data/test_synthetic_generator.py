@@ -1,10 +1,12 @@
 """Tests for the F6 synthetic data-generating process."""
 
+import warnings
+
 import numpy as np
 import pytest
 from sklearn.linear_model import LogisticRegression
 
-from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
+from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator, _sigmoid
 
 
 class _StubGenerator:
@@ -345,3 +347,24 @@ def test_no_categorical_or_real_columns() -> None:
     )
     panel, y = gen.generate()
     assert len(panel) == len(y) > 0
+
+
+def test_sigmoid_no_overflow_on_extreme_logits() -> None:
+    z = np.array([-1000.0, -50.0, 0.0, 50.0, 1000.0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = _sigmoid(z)
+    assert out[0] == pytest.approx(0.0)
+    assert out[2] == pytest.approx(0.5)
+    assert out[4] == pytest.approx(1.0)
+    assert np.all((out >= 0.0) & (out <= 1.0))
+
+
+def test_class_distribution_zero_entry_raises() -> None:
+    with pytest.raises(ValueError, match="strictly positive"):
+        SyntheticPanelGenerator(
+            target_kind="multiclass",
+            num_classes=2,
+            class_distribution=(0.0, 1.0),
+            seed=1,
+        )

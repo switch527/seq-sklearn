@@ -65,7 +65,20 @@ _GRAIN_FREQ: dict[PeriodGrain, str] = {
 
 
 def _sigmoid(z: np.ndarray) -> np.ndarray:
-    return 1.0 / (1.0 + np.exp(-z))
+    """Logistic sigmoid, branch-split so no large exponent is ever taken.
+
+    The naive ``1/(1+exp(-z))`` overflows ``exp`` for large negative
+    ``z`` (emitting a RuntimeWarning); evaluating ``exp(z)`` on the
+    negative branch and ``exp(-z)`` on the non-negative branch keeps
+    every exponent argument <= 0.
+    """
+    out = np.empty(np.shape(z), dtype=float)
+    pos = np.asarray(z) >= 0.0
+    neg = ~pos
+    out[pos] = 1.0 / (1.0 + np.exp(-np.asarray(z)[pos]))
+    ez = np.exp(np.asarray(z)[neg])
+    out[neg] = ez / (1.0 + ez)
+    return out
 
 
 def _softmax(z: np.ndarray) -> np.ndarray:
@@ -151,6 +164,11 @@ class SyntheticPanelGenerator:
                 if not np.isclose(sum(class_distribution), 1.0):
                     raise ValueError(
                         f"class_distribution must sum to 1.0, got {sum(class_distribution)}"
+                    )
+                if any(p <= 0.0 for p in class_distribution):
+                    raise ValueError(
+                        "class_distribution entries must be strictly positive "
+                        f"(the softmax-bias log is undefined at 0); got {class_distribution}"
                     )
         if not 0.0 < class_balance < 1.0:
             raise ValueError(f"class_balance must be in (0, 1), got {class_balance}")
