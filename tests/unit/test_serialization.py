@@ -36,6 +36,30 @@ def test_migrate_schema_too_old_raises() -> None:
         _migrate({}, {"schema_version": 0})
 
 
+def test_migrate_absent_schema_version_treated_as_too_old() -> None:
+    with pytest.raises(PredictionError, match="older than oldest supported"):
+        _migrate({}, {})
+
+
+def test_migrate_non_int_schema_version_raises() -> None:
+    with pytest.raises(PredictionError, match="must be an int"):
+        _migrate({}, {"schema_version": "1"})
+    with pytest.raises(PredictionError, match="must be an int"):
+        _migrate({}, {"schema_version": True})
+
+
+def test_save_load_preserves_bfloat16_dtype(tmp_path: Path) -> None:
+    weights = {"w": torch.ones(3, dtype=torch.bfloat16)}
+    save_weights_and_state(
+        tmp_path / "m",
+        weights,
+        {"schema_version": 1, "seq_sklearn_version": serialization.__version__},
+    )
+    loaded_w, _ = load_weights_and_state(tmp_path / "m")
+    assert loaded_w["w"].dtype == torch.bfloat16
+    assert torch.equal(loaded_w["w"], weights["w"])
+
+
 def _no_op_step(
     weights: serialization.WeightDict, state: serialization.StateDict
 ) -> tuple[serialization.WeightDict, serialization.StateDict]:

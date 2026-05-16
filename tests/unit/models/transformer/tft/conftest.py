@@ -11,7 +11,7 @@ from seq_sklearn.config.tft import TFTConfig
 
 @pytest.fixture
 def make_tft_config() -> Callable[..., TFTConfig]:
-    """Return a factory building a valid TFTConfig with overrides."""
+    """Factory for TFTConfig with caller-controlled field overrides."""
 
     def _make(**overrides: object) -> TFTConfig:
         tabular = overrides.pop(

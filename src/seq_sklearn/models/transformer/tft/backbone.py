@@ -150,7 +150,7 @@ class TFTBackbone(BaseBackbone):
         packed = pack_padded_sequence(
             gathered, lengths.cpu(), batch_first=True, enforce_sorted=False
         )
-        # nn.LSTM expects (h_0, c_0); A6 / research doc fix this to (c_h, c_c).
+        # nn.LSTM init state is (h_0, c_0); A6 names these (c_h, c_c).
         h_0 = c_h.unsqueeze(0)  # (1, B, hidden)
         c_0 = c_c.unsqueeze(0)  # (1, B, hidden)
         packed_out, _ = self.lstm(packed, (h_0, c_0))
@@ -176,14 +176,23 @@ class TFTBackbone(BaseBackbone):
         """Run the A6 pipeline and return a TransformerBackboneOutput.
 
         Raises:
-            PredictionError: A window has zero valid timesteps after
-                preprocessing (the A6 ``mask.any(dim=1).all()`` readout
-                precondition, checked up front since the packed LSTM
-                rejects a zero-length sequence).
+            PredictionError: A real-valued input contains NaN or inf, or
+                a window has zero valid timesteps after preprocessing
+                (the A6 ``mask.any(dim=1).all()`` readout precondition,
+                checked up front since the packed LSTM rejects a
+                zero-length sequence).
         """
+        for name in ("time_varying_real", "static_real"):
+            feat = batch[name]
+            if feat.numel() and not bool(torch.isfinite(feat).all()):
+                raise PredictionError(f"{name} contains NaN or inf; clean or impute before predict")
         mask = batch["padding_mask"]  # (B, L); True = padding
-        if not bool((~mask).any(dim=1).all()):
-            raise PredictionError("window had zero valid timesteps after preprocessing")
+        all_pad = (~mask).any(dim=1).logical_not()  # (B,); True where row is all padding
+        if bool(all_pad.any()):
+            bad_rows = torch.nonzero(all_pad, as_tuple=False).flatten().tolist()
+            raise PredictionError(
+                f"window had zero valid timesteps after preprocessing (rows {bad_rows})"
+            )
 
         static_vars = self._encode_static(batch)  # (B, n_static_vars, hidden)
         static_selected, static_weights = self.static_vsn(static_vars)
@@ -221,9 +230,11 @@ class TFTBackbone(BaseBackbone):
         """Reduce the introspection tensors to F11 entropy payloads (A15).
 
         The ``padding_mask`` is applied to the temporal and attention
-        reductions so padded timesteps (max-entropy uniform VSN rows and
-        zeroed attention rows by construction) do not bias the metrics.
-        The static branch has no time axis and skips the mask.
+        reductions so padded timesteps do not bias the metrics. A padded
+        query still has valid keys and so produces a normal attention
+        distribution, not a zero row; it is excluded explicitly via the
+        mask, not assumed zero. The static branch has no time axis and
+        skips the mask.
 
         The parameter is typed as the base ``BackboneOutput`` so the
         override stays Liskov-compatible with ``BaseBackbone``; this
@@ -280,6 +291,11 @@ class _StaticVSN(nn.Module):
         super().__init__()
         self.n_vars = n_vars
         hidden = config.hidden_size
+        # n_vars == 1 (an empty static side) makes the flatten GRN's
+        # AddNorm a LayerNorm over a length-1 axis, so the logit is a
+        # learned constant and softmax over one variable is exactly 1.0.
+        # Degenerate but correct: a single-variable selection must weight
+        # 1.0, and the entropy metric is a well-defined 0.
         self.flatten_grn = GRN(n_vars * hidden, n_vars, config.variable_selection_dropout)
         self.var_grns = nn.ModuleList(
             GRN(hidden, hidden, config.variable_selection_dropout) for _ in range(n_vars)

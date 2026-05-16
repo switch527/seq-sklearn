@@ -8,8 +8,8 @@ safetensors carries no executable payload.
 
 Schema migrations are registered in :data:`MIGRATIONS` keyed by
 ``(from_version, to_version)``. The registry is empty in v1, so
-:func:`_migrate` short-circuits on a v1 checkpoint. The first entry
-lands when v1.1 needs to migrate v1 saves.
+:func:`_migrate` short-circuits on a v1 checkpoint; an entry is added
+when a breaking schema change is introduced.
 """
 
 import json
@@ -46,7 +46,7 @@ assert OLDEST_SUPPORTED_SCHEMA_VERSION <= CURRENT_SCHEMA_VERSION, (
 )
 
 # Registry: (from_version, to_version) -> migration function.
-# Empty in v1; first entry lands when v1.1 needs to migrate v1 saves.
+# Empty in v1; add an entry when introducing a breaking schema change.
 MIGRATIONS: dict[tuple[int, int], Migration] = {}
 
 _WEIGHTS_FILE = "weights.safetensors"
@@ -63,13 +63,19 @@ def _migrate(weights: WeightDict, state: StateDict) -> tuple[WeightDict, StateDi
     checked and a non-advancing step is rejected.
 
     Raises:
-        PredictionError: The checkpoint schema is newer than this
-            library supports, older than the oldest supported schema,
-            has no registered migration step, or a registered step did
-            not advance ``schema_version``.
+        PredictionError: ``schema_version`` is present but not an int,
+            or the checkpoint schema is newer than this library
+            supports, older than the oldest supported schema, has no
+            registered migration step, or a registered step did not
+            advance ``schema_version``.
     """
-    raw_src = state.get("schema_version", 0)
-    src = raw_src if isinstance(raw_src, int) else 0
+    if "schema_version" in state:
+        raw_src = state["schema_version"]
+        if isinstance(raw_src, bool) or not isinstance(raw_src, int):
+            raise PredictionError(f"checkpoint schema_version must be an int, got {raw_src!r}")
+        src = raw_src
+    else:
+        src = 0
     if src > CURRENT_SCHEMA_VERSION:
         raise PredictionError(
             f"checkpoint schema {src} newer than library "

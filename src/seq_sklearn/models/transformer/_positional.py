@@ -3,6 +3,10 @@
 Two interchangeable encodings: a fixed sinusoidal table (no parameters)
 and a learned per-position embedding. Both add a ``(1, L, d_model)``
 positional signal to a ``(B, L, d_model)`` input.
+
+``TFTBackbone`` deliberately does not use these: the LSTM encoder
+already injects sequence order. They serve the attention-only
+transformer-family backbones (PatchTST / TST) added in v2.
 """
 
 import math

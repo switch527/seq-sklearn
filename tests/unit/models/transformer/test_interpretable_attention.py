@@ -56,6 +56,50 @@ def test_mask_correctness_unpadded_vs_padded() -> None:
         torch.use_deterministic_algorithms(False)
 
 
+def test_fast_path_mask_correctness_unpadded_vs_padded() -> None:
+    # The fast SDPA path wires the mask through a (B, 1, 1, L) broadcast.
+    # A polarity flip or wrong broadcast would silently attend to
+    # padding during fit/predict. Mirror the interpretable-path check on
+    # forward() so the SDPA mask plumbing is exercised directly.
+    torch.use_deterministic_algorithms(True)
+    try:
+        model = InterpretableMultiHeadAttention(hidden_size=8, n_heads=2)
+        model.eval()
+        gen = torch.Generator().manual_seed(13)
+        valid_len = 4
+        total_len = 7
+        entity = torch.randn(1, valid_len, 8, generator=gen)
+
+        padded = torch.zeros(1, total_len, 8)
+        padded[:, total_len - valid_len :, :] = entity
+        pad_mask = torch.ones(1, total_len, dtype=torch.bool)
+        pad_mask[:, total_len - valid_len :] = False
+
+        unpadded_mask = torch.zeros(1, valid_len, dtype=torch.bool)
+        with torch.no_grad():
+            out_unpadded = model(entity, unpadded_mask)
+            out_padded = model(padded, pad_mask)
+        valid_slice = out_padded[:, total_len - valid_len :, :]
+        assert torch.allclose(valid_slice, out_unpadded, atol=1e-6, rtol=0.0)
+    finally:
+        torch.use_deterministic_algorithms(False)
+
+
+def test_fully_masked_query_row_is_zeroed_by_nan_to_num() -> None:
+    # Every key masked -> softmax over all -inf is NaN. The nan_to_num
+    # pass must zero it. Removing that line leaves NaN here, so this
+    # test fails if the guard is deleted.
+    model = InterpretableMultiHeadAttention(hidden_size=8, n_heads=2)
+    model.eval()
+    x = _seeded_input(1, 4, 8, seed=5)
+    mask = torch.ones(1, 4, dtype=torch.bool)  # entire row is padding
+    with torch.no_grad():
+        out, attn = model.forward_interpretable(x, mask)
+    assert not torch.isnan(out).any()
+    assert not torch.isnan(attn).any()
+    assert torch.equal(attn, torch.zeros_like(attn))
+
+
 def test_interpretable_path_has_no_nan_under_mask_invariant() -> None:
     model = InterpretableMultiHeadAttention(hidden_size=8, n_heads=2)
     model.eval()
