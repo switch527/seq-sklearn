@@ -35,12 +35,15 @@ Exact top-to-bottom order. Items 1-6 must sit above the first scroll.
 
 1. **Wordmark / logo**, centered. A simple SVG wordmark is enough.
    Absence reads as immature (19 of 22 studied repos have one).
-2. **Tagline, one sentence.** skorch pattern (API + backend + niche in
-   one breath), differentiator first. Draft:
-   > seq-sklearn is a scikit-learn compatible Temporal Fusion
-   > Transformer for classification and regression on multivariate time
-   > series, with interpretable variable selection and attention built
-   > in.
+2. **Tagline, one sentence.** skorch pattern (API + niche in one
+   breath), differentiator first. The tagline must name the *library*,
+   not the first model; TFT is v1's first concrete model, not the
+   library's identity. Draft:
+   > Modern deep sequence models, as easy to use as scikit-learn: one
+   > fit / predict API for classification and regression on multivariate
+   > time series, across the transformer and recurrent model families.
+   TFT-specific strengths (interpretable variable selection, attention)
+   belong in the v1 features list, not the headline.
 3. **Badge row.** PyPI version, Python versions, License, CI, coverage,
    and a **DOI/Zenodo badge from day one**. The DOI is not decoration:
    a BibTeX + DOI citation loop is the dominant growth mechanic in this

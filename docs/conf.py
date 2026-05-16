@@ -61,15 +61,12 @@ autodoc_member_order = "bysource"
 # green; turn it on (numpydoc_validation_checks) at the v1 docstring pass.
 numpydoc_show_class_members = False
 
-# Heavy or not-yet-importable deps are mocked so Read the Docs builds
-# stay fast and do not break before the package is code-complete.
+# Only the genuinely-optional extras are mocked. Core runtime deps
+# (torch, lightning, optuna, ...) are installed in any docs build
+# environment because Read the Docs installs the package itself, so
+# mocking them would buy nothing and break autodoc signature evaluation
+# on annotations like ``torch.Tensor | None`` (a mock cannot be unioned).
 autodoc_mock_imports = [
-    "torch",
-    "lightning",
-    "pytorch_lightning",
-    "optuna",
-    "optuna_integration",
-    "safetensors",
     "onnx",
     "onnxruntime",
 ]

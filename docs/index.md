@@ -1,14 +1,18 @@
 # seq-sklearn
 
-A scikit-learn compatible Temporal Fusion Transformer for classification
-and regression on multivariate time series, with interpretable variable
-selection and attention built in.
+Modern deep sequence models, as easy to use as scikit-learn: one
+`fit` / `predict` API for classification and regression on multivariate
+time series, across the transformer and recurrent model families.
 
-The published TFT (Lim et al., 2021) and every mature implementation
-target multi-horizon forecasting. seq-sklearn adapts it to ordinary
-supervised classification and regression on tabular panel data, behind
-the standard `fit` / `predict` estimator contract, with the model's
-variable-selection and attention surfaces kept as first-class outputs.
+The sklearn ecosystem stops at shallow tabular models; the deep
+time-series libraries are built for forecasting, a different task. Using
+modern deep sequence models for ordinary supervised classification and
+regression means hand-rolling adapters and trainer wiring. seq-sklearn
+fills that gap behind the standard estimator contract, with one shared
+preprocessing, calibration, and tuning path across every model it ships.
+v1's first model is a Temporal Fusion Transformer (Lim et al., 2021)
+adapted from forecasting to supervised tasks; more transformer and
+recurrent models follow behind the identical API.
 
 ```{warning}
 Pre-implementation. The phase-1 foundation is landing now. The API

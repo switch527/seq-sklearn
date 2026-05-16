@@ -2,9 +2,9 @@
 
 # seq-sklearn
 
-**A scikit-learn compatible Temporal Fusion Transformer for classification
-and regression on multivariate time series, with interpretable variable
-selection and attention built in.**
+**Modern deep sequence models, as easy to use as scikit-learn. One
+`fit` / `predict` API for classification and regression on multivariate
+time series, across the transformer and recurrent model families.**
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue.svg)](pyproject.toml)
@@ -13,46 +13,73 @@ selection and attention built in.**
 
 </div>
 
-The Temporal Fusion Transformer (Lim et al., 2021) is a strong,
-interpretable sequence model, but the published architecture and every
-mature implementation target multi-horizon **forecasting**. Using it for
-ordinary supervised **classification or regression** today means
-hand-rolling a head swap and dozens of lines of dataloader and trainer
-wiring, or bending a forecasting library off-label. seq-sklearn closes
-that gap: a TFT classifier and regressor on tabular panel data, behind
-the standard `fit` / `predict` estimator contract, with the model's
-variable-selection and attention surfaces preserved as first-class
-outputs.
+Sequence learning for ordinary classification and regression is harder
+than it should be. The sklearn ecosystem covers tabular tasks broadly
+but stops at shallow models. The deep-learning libraries that handle
+multivariate time series (pytorch-forecasting, darts, neuralforecast,
+sktime) are built for **forecasting**, a structurally different task,
+and using them off-label for supervised targets means impedance
+mismatch and hundreds of lines of dataloader and trainer wiring.
+
+seq-sklearn fills that gap. It brings modern deep sequence models behind
+the familiar `fit` / `predict` / `predict_proba` estimator contract, so
+they drop into `Pipeline`, `GridSearchCV`, `cross_val_score`, and Optuna
+unchanged. One `TabularToSequence` preprocessing path, one calibration
+story, and one tuning integration are shared across **every** model the
+library ships, spanning the transformer family (TFT, then PatchTST,
+TimesNet, TST) and the recurrent family (LSTM, GRU, LSTM-FCN), with room
+to extend further. You pick the model; the API and the workflow stay the
+same.
 
 ## The gap this fills
 
-The sklearn ecosystem covers tabular classification and regression
-broadly. The forecasting world has solid deep-learning coverage
-(pytorch-forecasting, darts, neuralforecast, sktime). Nothing sits at
-the intersection: **modern deep sequence models used for standard
-supervised tasks, wrapped in the sklearn estimator contract, on tabular
-panel input**. seq-sklearn is built for that intersection, with a shared
-preprocessing pipeline, calibration story, and Optuna integration across
-every model family it will ship.
+```
+            shallow tabular models          deep sequence models
+          +-----------------------+    +---------------------------+
+supervised|  scikit-learn, XGBoost|    |       (the gap)           |
+          |  LightGBM, CatBoost   |    |       seq-sklearn         |
+          +-----------------------+    +---------------------------+
+forecasting|         n/a          |    | pytorch-forecasting,      |
+          |                       |    | darts, neuralforecast     |
+          +-----------------------+    +---------------------------+
+```
+
+Nothing sits at the intersection of **modern deep sequence models** and
+**standard supervised tasks under the sklearn contract** on tabular
+panel input. That is the cell seq-sklearn occupies.
 
 The driving use case is customer-churn prediction on a payments panel.
 The same panel shape works for any entity-by-period problem: customers
-by month, patients by visit, devices by day, sensors by hour.
+by month, patients by visit, devices by day, sensors by hour. The model
+never learns what an entity is; it sees one sequence per entity.
 
 ## Status
 
 Pre-implementation, actively built. The phase-1 foundation (configs,
-serialization, data pipeline, model blocks) is landing now. The full v1
-requirements doc is [`docs/requirements.md`](docs/requirements.md); the
-README and documentation strategy is
+serialization, data pipeline, model blocks) is landing now. The
+library-wide infrastructure (the sklearn API, `TabularToSequence`,
+training, calibration, Optuna) is built once and reused by every model.
+
+**TFT is the first model, not the only one.** v1 ships `TFTClassifier`
+and `TFTRegressor` as a genuine architectural adaptation of the
+forecasting-only Temporal Fusion Transformer (head and loss swapped, not
+a thin wrapper). PatchTST, TimesNet, TST, LSTM, GRU, and LSTM-FCN follow
+in later versions behind the identical API. See the roadmap below.
+
+The full v1 requirements doc is
+[`docs/requirements.md`](docs/requirements.md); the README and
+documentation strategy is
 [`docs/readme_and_docs_plan.md`](docs/readme_and_docs_plan.md).
 
 Star or watch the repo to follow the v1 release.
 
 ## Planned API (not yet released)
 
-This is the target v1 surface. It is shown so the design is legible
-before code-complete; the import will not work until v1 ships.
+This is the target v1 surface. Every model exposes the same
+`<Model>Classifier` / `<Model>Regressor` pair with an identical method
+set, so the snippet below reads the same whichever model you swap in.
+It is shown so the design is legible before code-complete; the import
+will not work until v1 ships.
 
 ```python
 from seq_sklearn import TFTClassifier
@@ -74,7 +101,10 @@ from sklearn.pipeline import Pipeline
 pipe = Pipeline([("clf", TFTClassifier(lookback=12))]).fit(X_train, y_train)
 ```
 
-Interpretability is a returned output, not an afterthought:
+Where a model has introspectable internals, they come back as a typed
+output, not a separate analysis step. TFT exposes variable selection and
+attention; later recurrent models expose their states through the same
+shape:
 
 ```python
 out = clf.predict_with_attention(X_test)     # frozen dataclass
@@ -96,7 +126,8 @@ out.temporal_attention                       # which timesteps mattered
 - pydantic-typed configuration, no hidden hyperparameter defaults in
   model code.
 - Calibrated class probabilities; conformal quantile regression.
-- Interpretable variable-selection and temporal-attention outputs.
+- TFT's interpretable variable-selection and temporal-attention outputs
+  (later models expose their own introspection through the same shape).
 - safetensors + JSON serialization; ONNX export via the optional
   `seq-sklearn[onnx]` extra.
 - Optuna as a first-class tuning integration, including in-training
