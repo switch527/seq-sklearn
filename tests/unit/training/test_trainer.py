@@ -287,7 +287,7 @@ def test_window_time_index_non_monotone_raises() -> None:
     # A future non-TTS caller passing an unordered entity_id must fail
     # loudly here instead of silently corrupting the fold ordinals.
     eids = np.array([0, 1, 0, 1])
-    with pytest.raises(AssertionError, match="monotone"):
+    with pytest.raises(ValueError, match="monotone"):
         Trainer._window_time_index(eids)
 
 
@@ -522,6 +522,39 @@ def test_fit_runs_one_epoch_and_returns_module(
     trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
     module = trainer.fit(object())
     assert module._last_train_output is not None
+
+
+def test_fit_passes_train_idx_not_full_panel_to_class_weights(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Pins the fit() call-site wiring: the index handed to
+    # _class_weights must be the train fold (a strict subset), never
+    # arange(N) over the full panel, so val/cal class balance cannot
+    # leak into the loss weighting (A8 architecture.md:1208).
+    _force_cpu(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    cfg = _config(
+        scheduler=_constant_scheduler(),
+        sampler=SamplerConfig(strategy="class_weighted"),
+    )
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    seen: dict[str, object] = {}
+    original = Trainer._class_weights
+
+    def _spy(self: Trainer, train_idx: np.ndarray, targets: object) -> object:
+        seen["idx"] = np.asarray(train_idx).copy()
+        seen["n_total"] = int(np.asarray(targets).reshape(-1).shape[0])
+        return original(self, train_idx, targets)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Trainer, "_class_weights", _spy)
+    trainer.fit(object())
+
+    idx = seen["idx"]
+    n_total = seen["n_total"]
+    assert isinstance(idx, np.ndarray)
+    assert isinstance(n_total, int)
+    assert len(idx) < n_total  # strict subset: val/cal held out
+    assert not np.array_equal(idx, np.arange(n_total))
 
 
 def test_fit_with_oversample_sampler_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

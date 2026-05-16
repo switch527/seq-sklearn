@@ -1025,9 +1025,10 @@ class _LightningModule(pl.LightningModule):
         self.val_metric_name = val_metric_name
         self.bptt_window = bptt_window
         self._optuna_trial = optuna_trial
-        self._consecutive_nan = 0
         self._pending_prune: tuple[int, float] | None = None
+        self._last_train_output: BackboneOutput | None = None
         self.automatic_optimization = True   # v1 stays on automatic
+        # NaN tracking lives in NaNLossGuard (A7 callbacks), not here.
 
     def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor:
         # ...forward + loss; MUST also store self._last_train_output = backbone_out
@@ -2548,6 +2549,20 @@ Phase 4b (training Claude swarm):
   into a `_ModuleBuildSpec` now is premature abstraction with no second
   consumer (a 2-param seam); revisit if Phase 6 adds a third
   module-construction input.
+- **`_window_time_index` precondition (arch round 3 IMPROVEMENT).**
+  Converted the monotone-`entity_id` `assert` to a `ValueError` raise
+  so `python -O` cannot strip the guard the docstring promises;
+  `test_window_time_index_non_monotone_raises` repointed to
+  `pytest.raises(ValueError)`.
+- **fit() class-weights wiring pinned (qa round 3 IMPROVEMENT).**
+  Added `test_fit_passes_train_idx_not_full_panel_to_class_weights`:
+  spies the index `fit` hands `_class_weights`, asserting it is the
+  train fold (strict subset), not `arange(N)`, so val/cal balance
+  cannot leak into the loss weighting at the call site.
+- **A7 constructor pseudocode sync (round 3 NITPICK).** Dropped the
+  stale `self._consecutive_nan = 0` (NaN tracking is `NaNLossGuard`'s),
+  added `self._last_train_output`, in the A7 `_LightningModule`
+  skeleton so the spec matches the implementation.
 
 ## Deferred
 

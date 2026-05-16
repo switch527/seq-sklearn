@@ -403,15 +403,20 @@ class Trainer:
         ``TabularToSequence.transform`` assigns ``entity_id`` codes in
         batch-emission order via ``enumerate(groupby(..., sort=True))``
         (tabular_to_sequence.py:232-234), making ``entity_id`` monotone
-        non-decreasing across the batch. The precondition is asserted so
-        a future non-TTS caller passing an unordered ``entity_id`` fails
+        non-decreasing across the batch. The precondition is enforced
+        with a raise (not an ``assert``, which ``python -O`` strips) so a
+        future non-TTS caller passing an unordered ``entity_id`` fails
         loudly here instead of silently corrupting the fold ordinals.
+
+        Raises:
+            ValueError: ``entity_ids`` is not monotone non-decreasing.
         """
         if entity_ids.size == 0:
             return np.empty(0, dtype=int)
-        assert bool(np.all(np.diff(entity_ids) >= 0)), (
-            "entity_ids must be monotone non-decreasing; "
-            "TabularToSequence.transform guarantees this by construction"
-        )
+        if not bool(np.all(np.diff(entity_ids) >= 0)):
+            raise ValueError(
+                "entity_ids must be monotone non-decreasing; "
+                "TabularToSequence.transform guarantees this by construction"
+            )
         _values, counts = np.unique(entity_ids, return_counts=True)
         return np.concatenate([np.arange(c) for c in counts])
