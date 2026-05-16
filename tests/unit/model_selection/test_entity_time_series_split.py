@@ -229,17 +229,19 @@ def test_all_entities_dropped_yields_empty() -> None:
 
 
 def test_gap_wider_than_train_segment_empties_train_not_leaks() -> None:
-    # n_splits=2 -> 3 segments; min_rows = 2+1+4+1-1 = 7, so a 7-row
-    # entity is NOT dropped. np.array_split(7, 3) -> [3, 2, 2]; split 0's
-    # train is segment 0 (3 rows) and gap=4 > 3. The negative-slice bug
-    # kept a 2-row prefix (rows inside the gap window leaking into
-    # train); the clamp must empty it instead.
-    panel = _panel(1, 7)
+    # min_rows = 2+1+4+1-1 = 7, so a 7-row entity is NOT dropped.
+    # n_splits=2 -> 3 segments [3,2,2]; split 0's train is 3 rows and
+    # gap=4 > 3, so the clamp must produce an empty train fold. Two
+    # entities show the clamp is per-entity.
+    panel = _panel(2, 7)
     splitter = EntityTimeSeriesSplit(n_splits=2, gap=4, lookback=1)
     splits = list(splitter.split(panel))
     train0, test0 = splits[0]
     assert train0.size == 0
     assert test0.size > 0
+    # Split 1's train segment (segments 0+1, 5 rows) survives the gap;
+    # the clamp must not over-trim later splits.
+    assert splits[1][0].size > 0
     for train_idx, test_idx in splits:
         # lookback=1 -> no history-only overlap; folds must be disjoint.
         assert set(train_idx.tolist()).isdisjoint(test_idx.tolist())

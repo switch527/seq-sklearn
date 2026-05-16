@@ -300,9 +300,9 @@ class TabularToSequence:
                 entity_tv_cat = np.zeros((n_rows, 0), dtype=np.int64)
 
             # Static features are entity-constant (F2), so encode/scale
-            # them once per entity rather than once per window. Per-window
-            # recompute also re-fired the aggregated unseen-category log
-            # for the same static value on every window.
+            # them once per entity rather than once per window. Encoding
+            # inside the window loop would also re-fire the aggregated
+            # unseen-category log once per window for one static value.
             first = group.iloc[0]
             if n_static_cat:
                 static_cat_encoded = self.categorical_encoder_.transform(
