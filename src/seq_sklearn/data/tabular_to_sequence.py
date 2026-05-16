@@ -299,6 +299,31 @@ class TabularToSequence:
             else:
                 entity_tv_cat = np.zeros((n_rows, 0), dtype=np.int64)
 
+            # Static features are entity-constant (F2), so encode/scale
+            # them once per entity rather than once per window. Per-window
+            # recompute also re-fired the aggregated unseen-category log
+            # for the same static value on every window.
+            first = group.iloc[0]
+            if n_static_cat:
+                static_cat_encoded = self.categorical_encoder_.transform(
+                    {c: np.array([first[c]]) for c in cfg.static_categorical_cols}
+                )
+                static_cat = np.array(
+                    [static_cat_encoded[c][0] for c in cfg.static_categorical_cols],
+                    dtype=np.int64,
+                )
+            else:
+                static_cat = np.zeros(0, dtype=np.int64)
+
+            if n_static_real:
+                static_real = self.static_real_scaler_.transform(
+                    np.asarray([[first[c] for c in cfg.static_real_cols]], dtype=float)
+                )[0]
+                if cfg.clip_features is not None:
+                    static_real = np.clip(static_real, -cfg.clip_features, cfg.clip_features)
+            else:
+                static_real = np.zeros(0, dtype=np.float64)
+
             for window_end in range(n_rows):
                 window_start = max(0, window_end - lookback + 1)
                 w_len = window_end - window_start + 1
@@ -319,27 +344,6 @@ class TabularToSequence:
                 mask = np.zeros(lookback, dtype=bool)
                 if pad > 0:
                     mask[:pad] = True
-
-                last = group.iloc[window_end]
-                if n_static_cat:
-                    static_cat_encoded = self.categorical_encoder_.transform(
-                        {c: np.array([last[c]]) for c in cfg.static_categorical_cols}
-                    )
-                    static_cat = np.array(
-                        [static_cat_encoded[c][0] for c in cfg.static_categorical_cols],
-                        dtype=np.int64,
-                    )
-                else:
-                    static_cat = np.zeros(0, dtype=np.int64)
-
-                if n_static_real:
-                    static_real = self.static_real_scaler_.transform(
-                        np.asarray([[last[c] for c in cfg.static_real_cols]], dtype=float)
-                    )[0]
-                    if cfg.clip_features is not None:
-                        static_real = np.clip(static_real, -cfg.clip_features, cfg.clip_features)
-                else:
-                    static_real = np.zeros(0, dtype=np.float64)
 
                 target = float("nan") if below else self._aligned_target(group, window_end)
 

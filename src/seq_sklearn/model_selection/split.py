@@ -168,7 +168,11 @@ class EntityTimeSeriesSplit:
                 segments = np.array_split(sorted_pos, self.n_splits + 1)
                 train_pos = np.concatenate(segments[: split_i + 1])
                 if self.gap > 0:
-                    train_pos = train_pos[: len(train_pos) - self.gap]
+                    # max(0, ...) so a gap wider than the train segment
+                    # empties it. Without the clamp, len-gap goes negative
+                    # and the negative slice keeps a prefix instead,
+                    # leaking gap-window rows into train (A9.1 violation).
+                    train_pos = train_pos[: max(0, len(train_pos) - self.gap)]
                 if self.max_train_size is not None:
                     train_pos = train_pos[-self.max_train_size :]
                 test_segment = segments[split_i + 1]
