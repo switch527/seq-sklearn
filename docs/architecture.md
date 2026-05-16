@@ -765,6 +765,12 @@ Static encoders:
   Per-input embedding / passthrough -> (B, d_input_static)
   Static VSN (one VSN over the static inputs) -> static-selection
     weights + selected vector (B, hidden_size).
+  Empty-side rule: a side with zero variables (no categoricals and no
+    reals, reachable per F2 where static/tv reals are optional) gets
+    one synthetic learned variable (a zero-init nn.Parameter) so the
+    VSN dimensionality is always >= 1. Its selection softmax is then a
+    constant 1.0 and its var-selection entropy a constant 0; F11
+    consumers should expect 0 entropy on a padded side, not a bug.
   Four context vectors via GRN stack, all consumed by the encoder.
   Listed below in the order they are USED by the encoder pipeline
   (the LSTM-init pair is in the (h_0, c_0) order that nn.LSTM
@@ -787,6 +793,12 @@ LSTM encoder:
     lstm(input, (c_h, c_c))
   Variable-length handling via pack_padded_sequence(enforce_sorted=False)
   + pad_packed_sequence. Hidden size = hidden_size. Output (B, L, hidden_size).
+  The F3 data contract left-pads (padding is a leading block); pack
+  consumes the LEADING `length` steps, so each row is gathered
+  valid-first (stable argsort on the mask) before packing and scattered
+  back to its original positions (inverse permutation) after. This
+  left-pad -> pack bridge is the canonical handling; it depends on F3
+  keeping padding a contiguous leading block.
 
 Post-LSTM gating:
   GLU + AddNorm against pre-LSTM VSN output (skip connection).
@@ -809,27 +821,29 @@ Interpretable multi-head self-attention (custom, shared-V):
       out = out_per_head.mean(dim=1)                # average across heads
       out = out_proj(out)                           # (B, L, hidden_size)
 
-  (b) Interpretable path (predict_with_attention only): replaces SDPA
+  (b) Interpretable path (TFTBackbone always uses this): replaces SDPA
       with a manual softmax to capture the per-head score tensor.
       scores = (q @ k.transpose(-2, -1)) / sqrt(d)  # (B, H, L, L)
       scores = scores.masked_fill(~attn_mask_bool[:, None, None, :], -inf)
       attn_weights = scores.softmax(dim=-1)         # (B, H, L, L); post-softmax, pre-V
       # NaN safety: softmax over an all-(-inf) key row produces NaN.
-      # The architecture's mask.any(dim=1).all() check guarantees at
-      # least one valid key per batch element, so this should never
-      # fire. The torch.nan_to_num is defensive belt-and-braces against
-      # an upstream mask bug; it costs one O(BHLL) pass and zeroes any
-      # NaN before it propagates into v_broadcast.
+      # nan_to_num zeros such a row so a fully-masked query contributes
+      # nothing instead of poisoning v_broadcast. The A6
+      # mask.any(dim=1).all() check keeps this off the TFTBackbone path;
+      # direct callers of forward_interpretable are still covered. One
+      # O(BHLL) pass.
       attn_weights = torch.nan_to_num(attn_weights, nan=0.0)
       out_per_head = attn_weights @ v_broadcast     # (B, H, L, d)
       out = out_per_head.mean(dim=1)
       out = out_proj(out)
       attn_weights is returned alongside the output for TransformerBackboneOutput.
 
-  The fast path skips capture entirely; the interpretable path
-  materializes attn_weights once, on demand. predict_with_attention
-  routes through (b); fit / predict / predict_proba route through (a).
-  The shared-V correctness test asserts equality of outputs between
+  TFTBackbone always routes through (b): F11 attention-entropy metrics
+  consume attn_weights every training step, so fit / predict /
+  predict_proba / predict_with_attention all use the interpretable
+  path. The fast path (a) skips capture entirely and is reserved for
+  future family backbones that do not expose per-step attention
+  weights. The shared-V correctness test asserts equality of outputs between
   (a) and (b) on a fixed input within float tolerance.
 
   Mathematically equivalent to a per-head V where all per-head V
@@ -1648,11 +1662,24 @@ may be zero-valued if the model has no VSN.
 introspection tensors to the F11 payloads, applying the
 `padding_mask` so padded timesteps do not corrupt the metrics:
 
+The override takes the base `BackboneOutput` (not the narrower
+`TransformerBackboneOutput`) so it stays Liskov-compatible with
+`BaseBackbone.compute_training_metrics`; pyright strict rejects a
+contravariant parameter narrowing. It narrows internally with an
+`isinstance` check and raises `TypeError` on a non-transformer output,
+which is a programming error since this backbone only ever produces a
+`TransformerBackboneOutput`:
+
 ```python
 # src/seq_sklearn/models/transformer/tft/backbone.py
 def compute_training_metrics(
-    self, output: TransformerBackboneOutput
+    self, output: BackboneOutput
 ) -> dict[str, object]:
+    if not isinstance(output, TransformerBackboneOutput):
+        raise TypeError(
+            "TFTBackbone.compute_training_metrics requires a "
+            f"TransformerBackboneOutput, got {type(output).__name__}"
+        )
     mask = output.padding_mask                          # (B, L); True = padding
     valid = (~mask).float()                             # (B, L); 1 at valid timesteps
     valid_count = valid.sum().clamp_min(1.0)            # scalar; >= 1 per the mask
@@ -1671,11 +1698,13 @@ def compute_training_metrics(
     temporal_h = -(tw * tw.clamp_min(1e-12).log()).sum(dim=-1)  # (B, L)
     temporal_entropy = ((temporal_h * valid).sum() / valid_count).item()
 
-    # entropy_per_head: attention softmax across keys. Padded queries
-    # produce zero attention rows (the nan_to_num pass in the
-    # interpretable path; the SDPA fast path is not used here since
-    # the introspection tensor is populated only on the interpretable
-    # path). Mask padded queries out of the head-wise mean.
+    # entropy_per_head: attention softmax across keys. A padded query
+    # that still has valid keys produces a normal (non-zero, non-NaN)
+    # distribution, NOT a zero row; only an all-keys-masked query would
+    # NaN, which the A6 mask invariant prevents on this path. Padded
+    # queries are therefore excluded explicitly via the valid_h mask,
+    # not assumed zero. The introspection tensor exists only on the
+    # interpretable path (the SDPA fast path is not used here).
     aw = output.attention_weights                       # (B, H, L, L)
     attn_h = -(aw * aw.clamp_min(1e-12).log()).sum(dim=-1)  # (B, H, L)
     # broadcast mask over heads
@@ -1717,7 +1746,14 @@ def on_train_epoch_end(self) -> None:
 
 Four named tests pin this contract. They share a common naming
 convention with the plan to avoid the cross-doc drift the prior
-Gemini pass surfaced:
+Gemini pass surfaced. The two `_LightningModule`-side tests
+(`test_on_train_epoch_end_skips_entropy_when_no_output`,
+`test_on_train_epoch_end_emits_events_from_compute_metrics`) land
+with Phase 4: `_LightningModule` does not exist in Phase 3, so they
+are deferred to the Phase 4 training-loop work. The two backbone-side
+tests (`test_compute_training_metrics_ignores_padded_positions`,
+`test_base_backbone_compute_training_metrics_returns_empty`) are
+delivered in Phase 3.
 
 - `test_on_train_epoch_end_skips_entropy_when_no_output` asserts
   `caplog` contains no entropy records when
@@ -2042,7 +2078,11 @@ note. Source: `docs/research/pytorch.md`.
 
 ```python
 # src/seq_sklearn/serialization.py
-Migration = Callable[[dict, dict], tuple[dict, dict]]
+# PEP-695 aliases; pyright strict rejects bare `dict` in the public
+# Migration signature, so weights and state carry precise element types.
+type WeightDict = dict[str, torch.Tensor]
+type StateDict = dict[str, object]
+type Migration = Callable[[WeightDict, StateDict], tuple[WeightDict, StateDict]]
 
 CURRENT_SCHEMA_VERSION: int = 1
 OLDEST_SUPPORTED_SCHEMA_VERSION: int = 1   # v1 supports only itself
@@ -2053,11 +2093,23 @@ assert OLDEST_SUPPORTED_SCHEMA_VERSION <= CURRENT_SCHEMA_VERSION, \
 # Empty in v1; first entry lands when v1.1 needs to migrate v1 saves.
 MIGRATIONS: dict[tuple[int, int], Migration] = {}
 
-def _migrate(weights: dict, state: dict) -> tuple[dict, dict]:
+def _migrate(weights: WeightDict, state: StateDict) -> tuple[WeightDict, StateDict]:
     """Step the (weights, state) pair forward through MIGRATIONS
     until state['schema_version'] == CURRENT_SCHEMA_VERSION. Raises
     PredictionError if no path exists."""
-    src = state.get("schema_version", 0)
+    # An absent schema_version defaults to 0 (pre-versioning checkpoint,
+    # caught by the too-old branch). A present-but-non-int value is a
+    # corrupt state.json and is rejected distinctly rather than silently
+    # coerced. bool is an int subclass, so reject it too.
+    if "schema_version" in state:
+        raw_src = state["schema_version"]
+        if isinstance(raw_src, bool) or not isinstance(raw_src, int):
+            raise PredictionError(
+                f"checkpoint schema_version must be an int, got {raw_src!r}"
+            )
+        src = raw_src
+    else:
+        src = 0
     if src > CURRENT_SCHEMA_VERSION:
         raise PredictionError(
             f"checkpoint schema {src} newer than library "
@@ -2074,15 +2126,16 @@ def _migrate(weights: dict, state: dict) -> tuple[dict, dict]:
         except KeyError:
             raise PredictionError(
                 f"no migration registered from schema {src} to {src + 1}"
-            )
+            ) from None
         weights, state = step(weights, state)
         post = state.get("schema_version", src)
-        if post <= src:
+        if not isinstance(post, int) or post <= src:
             raise PredictionError(
                 f"migration step ({src}, {src + 1}) did not advance "
-                f"schema_version (got {post}, expected > {src}); the "
-                f"migration callable must mutate state['schema_version'] "
-                f"to a strictly larger value before returning"
+                f"schema_version from schema {src} to {src + 1} "
+                f"(got {post}, expected > {src}); the migration callable "
+                f"must mutate state['schema_version'] to a strictly larger "
+                f"value before returning"
             )
         src = post
     return weights, state
@@ -2111,10 +2164,13 @@ def test_migrate_detects_no_op_registration(monkeypatch):
 `_migrate` advances `state["schema_version"]` by exactly one per
 step, BUT the loop terminates only when `src == CURRENT_SCHEMA_VERSION`.
 A no-op step would not advance `src`, the loop would spin forever.
-The implementation MUST bound the loop by `CURRENT_SCHEMA_VERSION
-- src + 1` iterations and raise `PredictionError("migration step
-(X, Y) did not advance schema_version")` if the post-step value is
-unchanged. This invariant is what the meta-test catches.
+The implementation guarantees termination via a strictly-increasing
+post-step check rather than an explicit iteration counter: each step
+must raise `schema_version` above its entry value, so the loop runs
+at most `CURRENT_SCHEMA_VERSION - src` times and a step that does not
+advance it raises `PredictionError("migration step (X, Y) did not
+advance schema_version ...")`. This invariant is what the meta-test
+catches.
 
 ## A18: Dependencies and version pins
 

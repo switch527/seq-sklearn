@@ -68,7 +68,16 @@ def test_vsn_maps_to_hidden_and_weights(make_tft_config: Callable[..., TFTConfig
     assert torch.allclose(weights.sum(dim=-1), torch.ones(2, 4), atol=1e-5)
 
 
-def test_vsn_mask_correctness(make_tft_config: Callable[..., TFTConfig]) -> None:
+def test_vsn_masking_neutralizes_padded_inputs(
+    make_tft_config: Callable[..., TFTConfig],
+) -> None:
+    # Asserting only valid-slice equality is vacuous: the VSN is
+    # per-timestep independent, so valid outputs never depend on padded
+    # inputs whether or not the masking line exists. The discriminating
+    # property of `x = x * keep` is that padded-position inputs are
+    # neutralized: two batches with identical valid tails but different
+    # non-zero garbage in the padded head must produce bitwise-identical
+    # outputs everywhere. Removing the masking line breaks this.
     torch.use_deterministic_algorithms(True)
     try:
         cfg = make_tft_config(hidden_size=8, attention_heads=2)
@@ -80,24 +89,32 @@ def test_vsn_mask_correctness(make_tft_config: Callable[..., TFTConfig]) -> None
         entity = torch.randn(1, valid_len, 3, 8, generator=gen)
         context = torch.randn(1, 8, generator=gen)
 
-        padded = torch.zeros(1, total_len, 3, 8)
-        padded[:, total_len - valid_len :, :, :] = entity
         pad_mask = torch.ones(1, total_len, dtype=torch.bool)
         pad_mask[:, total_len - valid_len :] = False
         unpadded_mask = torch.zeros(1, valid_len, dtype=torch.bool)
 
+        a = torch.randn(1, total_len, 3, 8, generator=gen)
+        b = torch.randn(1, total_len, 3, 8, generator=gen)
+        a[:, total_len - valid_len :] = entity
+        b[:, total_len - valid_len :] = entity
+
         with torch.no_grad():
-            sel_unpadded, _ = vsn(entity, context, unpadded_mask)
-            sel_padded, _ = vsn(padded, context, pad_mask)
-        valid_slice = sel_padded[:, total_len - valid_len :, :]
-        # The N1 property is non-leakage of padded positions into valid
-        # outputs. The VSN flatten step is a single Linear over the
-        # (B * L, n_vars * hidden) matrix; PyTorch CPU deterministic mode
-        # pins same-shape reproducibility, not cross-shape (L = 4 vs
-        # L = 7) GEMM tiling, so bitwise torch.equal is unachievable here.
-        # A tight allclose verifies the masking property without a false
-        # negative from low-order GEMM-tiling bits.
-        assert torch.allclose(valid_slice, sel_unpadded, atol=1e-6, rtol=0.0)
+            sel_unpadded, w_unpadded = vsn(entity, context, unpadded_mask)
+            sel_a, w_a = vsn(a, context, pad_mask)
+            sel_b, w_b = vsn(b, context, pad_mask)
+
+        # Masking-sensitive: same shape, same mask, different padded
+        # garbage -> identical outputs only if the inputs were zeroed.
+        assert torch.equal(sel_a, sel_b)
+        assert torch.equal(w_a, w_b)
+        # N1 non-leakage: valid slice matches the unpadded reference.
+        # Cross-shape (L = 4 vs L = 7) GEMM tiling is not bit-pinned by
+        # CPU deterministic mode, so a tight allclose is the strongest
+        # achievable check without a false negative from low-order bits.
+        valid_sel = sel_a[:, total_len - valid_len :, :]
+        valid_w = w_a[:, total_len - valid_len :, :]
+        assert torch.allclose(valid_sel, sel_unpadded, atol=1e-6, rtol=0.0)
+        assert torch.allclose(valid_w, w_unpadded, atol=1e-6, rtol=0.0)
     finally:
         torch.use_deterministic_algorithms(False)
 

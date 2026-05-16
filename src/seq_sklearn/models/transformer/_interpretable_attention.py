@@ -11,8 +11,9 @@ forward paths on the same module:
 
 The mask routes through :func:`seq_sklearn.models._attention.to_attn_mask`
 so the ``True = padding`` -> ``True = participate`` flip lives in one
-place. ``predict_with_attention`` uses the interpretable path; fit /
-predict / predict_proba use the fast path.
+place. The fast path exists for callers that need the representation
+only; ``TFTBackbone`` always takes the interpretable path because F11
+attention-entropy metrics consume ``attn_weights`` every training step.
 """
 
 import math
@@ -37,6 +38,10 @@ class InterpretableMultiHeadAttention(nn.Module):
 
     def __init__(self, hidden_size: int, n_heads: int) -> None:
         super().__init__()
+        if hidden_size % n_heads != 0:
+            raise ValueError(
+                f"hidden_size ({hidden_size}) must be divisible by n_heads ({n_heads})"
+            )
         self.hidden_size = hidden_size
         self.n_heads = n_heads
         self.head_dim = hidden_size // n_heads
@@ -74,10 +79,11 @@ class InterpretableMultiHeadAttention(nn.Module):
         """Interpretable path: manual softmax, returns ``(out, attn_weights)``.
 
         ``attn_weights`` is ``(B, H, L, L)``, post-softmax and pre-``V``.
-        A query row whose keys are all masked would softmax to NaN; the
-        A6 ``mask.any(dim=1).all()`` invariant prevents that, and the
-        ``nan_to_num`` pass is a defensive guard against an upstream
-        mask bug.
+        A query row whose keys are all masked softmaxes to NaN; the
+        ``nan_to_num`` pass zeros such rows so a fully-masked query
+        contributes nothing rather than poisoning the output. The A6
+        ``mask.any(dim=1).all()`` invariant keeps this off the
+        ``TFTBackbone`` path; direct callers are still covered.
         """
         q, k, v_broadcast = self._project(x)
         attn_mask_bool = to_attn_mask(padding_mask)  # (B, L); True = participate

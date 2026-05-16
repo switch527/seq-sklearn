@@ -90,3 +90,56 @@ def test_synth_panel_through_tft_backbone_shapes(readout: str) -> None:
     attn_entropy = metrics["train.attention_entropy"]
     assert isinstance(attn_entropy, dict)
     assert len(attn_entropy["entropy_per_head"]) == cfg.attention_heads
+
+
+@pytest.mark.integration
+def test_unseen_category_stays_within_embedding_table() -> None:
+    # Phase 2 -> Phase 3 boundary: TabularToSequence folds unseen levels
+    # to the per-column <unk> at index 0, so the max code is
+    # cardinality - 1 for seen levels and 0 for unseen; the backbone's
+    # embedding table is cardinality + 1 wide. A base mismatch here is a
+    # silent wrong embedding or an opaque index crash, which no
+    # same-side test catches.
+    gen = SyntheticPanelGenerator(
+        target_kind="binary",
+        num_entities=20,
+        periods_per_entity=(5, 20),
+        prediction_step=0,
+        lookback=8,
+        seed=7,
+    )
+    panel, y = gen.generate()
+    tabular = _tabular_config(gen)
+    tts = TabularToSequence(tabular, "binary").fit(panel, y)
+
+    unseen = panel.copy()
+    for col in (*gen.static_categorical_cols, *gen.time_varying_categorical_cols):
+        unseen[col] = unseen[col].astype(object)
+        unseen.loc[unseen.index[0], col] = "__never_seen_at_fit__"
+    batch = tts.transform(unseen)
+
+    sc = batch["static_categorical"]
+    tc = batch["time_varying_categorical"]
+    for j, col in enumerate(gen.static_categorical_cols):
+        assert int(sc[:, j].max()) < tts.cardinalities_[col] + 1
+    for j, col in enumerate(gen.time_varying_categorical_cols):
+        assert int(tc[:, :, j].max()) < tts.cardinalities_[col] + 1
+
+    cfg = TFTConfig(
+        task_type="binary",
+        loss=LossConfig(strategy="cross_entropy"),
+        tabular_config=tabular,
+        hidden_size=16,
+        attention_heads=4,
+    )
+    backbone = TFTBackbone(
+        cfg,
+        static_cat_cardinalities=[tts.cardinalities_[c] for c in gen.static_categorical_cols],
+        tv_cat_cardinalities=[tts.cardinalities_[c] for c in gen.time_varying_categorical_cols],
+        n_static_real=len(gen.static_real_cols),
+        n_tv_real=len(gen.time_varying_real_cols),
+    )
+    backbone.eval()
+    with torch.no_grad():
+        out = backbone.forward(batch)
+    assert not torch.isnan(out.representation).any()
