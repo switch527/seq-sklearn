@@ -98,7 +98,7 @@ class ConformalCalibrator:
                 "quantiles cross on the calibration fold; the quantile "
                 "regressor is likely undertrained for this fold"
             )
-        y = y_true.detach().to(torch.float64).reshape(-1, 1).numpy()
+        y = y_true.to(torch.float64).reshape(-1, 1).numpy()
         residuals = y - pred  # (N, Q)
         offsets = [
             float(np.quantile(residuals[:, j], tau, method="higher"))
@@ -152,7 +152,7 @@ class IsotonicQuantileCalibrator:
     def fit(self, raw_output: Tensor, y_true: Tensor) -> None:
         raw_output, y_true = raw_output.detach().cpu(), y_true.detach().cpu()
         pred = _as_pred_matrix(raw_output, len(self.quantiles), "IsotonicQuantileCalibrator.fit")
-        y = y_true.detach().to(torch.float64).reshape(-1, 1).numpy()
+        y = y_true.to(torch.float64).reshape(-1, 1).numpy()
         residuals = y - pred  # (N, Q)
         n = residuals.shape[0]
         cdf_targets = np.arange(1, n + 1, dtype=np.float64) / n

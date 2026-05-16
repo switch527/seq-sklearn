@@ -2730,10 +2730,37 @@ Phase 5 (Gemini cross-family final-pass):
   `classification.py`, `regression.py`, `threshold.py`, and the
   `_metrics` helpers; `transform` returns a CPU `float64` tensor and
   the A9 `_Calibrator` docstring now pins the CPU-internal +
-  CPU-return contract (Phase 6 owns moving predictions back to its
-  API/device). Pinned by `tests/unit/calibration/test_device.py`
-  (CPU return-tensor + float32-input assertions run everywhere; a
-  `pytest.mark.gpu` CUDA round-trip enforces it where a GPU exists).
+  CPU-return contract (the estimator owns moving predictions back to
+  its API/device). Pinned by `tests/unit/calibration/test_device.py`.
+
+Phase 5 (Gemini-fix re-establishment swarm, round 5):
+
+- **Device-normalization mutation-pinned on the CPU-default runner
+  (qa-opus / arch-sonnet IMPROVEMENT).** The original device tests
+  asserted only CPU-in / CPU-out, which cannot catch a dropped `_cpu`
+  call on a CPU runner (the `pytest.mark.gpu` test is skipped in
+  CPU-only CI). Added `test_transform_detaches_requires_grad_input_cpu_visible`:
+  a `requires_grad` input can only return without a `grad_fn` if the
+  `.detach().cpu()` boundary actually ran, so a dropped `_cpu`
+  regresses loudly in default CI.
+- **`ThresholdTuner` device path now exercised (code-sonnet /
+  qa-sonnet IMPROVEMENT).** It is not a `_Calibrator` so it was absent
+  from `_calibrator_cases()`; added a `requires_grad` CPU test and a
+  CUDA leg in the `pytest.mark.gpu` test. The earlier ledger overclaim
+  ("enforced where a GPU exists") is corrected: the contract is now
+  pinned CPU-visibly for every calibrator and the tuner.
+- **float32 input pinned for the regression calibrators (qa-sonnet
+  IMPROVEMENT).** `test_calibrators_accept_float32_input` is now
+  parametrized over all seven calibrator cases (was classification
+  only), asserting float32 in -> finite float64 out.
+- **Redundant `.detach()` after the `_cpu` boundary removed (code-opus
+  / code-sonnet / arch-sonnet NITPICK).** `_cpu` (and the regression
+  `.detach().cpu()` line) already detaches; the downstream `.detach()`
+  calls were no-ops and removed for clarity.
+- **Review-process labels removed from shipped code (style-sonnet
+  IMPROVEMENT / NITPICK).** The `test_device.py` module docstring no
+  longer names the review tool; the `_cpu` docstring and the gpu-test
+  comment drop "Phase 6" process labels for plain behavioural prose.
 - **Redundant `.astype(float)` dropped from `IsotonicCalibrator.serialize`
   (gemini IMPROVEMENT, rationale corrected).** Gemini claimed
   `ndarray.astype(float)` raises in numpy 2.0; that is false (the repo

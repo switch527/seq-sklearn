@@ -47,11 +47,11 @@ def _cpu(t: Tensor) -> Tensor:
     Calibrators are numpy / sklearn bound, so they are CPU-internal:
     every public ``fit`` / ``transform`` normalizes its input device
     here before any optimizer tensor or ``.numpy()`` call, and returns
-    a CPU tensor. The Phase 6 estimator owns moving predictions back to
-    the device / array form its API needs (``predict_proba`` returns a
-    numpy array anyway). Without this, a CUDA ``raw_output`` from a
-    GPU-trained backbone crashes the fit path (cross-device op or
-    ``Tensor.numpy()`` on CUDA).
+    a CPU tensor. The caller owns moving predictions back to the device
+    / array form its API needs (``predict_proba`` returns a numpy array
+    anyway). Without this, a CUDA ``raw_output`` from a GPU-trained
+    backbone crashes the fit path (cross-device op or ``Tensor.numpy()``
+    on CUDA).
     """
     return t.detach().cpu()
 
@@ -94,7 +94,7 @@ class TemperatureScaling:
         opt = torch.optim.LBFGS([log_t], lr=_LBFGS_LR, max_iter=_LBFGS_MAX_ITER)
         if self.task == "binary":
             x = _as_binary_logits(raw_output)
-            y = y_true.detach().reshape(-1).to(torch.float64)
+            y = y_true.reshape(-1).to(torch.float64)
 
             def closure() -> Tensor:
                 opt.zero_grad()
@@ -102,8 +102,8 @@ class TemperatureScaling:
                 loss.backward()
                 return loss
         else:
-            x = raw_output.detach().to(torch.float64)
-            y = y_true.detach().reshape(-1).long()
+            x = raw_output.to(torch.float64)
+            y = y_true.reshape(-1).long()
 
             def closure() -> Tensor:
                 opt.zero_grad()
@@ -172,7 +172,7 @@ class PlattScaling:
         _require_nonempty(raw_output, "PlattScaling.fit")
         raw_output, y_true = _cpu(raw_output), _cpu(y_true)
         x = _as_binary_logits(raw_output)
-        y = y_true.detach().reshape(-1).to(torch.float64)
+        y = y_true.reshape(-1).to(torch.float64)
         a = torch.ones(1, dtype=torch.float64, requires_grad=True)
         b = torch.zeros(1, dtype=torch.float64, requires_grad=True)
         opt = torch.optim.LBFGS([a, b], lr=_LBFGS_LR, max_iter=_LBFGS_MAX_ITER)
@@ -249,7 +249,7 @@ class IsotonicCalibrator:
             model = self._new_regressor().fit(p, (y == 1).astype(np.float64))
             self._models = [model]
         else:
-            probs = torch_functional.softmax(raw_output.detach().to(torch.float64), dim=1).numpy()
+            probs = torch_functional.softmax(raw_output.to(torch.float64), dim=1).numpy()
             n_classes = probs.shape[1]
             self._models = [
                 self._new_regressor().fit(probs[:, k], (y == k).astype(np.float64))
