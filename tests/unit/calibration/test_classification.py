@@ -133,6 +133,30 @@ def test_temperature_json_roundtrip_byte_equal(task: str) -> None:
     assert torch.equal(cal.transform(logits), restored.transform(logits))
 
 
+def test_platt_and_isotonic_emit_calibration_fit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # F11:1201: each classification strategy emits calibration.fit with
+    # the ece payload. Temperature is covered above; pin Platt + Isotonic
+    # so their own emit_calibration_fit wiring (strategy string, cal_size
+    # source) is verified, not just the shared helper.
+    logits, y = _binary_data(40)
+    for cal, strategy in (
+        (PlattScaling(), "platt"),
+        (IsotonicCalibrator("binary"), "isotonic"),
+    ):
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger=_CAL):
+            cal.fit(logits, y)
+        fit = [r for r in caplog.records if r.event == Event.CALIBRATION_FIT]
+        small = [r for r in caplog.records if r.event == Event.CALIBRATION_SMALL_SET]
+        assert len(fit) == 1
+        assert fit[0].payload["strategy"] == strategy
+        assert set(fit[0].payload) == {"strategy", "cal_size", "pre_ece", "post_ece"}
+        assert fit[0].payload["cal_size"] == 40
+        assert len(small) == 1  # 40 < 100
+
+
 # --- PlattScaling --------------------------------------------------------
 
 

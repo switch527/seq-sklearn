@@ -97,12 +97,19 @@ def test_conformal_single_quantile_skips_monotone_check() -> None:
     assert cal.transform(pred).shape == (50, 1)
 
 
-def test_conformal_transform_shape_mismatch_raises() -> None:
+@pytest.mark.parametrize(
+    "bad",
+    [
+        torch.zeros(10, 2, dtype=torch.float64),  # wrong column count
+        torch.zeros(10, dtype=torch.float64),  # 1-D: ndim != 2 disjunct
+    ],
+)
+def test_conformal_transform_shape_mismatch_raises(bad: torch.Tensor) -> None:
     pred, y = _reg_data()
     cal = ConformalCalibrator(_Q)
     cal.fit(pred, y)
     with pytest.raises(ValueError, match="shape"):
-        cal.transform(torch.zeros(10, 2, dtype=torch.float64))
+        cal.transform(bad)
 
 
 def test_conformal_before_fit_errors() -> None:
