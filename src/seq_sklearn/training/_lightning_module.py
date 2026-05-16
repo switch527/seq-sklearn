@@ -38,10 +38,14 @@ from lightning.pytorch.utilities.types import (
 )
 from torch import Tensor, nn, optim
 
+from seq_sklearn.errors import TrainingError
 from seq_sklearn.logging import Event, emit
 from seq_sklearn.models._backbone import BackboneOutput, BaseBackbone
 
 __all__ = ["_LightningModule"]
+
+# F9: three consecutive non-finite (NaN/inf) loss steps abort the run.
+_NAN_ABORT_LIMIT = 3
 
 
 class _LightningModule(pl.LightningModule):
@@ -76,6 +80,7 @@ class _LightningModule(pl.LightningModule):
         self._optuna_trial = optuna_trial
         self._pending_prune: tuple[int, float] | None = None
         self._last_train_output: BackboneOutput | None = None
+        self._consecutive_nan = 0
         self._logger = logging.getLogger("seq_sklearn.training")
         self.automatic_optimization = True
 
@@ -91,11 +96,69 @@ class _LightningModule(pl.LightningModule):
         loss_value: Tensor = self.loss(logits, batch["target"])
         return loss_value, backbone_out
 
-    def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor:  # noqa: ARG002
-        """Forward + loss; stash the backbone output for A15 delegation."""
+    def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor | None:  # noqa: ARG002
+        """Forward + loss; enforce the F9 non-finite-loss skip contract.
+
+        F9 requires a single NaN/inf loss step to skip with no gradient
+        update. Under ``automatic_optimization=True`` the only mechanism
+        that actually skips backward + ``optimizer.step()`` is returning
+        ``None`` from this hook (a post-hoc callback fires after the
+        optimizer step and cannot skip it). On a non-finite loss this
+        emits ``train.nan_step_skipped`` and returns ``None``; the third
+        consecutive non-finite step aborts with ``TrainingError`` per F9.
+        A finite step resets the counter and stashes the backbone output
+        for the A15 delegation.
+
+        Raises:
+            TrainingError: three consecutive non-finite loss steps.
+        """
         loss_value, backbone_out = self._forward(batch)
+        if not bool(torch.isfinite(loss_value).all()):
+            self._consecutive_nan += 1
+            emit(
+                self._logger,
+                Event.TRAIN_NAN_STEP_SKIPPED,
+                level=logging.WARNING,
+                step=self.global_step,
+                consecutive_nan_count=self._consecutive_nan,
+            )
+            if self._consecutive_nan >= _NAN_ABORT_LIMIT:
+                emit(
+                    self._logger,
+                    Event.TRAIN_NAN_STEP_SKIPPED,
+                    level=logging.ERROR,
+                    step=self.global_step,
+                    consecutive_nan_count=self._consecutive_nan,
+                    aborting=True,
+                )
+                raise TrainingError(
+                    f"{_NAN_ABORT_LIMIT} consecutive non-finite loss steps; "
+                    "aborting per F9 (try precision='32-true' or a lower "
+                    "learning rate)"
+                )
+            return None
+        self._consecutive_nan = 0
         self._last_train_output = backbone_out
+        self.log("train_loss", loss_value, on_step=False, on_epoch=True)
         return loss_value
+
+    def on_before_optimizer_step(self, optimizer: optim.Optimizer) -> None:
+        """Emit ``train.grad_norm`` (F11) before each optimizer step.
+
+        DEBUG, every step, payload ``step`` / ``grad_norm`` / ``lr``. The
+        2-norm is over the post-backward gradients; a NaN/inf step never
+        reaches here because :meth:`training_step` returned ``None``.
+        """
+        grads = [p.grad.detach().norm(2) for p in self.parameters() if p.grad is not None]
+        grad_norm = float(torch.norm(torch.stack(grads), 2)) if grads else 0.0
+        emit(
+            self._logger,
+            Event.TRAIN_GRAD_NORM,
+            level=logging.DEBUG,
+            step=self.global_step,
+            grad_norm=grad_norm,
+            lr=float(optimizer.param_groups[0]["lr"]),
+        )
 
     def validation_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor:  # noqa: ARG002
         """Forward + loss; log ``val_metric_name`` for the Optuna / ES hooks.
@@ -133,6 +196,18 @@ class _LightningModule(pl.LightningModule):
             if self._optuna_trial.should_prune():
                 self._pending_prune = (self.current_epoch, val_metric.item())
 
+    def _metric(self, name: str) -> float | None:
+        """Read a logged metric from ``callback_metrics`` as a float.
+
+        Returns ``None`` when the metric is absent (e.g. validation has
+        not run for this epoch), so the ``train.epoch`` payload carries
+        an explicit null rather than a stale or fabricated value.
+        """
+        value = self.trainer.callback_metrics.get(name)
+        if isinstance(value, torch.Tensor):
+            return float(value.item())
+        return None
+
     def on_train_epoch_end(self) -> None:
         """Emit train.epoch + the A15 metric events, then the deferred prune.
 
@@ -147,7 +222,14 @@ class _LightningModule(pl.LightningModule):
                 structured-log events fire first.
         """
         if self._last_train_output is not None:
-            emit(self._logger, Event.TRAIN_EPOCH, epoch=self.current_epoch)
+            emit(
+                self._logger,
+                Event.TRAIN_EPOCH,
+                epoch=self.current_epoch,
+                train_loss=self._metric("train_loss"),
+                val_loss=self._metric("val_loss"),
+                val_metric=self._metric(self.val_metric_name),
+            )
             payloads = self.backbone.compute_training_metrics(self._last_train_output)
             for event_name, payload in payloads.items():
                 emit(

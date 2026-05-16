@@ -1,9 +1,11 @@
 """Lightning callbacks (per architecture A7 / requirements F9 / N4).
 
-Four callbacks the Trainer attaches:
+Three callbacks the Trainer attaches. The F9 non-finite-loss skip and
+the three-consecutive-step abort live in
+``_LightningModule.training_step`` (the only place that can skip a
+gradient update under ``automatic_optimization``; a post-hoc callback
+fires after ``optimizer.step()`` and cannot skip it):
 
-* :class:`NaNLossGuard` aborts after three consecutive NaN training
-  losses (F9).
 * :class:`GradScalerWatchdog` aborts after three consecutive
   ``GradScaler`` scale decreases under mixed precision (F9); a no-op
   when no scaler is present (CPU, bf16-mixed, fp32).
@@ -32,14 +34,12 @@ from seq_sklearn.logging import Event, emit
 __all__ = [
     "EventEmitter",
     "GradScalerWatchdog",
-    "NaNLossGuard",
     "RngStateCallback",
 ]
 
 logger = logging.getLogger(__name__)
 
 _RNG_KEY = "seq_sklearn_rng"
-_NAN_LIMIT = 3
 _SCALE_DECREASE_LIMIT = 3
 
 
@@ -60,54 +60,6 @@ class EventEmitter(Callback):
     def emit(self, event: Event, level: int = logging.INFO, **payload: Any) -> None:
         """Emit a structured record for ``event`` with ``payload``."""
         emit(self._logger, event, level=level, **payload)
-
-
-class NaNLossGuard(Callback):
-    """Abort training after three consecutive NaN losses (F9).
-
-    Lightning passes the scalar loss returned by ``training_step`` as
-    ``outputs`` when ``automatic_optimization=True``. A NaN increments
-    an internal counter and emits ``train.nan_step_skipped``; the third
-    consecutive NaN raises :class:`TrainingError` with the offending
-    ``batch_idx`` in the log payload. A non-NaN step resets the counter.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._consecutive = 0
-        self._emitter = EventEmitter()
-
-    def on_train_batch_end(
-        self,
-        trainer: Trainer,  # noqa: ARG002
-        pl_module: LightningModule,  # noqa: ARG002
-        outputs: torch.Tensor | Mapping[str, Any] | None,
-        batch: Any,  # noqa: ARG002
-        batch_idx: int,
-    ) -> None:
-        """Track consecutive NaN losses; raise on the third."""
-        is_nan = isinstance(outputs, torch.Tensor) and bool(torch.isnan(outputs).any())
-        if not is_nan:
-            self._consecutive = 0
-            return
-        self._consecutive += 1
-        self._emitter.emit(
-            Event.TRAIN_NAN_STEP_SKIPPED,
-            batch_idx=batch_idx,
-            consecutive=self._consecutive,
-        )
-        if self._consecutive >= _NAN_LIMIT:
-            self._emitter.emit(
-                Event.TRAIN_NAN_STEP_SKIPPED,
-                level=logging.ERROR,
-                batch_idx=batch_idx,
-                consecutive=self._consecutive,
-                aborting=True,
-            )
-            raise TrainingError(
-                f"{_NAN_LIMIT} consecutive NaN training steps; aborting "
-                f"per F9 (batch_idx={batch_idx})"
-            )
 
 
 class GradScalerWatchdog(Callback):

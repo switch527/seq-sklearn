@@ -29,7 +29,6 @@ from seq_sklearn.hardware import HardwareTier
 from seq_sklearn.training.callbacks import (
     EventEmitter,
     GradScalerWatchdog,
-    NaNLossGuard,
     RngStateCallback,
 )
 from seq_sklearn.training.trainer import Trainer, _TensorDictDataset
@@ -107,12 +106,16 @@ def test_build_pl_trainer_attaches_a7_callbacks(
     for expected in (
         EarlyStopping,
         ModelCheckpoint,
-        NaNLossGuard,
         GradScalerWatchdog,
         EventEmitter,
         RngStateCallback,
     ):
         assert expected in kinds
+    # F9 NaN-skip moved into _LightningModule.training_step; no
+    # NaNLossGuard callback (a post-hoc callback cannot skip the step).
+    from seq_sklearn.training import callbacks as _cb
+
+    assert not hasattr(_cb, "NaNLossGuard")
     assert pl_trainer.logger is None
     assert "32-true" in str(pl_trainer.precision_plugin.precision)
 

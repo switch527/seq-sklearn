@@ -25,7 +25,6 @@ from seq_sklearn.logging import Event
 from seq_sklearn.training.callbacks import (
     EventEmitter,
     GradScalerWatchdog,
-    NaNLossGuard,
     RngStateCallback,
 )
 from tests._test_models._dummy_modules import (
@@ -48,61 +47,6 @@ class _ScaffoldModule(LightningModule):
 @pytest.fixture
 def module() -> _ScaffoldModule:
     return _ScaffoldModule()
-
-
-# --- NaNLossGuard (N1 Variant A) ---------------------------------------
-
-
-def test_nan_guard_three_consecutive_raise_with_batch_idx(
-    module: _ScaffoldModule, caplog: pytest.LogCaptureFixture
-) -> None:
-    guard = NaNLossGuard()
-    trainer = MagicMock()
-    nan = torch.tensor(float("nan"))
-
-    with caplog.at_level(logging.INFO, logger="seq_sklearn.training"):
-        guard.on_train_batch_end(trainer, module, nan, {}, batch_idx=0)
-        guard.on_train_batch_end(trainer, module, nan, {}, batch_idx=1)
-        with pytest.raises(TrainingError, match=r"3 consecutive NaN"):
-            guard.on_train_batch_end(trainer, module, nan, {}, batch_idx=2)
-
-    skip_records = [r for r in caplog.records if r.event == Event.TRAIN_NAN_STEP_SKIPPED]
-    # Three per-step INFO records (consecutive 1, 2, 3) plus one ERROR
-    # abort record. A bug that emits only on the abort step would fail
-    # this rather than pass a non-empty-list check.
-    assert len(skip_records) == 4
-    info = [r for r in skip_records if r.levelno == logging.INFO]
-    assert [r.payload["consecutive"] for r in info] == [1, 2, 3]
-    assert [r.payload["batch_idx"] for r in info] == [0, 1, 2]
-    abort = [r for r in skip_records if r.payload.get("aborting")]
-    assert len(abort) == 1
-    assert abort[0].payload["batch_idx"] == 2
-    assert abort[0].payload["consecutive"] == 3
-    assert abort[0].levelno == logging.ERROR
-
-
-def test_nan_guard_non_nan_resets_counter(module: _ScaffoldModule) -> None:
-    guard = NaNLossGuard()
-    trainer = MagicMock()
-    nan = torch.tensor(float("nan"))
-    good = torch.tensor(0.5)
-
-    guard.on_train_batch_end(trainer, module, nan, {}, batch_idx=0)
-    guard.on_train_batch_end(trainer, module, nan, {}, batch_idx=1)
-    guard.on_train_batch_end(trainer, module, good, {}, batch_idx=2)
-    # Counter reset; two more NaNs must not trip the limit.
-    guard.on_train_batch_end(trainer, module, nan, {}, batch_idx=3)
-    guard.on_train_batch_end(trainer, module, nan, {}, batch_idx=4)
-
-
-def test_nan_guard_non_tensor_outputs_is_treated_as_non_nan(
-    module: _ScaffoldModule,
-) -> None:
-    """A Mapping / None `outputs` resets the counter (no NaN to read)."""
-    guard = NaNLossGuard()
-    trainer = MagicMock()
-    guard.on_train_batch_end(trainer, module, {"loss": 1.0}, {}, batch_idx=0)
-    guard.on_train_batch_end(trainer, module, None, {}, batch_idx=1)
 
 
 # --- GradScalerWatchdog ------------------------------------------------

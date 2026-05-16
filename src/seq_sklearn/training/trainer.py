@@ -45,7 +45,6 @@ from seq_sklearn.training._precision import resolve_precision
 from seq_sklearn.training.callbacks import (
     EventEmitter,
     GradScalerWatchdog,
-    NaNLossGuard,
     RngStateCallback,
 )
 from seq_sklearn.training.losses import build_loss
@@ -277,7 +276,6 @@ class Trainer:
                 patience=self.config.early_stopping_patience,
             ),
             ModelCheckpoint(save_last=True, save_top_k=1, monitor=self._val_metric_name),
-            NaNLossGuard(),
             GradScalerWatchdog(),
             EventEmitter(),
             RngStateCallback(),

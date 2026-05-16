@@ -98,7 +98,7 @@ src/seq_sklearn/
     _lightning_module.py            _LightningModule
     _determinism.py                 enable_strict_mode() (N4)
     _precision.py                   resolve_precision(tier, requested) (N5)
-    callbacks.py                    NaNLossGuard, GradScalerWatchdog, EventEmitter, RngStateCallback
+    callbacks.py                    GradScalerWatchdog, EventEmitter, RngStateCallback
     losses.py                       build_loss() dispatch (F5)
     optimizers.py                   build_optimizer() (F5)
     schedulers.py                   build_scheduler() (F5)
@@ -988,9 +988,9 @@ STABLE.
      `torch.use_deterministic_algorithms(True)` but does NOT set
      `cudnn.benchmark=False` or `CUBLAS_WORKSPACE_CONFIG`).
    - callbacks: `EarlyStopping`, `ModelCheckpoint(save_last=True,
-     save_top_k=1)`, `NaNLossGuard`, `GradScalerWatchdog` (mixed
-     precision only), `EventEmitter`, `RngStateCallback`. Source:
-     `docs/research/lightning.md`.
+     save_top_k=1)`, `GradScalerWatchdog` (mixed precision only),
+     `EventEmitter`, `RngStateCallback`. The F9 non-finite-loss skip
+     is NOT a callback (see below). Source: `docs/research/lightning.md`.
    - logger: pass-through. The library does NOT register a default
      logger; Lightning auto-attaches `TensorBoardLogger` unless
      explicitly suppressed. The Trainer passes `logger=False` by
@@ -1027,11 +1027,23 @@ class _LightningModule(pl.LightningModule):
         self._optuna_trial = optuna_trial
         self._pending_prune: tuple[int, float] | None = None
         self._last_train_output: BackboneOutput | None = None
+        self._consecutive_nan = 0
         self.automatic_optimization = True   # v1 stays on automatic
-        # NaN tracking lives in NaNLossGuard (A7 callbacks), not here.
+        # F9 non-finite-loss skip + 3-step abort live in training_step
+        # (a post-hoc callback fires after optimizer.step()).
 
-    def training_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor:
-        # ...forward + loss; MUST also store self._last_train_output = backbone_out
+    def training_step(self, batch, batch_idx) -> Tensor | None:
+        # forward + loss. F9: if the loss is non-finite (NaN OR inf),
+        # emit train.nan_step_skipped and RETURN None so Lightning
+        # skips backward + optimizer.step() (no gradient update); the
+        # 3rd consecutive non-finite step raises TrainingError. On a
+        # finite step: reset the counter, store
+        # self._last_train_output = backbone_out, self.log("train_loss"),
+        # return the loss.
+        # on_before_optimizer_step emits train.grad_norm (F11, DEBUG,
+        # every step: step/grad_norm/lr). on_train_epoch_end emits
+        # train.epoch with the full F11 payload
+        # (epoch/train_loss/val_loss/val_metric from callback_metrics).
         ...
 
     def validation_step(self, batch: dict[str, Tensor], batch_idx: int) -> Tensor:
@@ -1138,17 +1150,22 @@ real Trainer is needed.
 
 **Callbacks**:
 
-- **`NaNLossGuard`** implements `on_train_batch_end(trainer, pl_module,
-  outputs, batch, batch_idx)`. Lightning passes `outputs` as the
-  scalar tensor returned by `training_step` when
-  `automatic_optimization=True`; the callback checks
-  `torch.isnan(outputs)`. On a NaN, increments an internal counter and
-  emits `train.nan_step_skipped` at INFO with the running `consecutive`
-  count. On the third consecutive NaN, emits a second
-  `train.nan_step_skipped` at ERROR with `aborting=True` before raising
-  `TrainingError("3 consecutive NaN training steps; aborting per F9")`
-  with the offending `batch_idx` in the log payload. A non-NaN step
-  resets the counter to zero.
+- **F9 non-finite-loss skip (in `_LightningModule.training_step`, NOT
+  a callback).** F9 requires a single NaN/inf loss step to skip with
+  no gradient update. Under `automatic_optimization=True` the only
+  mechanism that actually skips backward + `optimizer.step()` is
+  returning `None` from `training_step`; a `Callback.on_train_batch_end`
+  fires AFTER the optimizer step and cannot skip it (this was a
+  Gemini-final-pass CRITICAL: the earlier `NaNLossGuard` callback
+  counted but never skipped, so F9's "no gradient update" was
+  violated). `training_step` therefore checks
+  `torch.isfinite(loss).all()`: on a non-finite loss it increments
+  `self._consecutive_nan`, emits `train.nan_step_skipped` at WARNING
+  with the F11 payload (`step`, `consecutive_nan_count`), and returns
+  `None`; the third consecutive non-finite step emits at ERROR with
+  `aborting=True` and raises `TrainingError`. A finite step resets the
+  counter, stashes `_last_train_output`, logs `train_loss`, and returns
+  the loss. `NaNLossGuard` is removed (it could not satisfy F9).
 - **`GradScalerWatchdog`** (mixed precision only) implements
   `on_train_batch_end`. Defensively checks
   `hasattr(trainer.precision_plugin, "scaler")` and is a no-op when
@@ -2560,9 +2577,40 @@ Phase 4b (training Claude swarm):
   train fold (strict subset), not `arange(N)`, so val/cal balance
   cannot leak into the loss weighting at the call site.
 - **A7 constructor pseudocode sync (round 3 NITPICK).** Dropped the
-  stale `self._consecutive_nan = 0` (NaN tracking is `NaNLossGuard`'s),
-  added `self._last_train_output`, in the A7 `_LightningModule`
-  skeleton so the spec matches the implementation.
+  stale `self._consecutive_nan = 0`, added `self._last_train_output`,
+  in the A7 `_LightningModule` skeleton so the spec matches the
+  implementation. (NaN ownership later moved to `training_step`; see
+  the Gemini-final-pass block below.)
+
+Phase 4 (Gemini final-pass):
+
+- **F9 non-finite-loss step is now actually skipped (gemini C1).**
+  Gemini's cross-family pass found a real F9 violation 6 Claude
+  rounds missed: `training_step` returned the loss unconditionally and
+  `NaNLossGuard.on_train_batch_end` only counted post-hoc, so a single
+  NaN/inf loss still ran backward + `optimizer.step()` (weights
+  poisoned) because the callback fires after the optimizer step. F9
+  requires single NaN steps to skip with no gradient update. Moved the
+  non-finite skip + 3-consecutive abort into `training_step` (returns
+  `None` so Lightning skips the update; broadened NaN -> non-finite to
+  also catch mixed-precision `inf`); removed the `NaNLossGuard`
+  callback (it is structurally unable to satisfy F9) and its Phase 4a
+  tests; A7 reconciled. The earlier "NaNLossGuard callback hook (qa
+  r1-C2)" / "scheduler-factory curry / NaNLossGuard ERROR emit"
+  Addressed entries are superseded by this.
+- **F11 `train.grad_norm` now emitted (gemini C3).** Added
+  `on_before_optimizer_step` emitting `train.grad_norm` at DEBUG every
+  step with the F11 payload (`step`, `grad_norm`, `lr`); the event was
+  in the enum but never emitted.
+- **F11 `train.epoch` payload completed (gemini C2).** The event was
+  emitted with only `epoch`; F11:1195 requires `epoch`, `train_loss`,
+  `val_loss`, `val_metric`. `training_step` now logs `train_loss` and
+  `on_train_epoch_end` reads `train_loss`/`val_loss`/`val_metric` from
+  `callback_metrics` (None when absent, e.g. validation not yet run).
+- **DEFERRED, DataLoader sampler branch (gemini NITPICK).** Cosmetic
+  `sampler is None` branch in `fit`; `sampler or SubsetRandomSampler(...)`
+  would collapse it. Left as-is: two explicit branches read clearer
+  than an `or`-defaulted sampler and the duplication is two lines.
 
 ## Deferred
 
@@ -2868,8 +2916,10 @@ Phase 4a (training Claude swarm):
 - **Loss-module NaN/inf-input test (arch-opus r1-I3).** Deferred:
   out of scope by design. F2/F3 own NaN-in-features (raise
   `DataContractError` at the data-contract layer, requirements.md
-  1113-1124); runtime NaN-loss is `NaNLossGuard`'s job (the
-  3-consecutive guard, tested and mutation-verified). The loss
+  1113-1124); runtime NaN-loss is `_LightningModule.training_step`'s
+  job per F9 (the non-finite skip + 3-consecutive abort; superseded
+  the `NaNLossGuard` callback in the Gemini-final-pass reconciliation).
+  The loss
   modules in `losses.py` are deliberately not input validators under
   the F5 design, so a NaN-input-raises test there would assert a
   contract the spec assigns elsewhere.

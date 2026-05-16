@@ -84,6 +84,9 @@ def make_test_module(
     mock_trainer.callback_metrics = {"val_loss": torch.tensor(0.5)}
     mock_trainer.current_epoch = 0
     mod._trainer = mock_trainer
+    # No real Lightning loop here; self.log would have no results sink.
+    # Tests asserting log kwargs override this with a capturing stub.
+    mod.log = MagicMock()  # type: ignore[method-assign]
     return mod
 
 
@@ -148,6 +151,122 @@ def test_on_train_epoch_end_emits_every_metric_event(
     assert hidden[0].payload == {"mean_norm": 2.0}
 
 
+# --- F9 non-finite-loss skip (training_step owns it; no callback) ------
+
+
+class _ConstLoss(torch.nn.Module):
+    """Loss returning a fixed scalar (NaN / inf / finite) for F9 tests."""
+
+    def __init__(self, value: float) -> None:
+        super().__init__()
+        self._value = value
+
+    def forward(self, *_: object) -> Tensor:
+        return torch.tensor(self._value, requires_grad=True)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_training_step_skips_non_finite_loss(bad: float, caplog: pytest.LogCaptureFixture) -> None:
+    # F9: a single non-finite loss skips the step (return None ->
+    # Lightning applies no gradient update) and emits the F11 event.
+    module = make_test_module(loss=_ConstLoss(bad))
+    with caplog.at_level(logging.WARNING, logger="seq_sklearn.training"):
+        out = module.training_step(_batch(), batch_idx=0)
+    assert out is None
+    assert module._last_train_output is None  # not stashed on a skip
+    skipped = [r for r in caplog.records if r.event == Event.TRAIN_NAN_STEP_SKIPPED]
+    assert len(skipped) == 1
+    assert skipped[0].levelno == logging.WARNING
+    assert skipped[0].payload["consecutive_nan_count"] == 1
+    assert "step" in skipped[0].payload
+
+
+def test_training_step_three_consecutive_non_finite_aborts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from seq_sklearn.errors import TrainingError
+
+    module = make_test_module(loss=_ConstLoss(float("nan")))
+    with caplog.at_level(logging.WARNING, logger="seq_sklearn.training"):
+        assert module.training_step(_batch(), batch_idx=0) is None
+        assert module.training_step(_batch(), batch_idx=1) is None
+        with pytest.raises(TrainingError, match=r"3 consecutive non-finite"):
+            module.training_step(_batch(), batch_idx=2)
+    abort = [
+        r
+        for r in caplog.records
+        if r.event == Event.TRAIN_NAN_STEP_SKIPPED and r.payload.get("aborting")
+    ]
+    assert len(abort) == 1
+    assert abort[0].levelno == logging.ERROR
+    assert abort[0].payload["consecutive_nan_count"] == 3
+
+
+def test_training_step_finite_resets_consecutive_counter() -> None:
+    from seq_sklearn.errors import TrainingError
+
+    module = make_test_module()
+    nan_loss = _ConstLoss(float("nan"))
+    module.loss = nan_loss
+    assert module.training_step(_batch(), batch_idx=0) is None
+    assert module.training_step(_batch(), batch_idx=1) is None
+    module.loss = _LossReturningScalar()  # finite -> resets the counter
+    assert module.training_step(_batch(), batch_idx=2) is not None
+    assert module._consecutive_nan == 0
+    module.loss = nan_loss
+    # Counter was reset: two more NaNs do not trip the 3-abort...
+    assert module.training_step(_batch(), batch_idx=3) is None
+    assert module.training_step(_batch(), batch_idx=4) is None
+    # ...the third consecutive (post-reset) does.
+    with pytest.raises(TrainingError):
+        module.training_step(_batch(), batch_idx=5)
+
+
+def test_training_step_finite_stashes_output_and_returns_loss() -> None:
+    module = make_test_module()
+    out = module.training_step(_batch(), batch_idx=0)
+    assert out is not None
+    assert module._last_train_output is not None
+    assert module._consecutive_nan == 0
+
+
+def test_on_before_optimizer_step_emits_grad_norm(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # F11: train.grad_norm at DEBUG every step, payload step/grad_norm/lr.
+    module = make_test_module()
+    opt = torch.optim.SGD(module.parameters(), lr=0.05)
+    param = next(module.parameters())
+    param.grad = torch.ones_like(param)
+    with caplog.at_level(logging.DEBUG, logger="seq_sklearn.training"):
+        module.on_before_optimizer_step(opt)
+    rec = [r for r in caplog.records if r.event == Event.TRAIN_GRAD_NORM]
+    assert len(rec) == 1
+    assert rec[0].levelno == logging.DEBUG
+    assert set(rec[0].payload) == {"step", "grad_norm", "lr"}
+    assert rec[0].payload["lr"] == pytest.approx(0.05)
+    assert rec[0].payload["grad_norm"] > 0.0
+
+
+def test_on_train_epoch_end_train_epoch_payload_has_f11_keys(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # F11:1195 train.epoch payload: epoch, train_loss, val_loss, val_metric.
+    module = make_test_module()
+    module.trainer.callback_metrics = {
+        "train_loss": torch.tensor(0.4),
+        "val_loss": torch.tensor(0.6),
+    }
+    module.training_step(_batch(), batch_idx=0)
+    with caplog.at_level(logging.INFO, logger="seq_sklearn.training"):
+        module.on_train_epoch_end()
+    epoch_rec = [r for r in caplog.records if r.event == Event.TRAIN_EPOCH]
+    assert len(epoch_rec) == 1
+    assert set(epoch_rec[0].payload) == {"epoch", "train_loss", "val_loss", "val_metric"}
+    assert epoch_rec[0].payload["train_loss"] == pytest.approx(0.4)
+    assert epoch_rec[0].payload["val_loss"] == pytest.approx(0.6)
+
+
 def test_on_train_epoch_end_deferred_prune_raises_after_logging(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
@@ -180,6 +299,7 @@ def test_on_train_epoch_end_deferred_prune_raises_after_logging(
 def test_training_step_stashes_backbone_output() -> None:
     module = make_test_module()
     loss = module.training_step(_batch(), batch_idx=0)
+    assert loss is not None
     assert loss.requires_grad
     assert isinstance(module._last_train_output, BackboneOutput)
 
