@@ -120,6 +120,12 @@ def save_weights_and_state(
     Creates ``path`` (and parents) if absent. ``weights`` is a flat
     string-keyed tensor dict; ``state`` is the JSON-serializable config /
     fit-state / metadata block.
+
+    This is a low-level primitive: it persists ``state`` verbatim and
+    does not synthesize the metadata block. The caller (per A17, the
+    estimator's ``_collect_state``) owns assembling ``state`` including
+    ``schema_version``; a ``state`` without it round-trips into the
+    ``_migrate`` "older than oldest supported" path on load.
     """
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
