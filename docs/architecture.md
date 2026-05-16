@@ -45,12 +45,17 @@ src/seq_sklearn/
   config/
     __init__.py
     _domains.py                     TASK_TYPES, LOSS_STRATEGIES, etc. (F5)
-    _params_adapter.py              BaseEstimator-side mutable mirror of pydantic configs
+    _validity.py                    F5 validity-matrix cross-field validator (check_combo)
+    _extras.py                      ExtraDict, _normalize_extras, _PROMOTED_KEYS_BY_FAMILY, extract_deprecated_extras (hyperparameter strategy)
+    _adapters.py                    BaseEstimator adapters per pydantic config (TabularConfigParams, OptimizerParams, SchedulerParams, LossParams, SamplerParams, <Model>AdvancedParams)
     base.py                         BaseTrainingConfig, BaseModelConfig
+    optimizer.py                    OptimizerConfig (family sub-config)
+    scheduler.py                    SchedulerConfig (family sub-config)
+    loss.py                         LossConfig (family sub-config)
+    sampler.py                      SamplerConfig (family sub-config)
     tabular.py                      TabularToSequenceConfig
-    tft.py                          TFTConfig
+    tft.py                          TFTConfig + TFTAdvancedConfig
     recurrent.py                    RecurrentSequenceEstimatorConfig (v1 skeleton, INTERNAL)
-    _validity.py                    F5 validity-matrix cross-field validator
 
   data/
     __init__.py
@@ -116,8 +121,10 @@ src/seq_sklearn/
 
   tuning/
     __init__.py
-    suggest_params.py               suggest_params(trial, model_class)
+    suggest_params.py               suggest_params(trial, model_class, *, search_advanced, search_extras)
     pruning.py                      optuna_trial_guard context manager
+    _alpha_keys.py                  curated per-family ALPHA-key enum lists (empty in v1)
+    _config_to_estimator_kwargs.py  _config_to_estimator_kwargs + _ADAPTER_MAP_BY_CONFIG registry
 ```
 
 ```
@@ -241,6 +248,18 @@ STABLE.
 
 ## A4: Configuration schemas
 
+**Authoritative source for hyperparameter exposure**: this section
+documents the v1 estimator-config plumbing (frozen pydantic + sklearn
+adapter pattern + validity matrix). A4 below and requirements F7 are
+authoritative for the four-tier exposure architecture (family
+sub-configs → main configs → advanced sub-configs → `extra` escape
+hatch), the deprecation-alias contract, and the per-model default
+search space (the last via A16 / the Phase 8 `suggest_params`
+implementation); the code carries the verbatim schemas.
+`docs/hyperparameter_strategy.md` holds the design rationale (why the
+four-tier shape) and the living ALPHA → BETA → STABLE promotion
+procedure only; it is not authoritative for the schemas or contracts.
+
 The pydantic + sklearn integration pattern is novel; the research
 brief at `docs/research/pydantic_sklearn.md` documents that no
 surveyed library combines a frozen pydantic config with a sklearn
@@ -258,21 +277,34 @@ estimator. The canonical pattern derived for seq-sklearn:
 3. **Nested configs use the BaseEstimator-adapter pattern**, the
    approach recommended in `docs/research/sklearn.md` for combining
    pydantic v2 configs with sklearn's nested `get_params` /
-   `set_params` protocol. Pydantic `BaseModel` does not implement
-   `get_params` / `set_params` itself; rather than flatten the
-   nested config into the outer estimator (which the research brief
-   explicitly rejects because it duplicates the pydantic schema and
-   loses validation grouping), the library wraps each pydantic
-   config in a thin `BaseEstimator` adapter whose fields mirror the
-   pydantic schema 1:1. The adapter's `to_pydantic()` method
-   constructs the frozen pydantic instance inside the outer
-   estimator's `fit`.
+   `set_params` protocol. Under the four-tier hyperparameter
+   architecture (F7 / A4), the v1 TFT estimator stores SIX
+   adapter instances (one per nested pydantic sub-config), each
+   following the same pattern:
+
+   - `tabular_config: TabularConfigParams` ← `TabularToSequenceConfig`
+   - `optimizer: OptimizerParams` ← `OptimizerConfig`
+   - `scheduler: SchedulerParams` ← `SchedulerConfig`
+   - `loss: LossParams | None` ← `LossConfig` (defaults to None; the
+     estimator injects `_DEFAULT_LOSS_FOR_TASK[task_type]` at
+     `_build_config` time when omitted)
+   - `sampler: SamplerParams` ← `SamplerConfig`
+   - `advanced: TFTAdvancedParams` ← `TFTAdvancedConfig`
+
+   Every adapter is a thin `BaseEstimator` whose fields mirror the
+   pydantic schema 1:1 and exposes `to_pydantic()` constructing the
+   frozen instance. Every adapter `__init__` uses the `*` keyword-
+   only marker so adding a BETA field via the ALPHA → BETA promotion
+   path does NOT shift positional arguments (the promotion contract
+   is MINOR-additive only; without keyword-only the promotion is
+   silently MAJOR-breaking).
 
    ```python
-   # src/seq_sklearn/config/_params_adapter.py
+   # src/seq_sklearn/config/_adapters.py
    class TabularConfigParams(BaseEstimator):
        def __init__(
            self,
+           *,                              # mandatory keyword-only
            id_col: str = "id",
            time_col: str = "time",
            lookback: int = 12,
@@ -289,61 +321,179 @@ estimator. The canonical pattern derived for seq-sklearn:
                lookback=self.lookback, # ...
            )
 
+   # OptimizerParams, SchedulerParams, LossParams, SamplerParams,
+   # TFTAdvancedParams follow the same shape (keyword-only init
+   # + to_pydantic). Their pydantic schemas are the family
+   # sub-configs specified later in this A4 section and carried
+   # verbatim in src/seq_sklearn/config/.
+
    class TFTClassifier(ClassifierMixin, BaseEstimator):
        def __init__(
            self,
+           *,                              # mandatory keyword-only
+           task_type: Literal["binary", "multiclass", ...],
            tabular_config: TabularConfigParams | None = None,
+           optimizer: OptimizerParams | None = None,
+           scheduler: SchedulerParams | None = None,
+           loss: LossParams | None = None,
+           sampler: SamplerParams | None = None,
+           advanced: TFTAdvancedParams | None = None,
            hidden_size: int = 128,
-           # ... every TFTConfig field mirrored
+           # ... TFTConfig flat fields (model-shape only) mirrored
        ) -> None:
-           self.tabular_config = tabular_config or TabularConfigParams()
-           self.hidden_size = hidden_size
-           # ...
+           self.task_type = task_type
+           self.tabular_config = (
+               sklearn.base.clone(tabular_config)
+               if tabular_config is not None else TabularConfigParams()
+           )
+           self.optimizer = (
+               sklearn.base.clone(optimizer)
+               if optimizer is not None else OptimizerParams()
+           )
+           # ... (one clone-protected assignment per adapter)
+           self.loss = sklearn.base.clone(loss) if loss is not None else None
+           # ... etc.
    ```
 
-   sklearn's `get_params(deep=True)` recurses into `tabular_config`
-   automatically because the adapter is a `BaseEstimator`, producing
-   the canonical `tabular_config__lookback` flat keys.
-   `set_params(tabular_config__lookback=6)` chains via standard
-   sklearn double-underscore traversal:
-   `self.tabular_config.set_params(lookback=6)`. The frozen pydantic
-   instance is built inside `fit` as
+   sklearn's `get_params(deep=True)` recurses through every adapter
+   automatically (each adapter is a `BaseEstimator`), producing the
+   canonical double-underscore flat keys
+   (`tabular_config__lookback`, `optimizer__learning_rate`,
+   `loss__strategy`, `scheduler__warmup_steps`, etc.).
+   `set_params(optimizer__learning_rate=3e-4)` chains via standard
+   sklearn traversal:
+   `self.optimizer.set_params(learning_rate=3e-4)`. The frozen
+   pydantic instance is built inside `fit` as
    `self.config_ = self._build_config()`, where `_build_config`
-   reads from `self.tabular_config.to_pydantic()` plus the outer
-   estimator's mirrored fields. The pydantic validity-matrix
-   validator runs inside `to_pydantic()`; failures wrap into
-   `ConfigError` at the `_build_config` call site (step 4 below).
+   reads from each adapter's `to_pydantic()` and threads the
+   task-type-aware loss default if `self.loss is None`. The
+   pydantic validity-matrix validator runs inside the nested
+   `BaseModelConfig` construction; failures wrap into `ConfigError`
+   at the `_build_config` call site (step 4 below).
+
+   **Task-type-aware loss default**:
+
+   ```python
+   # src/seq_sklearn/models/_base.py inside _build_config:
+   _DEFAULT_LOSS_FOR_TASK: dict[str, str] = {
+       "binary": "cross_entropy",
+       "multiclass": "cross_entropy",
+       "multilabel": "cross_entropy",            # v1.1
+       "regression_point": "mse",
+       "regression_quantile": "pinball",
+       "regression_multioutput": "mse",          # v1.1
+   }
+
+   def _build_config(self) -> BaseModelConfig:
+       loss = self.loss
+       if loss is None:
+           loss = LossParams(
+               strategy=_DEFAULT_LOSS_FOR_TASK[self.task_type]
+           )
+       # ... build the nested BaseModelConfig with loss.to_pydantic()
+       # and the other adapter instances' to_pydantic() outputs.
+   ```
+
+   `LossConfig.strategy` has no default at the pydantic layer (legal
+   value depends on `task_type` per F5); the injection here preserves
+   the ergonomic `TFTClassifier(task_type="binary").fit(X, y)` call
+   while keeping the schema strict. v1.1 entries in the map are
+   present so v1.1 enablement is one-line later, but they are
+   unreachable in v1: the F5 validity matrix (`check_combo`) rejects
+   any v1.1 `task_type` with a "scheduled for v1.1" `ValidationError`
+   before `_build_config` runs. Phase 1's
+   `test_v1_task_type_rejects_multilabel_and_regression_multioutput`
+   pins this guard.
 
    **Clone safety**: `sklearn.base.clone(estimator)` calls
    `type(estimator)(**estimator.get_params(deep=False))`. The
-   shallow-params dict contains the same `tabular_config` adapter
-   instance by reference. The outer `__init__` defends against
-   aliasing by deep-copying the adapter:
-   `self.tabular_config = (
-       sklearn.base.clone(tabular_config) if tabular_config is not None
-       else TabularConfigParams()
-   )`. `sklearn.base.clone` recursively constructs a fresh adapter
-   instance from the original's params; this is the sklearn-idiomatic
-   alternative to `copy.deepcopy` and works under both joblib
-   `prefer='threads'` and `prefer='processes'` (the joblib-process
-   path pickles each estimator independently, so adapter aliasing
-   collapses by construction).
+   shallow-params dict contains the SAME adapter instances by
+   reference for every nested adapter field (`tabular_config`,
+   `optimizer`, `scheduler`, `loss`, `sampler`, `advanced`). The
+   outer `__init__` defends against aliasing by calling
+   `sklearn.base.clone` on each incoming adapter before storing:
+   `self.optimizer = sklearn.base.clone(optimizer) if optimizer
+   is not None else OptimizerParams()` (and the analogous pattern
+   for each of the six adapter slots). `sklearn.base.clone`
+   recursively constructs a fresh adapter instance from the
+   original's params; this is the sklearn-idiomatic alternative to
+   `copy.deepcopy` and works under both joblib `prefer='threads'`
+   and `prefer='processes'` (the joblib-process path pickles each
+   estimator independently, so adapter aliasing collapses by
+   construction). Phase 1's `test_adapters.py` asserts each
+   adapter's clone produces an independent instance: six named
+   per-adapter tests (one for each of `TabularConfigParams`,
+   `OptimizerParams`, `SchedulerParams`, `LossParams`,
+   `SamplerParams`, `TFTAdvancedParams`) plus
+   `test_outer_estimator_clone_does_not_alias_adapter_instances`
+   for the end-to-end contract.
 4. **Cross-field validators wrap `pydantic.ValidationError` into
    `ConfigError`** at the `_build_config()` call site inside `fit`,
    not inside the validator itself (the validator stays a pure
    `@model_validator(mode="after")` returning the model).
 
-**`BaseTrainingConfig`** (shared across families):
+**Family sub-configs** (per F7; the load-bearing field-name surface,
+specified here and carried verbatim in `src/seq_sklearn/config/`):
+
+```python
+# src/seq_sklearn/config/optimizer.py
+class OptimizerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    name: Literal["adamw", "adam", "sgd"] = "adamw"
+    learning_rate: float = 1e-3
+    weight_decay: float = 1e-4
+    betas: tuple[float, float] = (0.9, 0.999)
+    eps: float = 1e-8
+    momentum: float = 0.9
+    nesterov: bool = False
+    extra: ExtraDict = ()
+
+# src/seq_sklearn/config/scheduler.py
+class SchedulerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    name: Literal["constant", "cosine_with_warmup", "one_cycle", "reduce_on_plateau"] = "cosine_with_warmup"
+    warmup_steps: int = 100
+    pct_start: float = 0.3
+    div_factor: float = 25.0
+    final_div_factor: float = 1e4
+    plateau_factor: float = 0.5
+    plateau_patience: int = 5
+    plateau_threshold: float = 1e-4
+    min_lr: float = 0.0
+    extra: ExtraDict = ()
+
+# src/seq_sklearn/config/loss.py
+class LossConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    # No default: legal value depends on task_type per F5;
+    # the estimator injects _DEFAULT_LOSS_FOR_TASK[task_type] when
+    # the caller omits the LossParams adapter.
+    strategy: Literal["cross_entropy", "focal", "mse", "mae", "huber", "pinball"]
+    focal_gamma: float = 2.0
+    focal_alpha: float | None = None
+    huber_delta: float = 1.0
+    label_smoothing: float = 0.0
+    extra: ExtraDict = ()
+
+# src/seq_sklearn/config/sampler.py
+class SamplerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    strategy: Literal["none", "class_weighted", "oversample_minority", "undersample_majority"] = "none"
+    oversample_ratio: float = 1.0
+    replacement: bool = True
+    extra: ExtraDict = ()
+```
+
+**`BaseTrainingConfig`** (cross-cutting + nested family sub-configs):
 
 ```python
 class BaseTrainingConfig(BaseModel):
-    learning_rate: float = 1e-3
-    weight_decay: float = 1e-4
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     batch_size: int = 64
     max_epochs: int = 50
-    optimizer: Literal["adamw", "adam", "sgd"] = "adamw"
-    scheduler: Literal["constant", "cosine_with_warmup", "one_cycle", "reduce_on_plateau"] = "cosine_with_warmup"
-    warmup_steps: int = 100
+    optimizer: OptimizerConfig = Field(default_factory=OptimizerConfig)
+    scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     gradient_clip_val: float | None = None
     accumulate_grad_batches: int = 1
     precision: Literal["bf16-mixed", "16-mixed", "32-true", "auto"] = "auto"
@@ -356,8 +506,6 @@ class BaseTrainingConfig(BaseModel):
     pin_memory: bool | None = None         # None -> True on CUDA, False on CPU
     seed: int = 42
     verbose: bool = True
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
 ```
 
 **`BaseModelConfig`** (shared across all concrete models):
@@ -368,32 +516,25 @@ class BaseModelConfig(BaseTrainingConfig):
         "binary", "multiclass", "multilabel",
         "regression_point", "regression_quantile", "regression_multioutput",
     ]
-    loss_strategy: Literal[
-        "cross_entropy", "focal", "mse", "mae", "huber", "pinball",
-    ]
-    imbalance_strategy: Literal[
-        "none", "class_weighted", "oversample_minority", "undersample_majority",
-    ] = "none"
+    loss: LossConfig                         # nested; no default per F5
+    sampler: SamplerConfig = Field(default_factory=SamplerConfig)
     calibration_strategy: Literal[
         "none", "temperature", "platt", "isotonic",
         "conformal", "isotonic_quantile",
     ] = "none"
     threshold_tuning: bool = False
     threshold_metric: Literal["f1", "balanced_accuracy", "youden_j"] = "f1"
-    focal_gamma: float = 2.0
-    huber_delta: float = 1.0
     quantiles: tuple[float, ...] | None = None
-    oversample_ratio: float = 1.0
 
     @model_validator(mode="after")
-    def _check_validity_matrix(self) -> "BaseModelConfig":
+    def _check_validity_matrix(self) -> Self:
         from seq_sklearn.config._validity import check_combo
-        check_combo(self.task_type, self.loss_strategy,
-                    self.imbalance_strategy, self.calibration_strategy)
+        check_combo(self.task_type, self.loss.strategy,
+                    self.sampler.strategy, self.calibration_strategy)
         return self
 
     @model_validator(mode="after")
-    def _check_quantiles_monotone(self) -> "BaseModelConfig":
+    def _check_quantiles_monotone(self) -> Self:
         if self.quantiles is None:
             return self
         q = self.quantiles
@@ -403,6 +544,10 @@ class BaseModelConfig(BaseTrainingConfig):
             raise ValueError(f"quantiles must be strictly increasing; got {q}")
         return self
 ```
+
+The validity-matrix validator's call site reads `self.loss.strategy`
+and `self.sampler.strategy` from the nested family configs;
+`check_combo` itself still takes four strings (signature unchanged).
 
 **`TabularToSequenceConfig`**:
 
@@ -423,12 +568,16 @@ class TabularToSequenceConfig(BaseModel):
     clip_features: float | None = None
     max_categorical_cardinality: int = 1000
     hash_high_cardinality: bool = False
-    categorical_embed_dims: Mapping[str, int] = Field(default_factory=dict)
+    categorical_embed_dims: CategoricalEmbedDims = ()  # see _normalize_embed_dims
     model_config = ConfigDict(extra="forbid", frozen=True)
 ```
 
-`categorical_embed_dims` uses `Mapping[str, int]` (not `dict[str, int]`)
-so the frozen model stays hashable per a pydantic v2 idiom.
+`categorical_embed_dims` is stored as a sorted
+`tuple[tuple[str, int], ...]` via a `BeforeValidator` that accepts
+`dict` / `Mapping` / `tuple-of-tuples` input. This keeps the frozen
+model hashable; the original `Mapping[str, int]` claim from earlier
+drafts did not deliver hashability in pydantic v2 (a plain `dict`
+in `__dict__` defeats `hash()`).
 
 **`TFTConfig`**:
 
@@ -440,21 +589,58 @@ class TFTConfig(BaseModelConfig):
     variable_selection_dropout: float = 0.1
     prediction_readout: Literal["last_valid", "mean_pool"] = "last_valid"
     tabular_config: TabularToSequenceConfig
+    advanced: TFTAdvancedConfig = Field(default_factory=TFTAdvancedConfig)
+
+
+class TFTAdvancedConfig(BaseModel):
+    """BETA per requirements stability tiers; fields here may change
+    defaults or be renamed without a MAJOR bump. Empty in v1 plus the
+    extra escape hatch; populated as benchmark testing identifies
+    needle-movers per the promotion path in docs/hyperparameter_strategy.md."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    extra: ExtraDict = ()
 ```
 
-`TFTClassifier.__init__` accepts `tabular_config: TabularConfigParams`
-plus every other `TFTConfig` field as a top-level keyword argument
-(see step 3 above for the adapter pattern). `get_params(deep=True)`
-recurses into the adapter automatically, yielding flat keys like
-`tabular_config__lookback`. `set_params(tabular_config__lookback=6)`
+`TFTClassifier.__init__` accepts each nested sub-config as a single
+adapter kwarg (`tabular_config: TabularConfigParams | None = None`,
+`optimizer: OptimizerParams | None = None`, etc.) plus the
+TFT-specific model-shape fields (`hidden_size`, `attention_heads`,
+etc.) as flat kwargs. `get_params(deep=True)` recurses into every
+adapter automatically, yielding double-underscore flat keys like
+`tabular_config__lookback`, `optimizer__learning_rate`,
+`loss__strategy`. `set_params(optimizer__learning_rate=3e-4)`
 chains via the standard sklearn double-underscore traversal into
-`self.tabular_config.set_params(lookback=6)`. The
-`clf__tabular_config__lookback` triple-underscore form chains
+`self.optimizer.set_params(learning_rate=3e-4)`. The
+`clf__optimizer__learning_rate` triple-underscore form chains
 through `Pipeline` cleanly for the same reason.
 
-`GridSearchCV(estimator=TFTClassifier(),
-param_grid={"tabular_config__lookback": [6, 12, 24]})` works without
-further plumbing.
+`GridSearchCV(estimator=TFTClassifier(task_type="binary"),
+param_grid={"optimizer__learning_rate": [1e-4, 3e-4, 1e-3]})` works
+without further plumbing.
+
+**`ExtraDict` escape hatch** (per F7). Every family
+sub-config carries an `extra: ExtraDict` field. `ExtraDict` is
+`tuple[tuple[str, ExtraValue], ...]` after the `BeforeValidator`
+normalizes input; `ExtraValue` is restricted to
+`str | int | float | bool | None` so JSON round-trip is type-
+identical. Non-primitive values raise `TypeError` at construction.
+The `_normalize_extras` validator, the `_PROMOTED_KEYS_BY_FAMILY`
+registry, and the `extract_deprecated_extras` helper live in
+`src/seq_sklearn/config/_extras.py`; the family factories
+(`build_optimizer`, `build_scheduler`, `build_loss`, `build_sampler`)
+route through `extract_deprecated_extras` instead of `dict(cfg.extra)`
+so ALPHA → BETA promotion is one registry edit. The reserved-keys
+collision check (preventing `extra=(("lr", 0.1),)` from colliding
+with the typed `OptimizerConfig.learning_rate` kwarg at
+`torch.optim.AdamW(...)` construction) lives at the CONFIG layer
+as a `@model_validator(mode="after")` on each family sub-config —
+NOT at the factory call site — so the validation fires at
+`OptimizerConfig(...)` construction time and Phase 1 owns the test.
+The factories (Phase 4) trust the validated configs and do not
+re-check. Reserved-key sets keyed by `cfg.name`:
+`_RESERVED_BY_OPTIMIZER["adamw"] = {"params", "lr", "weight_decay",
+"betas", "eps"}` (analogous for `adam` and `sgd`); untyped torch
+kwargs pass through `extra` unrestricted.
 
 **`feature_schema_fingerprint`** is computed in `TabularToSequence.fit`
 as a sha256 over the sorted declared-column names plus their pandas
@@ -538,7 +724,10 @@ def compute_three_way_split(
 
     Returns:
     - (train_idx, val_idx, cal_idx) when calibration_set_provided=False
-      AND cal_fraction > 0. cal_idx is non-empty.
+      AND cal_fraction > 0. cal_idx holds the tail cal_fraction windows
+      per entity; it is empty only in the degenerate case where every
+      entity is too short for round(cal_fraction * m) to reach 1, in
+      which case a UserWarning is emitted.
     - (train_idx, val_idx, np.empty(0, dtype=int)) when
       calibration_set_provided=True AND cal_fraction == 0.0. cal_idx
       is an empty array; the calibration fold is supplied externally
@@ -941,10 +1130,20 @@ real Trainer is needed.
 
 ## A8: Loss factory
 
+**Note on parameter names**: `build_loss` takes string-valued
+arguments (`loss_strategy: str`, the value of `loss.strategy`).
+Callers in `_LightningModule._configure_loss` extract these from the
+frozen pydantic config via the nested access pattern
+(`cfg.loss.strategy`, `cfg.sampler.strategy`, etc., per the F5 bridge
+table in `docs/requirements.md`). The `build_loss` function's
+parameter names use the historical short-form
+(`loss_strategy`) for back-compat with the validity-matrix
+vocabulary; the call site reads from the nested family configs.
+
 ```python
 def build_loss(
     task_type: str,
-    loss_strategy: str,
+    loss_strategy: str,             # value of cfg.loss.strategy
     *,
     class_weights: Tensor | None,
     focal_gamma: float,
@@ -956,7 +1155,9 @@ def build_loss(
 ```
 
 `class_weights` is non-None only when
-`imbalance_strategy == "class_weighted"`. Binary class-weighting uses
+`cfg.sampler.strategy == "class_weighted"` (display label
+`imbalance_strategy="class_weighted"` per the F5 bridge). Binary
+class-weighting uses
 `BCEWithLogitsLoss(pos_weight=neg_count / pos_count)` derived from
 the train fold; multiclass uses `CrossEntropyLoss(weight=per_class_weights)`.
 
@@ -1606,8 +1807,22 @@ def suggest_params(
     trial: optuna.Trial,
     model_class: type[BaseSequenceClassifier | BaseSequenceRegressor],
     base: BaseModelConfig | None = None,
+    *,
+    search_advanced: bool = False,
+    search_extras: bool = False,
 ) -> BaseModelConfig:
     """Sample a config from the per-model default search space.
+
+    The default search space (`search_advanced=False`,
+    `search_extras=False`) samples ONLY STABLE fields; the per-model
+    default search space is defined by the `suggest_params`
+    implementation specified in this section (Phase 8 deliverable).
+    `search_advanced=True`
+    additionally samples fields on the model's `<Model>AdvancedConfig`;
+    in v1 those configs are empty so the flag is a no-op for v1.
+    `search_extras=True` samples from the curated per-family
+    ALPHA-key list in `src/seq_sklearn/tuning/_alpha_keys.py` (empty
+    in v1 by design).
 
     Closed under the F5 validity matrix by construction: samples
     task_type first (or reads from `base`), then samples each
@@ -1635,14 +1850,45 @@ def optuna_trial_guard(trial: optuna.Trial) -> Iterator[None]:
 Recommended objective shape:
 
 ```python
+# Per-model adapter map: nested pydantic sub-config field name -> adapter class.
+_TFT_ADAPTER_MAP: dict[str, type[BaseEstimator]] = {
+    "tabular_config": TabularConfigParams,
+    "optimizer": OptimizerParams,
+    "scheduler": SchedulerParams,
+    "loss": LossParams,
+    "sampler": SamplerParams,
+    "advanced": TFTAdvancedParams,
+}
+
+# Registry keyed by concrete config class. v2 / v3 estimators register
+# their per-model adapter map here when they ship.
+_ADAPTER_MAP_BY_CONFIG: dict[
+    type[BaseModelConfig], dict[str, type[BaseEstimator]]
+] = {
+    TFTConfig: _TFT_ADAPTER_MAP,
+}
+
+
+def _adapter_map_for(config_cls: type[BaseModelConfig]) -> dict[str, type[BaseEstimator]]:
+    return _ADAPTER_MAP_BY_CONFIG[config_cls]
+
+
 def _config_to_estimator_kwargs(config: BaseModelConfig) -> dict[str, object]:
-    """Convert a pydantic config dump into the flat double-underscore
-    kwargs an estimator's `__init__` accepts. The TFTConfig's
-    nested `tabular_config` field becomes a `TabularConfigParams`
-    adapter; other fields pass through unchanged."""
-    raw = config.model_dump()
-    tabular_dict = raw.pop("tabular_config")
-    return {**raw, "tabular_config": TabularConfigParams(**tabular_dict)}
+    """Convert a pydantic config dump into the kwargs an estimator's
+    `__init__` accepts. Every nested sub-config in the model's adapter
+    map is popped from the dump and wrapped as the matching adapter
+    instance; other fields pass through unchanged.
+
+    v2 / v3 estimators add their own per-model adapter map to
+    `_ADAPTER_MAP_BY_CONFIG`; the helper itself is per-model dispatch."""
+    raw = config.model_dump(mode="json")  # mode='json' pins the
+                                          # extra-tuple shape on disk
+    adapter_map = _adapter_map_for(type(config))
+    kwargs: dict[str, object] = {}
+    for field_name, adapter_cls in adapter_map.items():
+        sub_dict = raw.pop(field_name)
+        kwargs[field_name] = adapter_cls(**sub_dict)
+    return {**raw, **kwargs}
 
 def objective(trial: optuna.Trial) -> float:
     with optuna_trial_guard(trial):
@@ -1660,7 +1906,13 @@ def objective(trial: optuna.Trial) -> float:
 because the round-trip between a frozen pydantic dump and the
 mutable BaseEstimator-adapter kwargs is non-obvious. v2 / v3
 estimators with their own nested config adapters add similar
-helpers; the shape stays the same.
+helpers. The shape is the same: pop every sub-config dict from
+`model_dump(mode="json")`, wrap each in the matching adapter, pass
+the rest through. Phase 8's
+`test_config_to_estimator_kwargs_round_trips_all_adapters` and
+`test_config_to_estimator_kwargs_extra_tuple_type_survives` pin the
+helper's behavior (one covers every adapter slot; the second pins
+the `extra` tuple round-trip under `mode="json"`).
 
 The trial reaches `_LightningModule` via `fit`, not via the pydantic
 config. `BaseSequenceEstimator.fit` accepts `optuna_trial:
@@ -1711,8 +1963,8 @@ def test_suggest_params_sweep_respects_validity_matrix():
         trial = study.ask()
         config = suggest_params(trial, TFTClassifier)
         check_combo(
-            config.task_type, config.loss_strategy,
-            config.imbalance_strategy, config.calibration_strategy,
+            config.task_type, config.loss.strategy,
+            config.sampler.strategy, config.calibration_strategy,
         )  # raises ValueError on any illegal cell
         study.tell(trial, 0.0)  # value irrelevant for this test
 ```
@@ -2206,3 +2458,158 @@ Gemini final pass (cross-family review on architecture doc; prior pass):
   doc fix.
 - **`os.cpu_count() or 1` (gemini r1-I1 carried).** Updated A4 and
   A7 references to add the None-handling fallback.
+
+
+> Historical note: the fold-in ledger entries below describe edits
+> made when `docs/hyperparameter_strategy.md` was the authoritative
+> spec. That doc was subsequently demoted to rationale + promotion
+> procedure only; its schemas, test rosters, and search-space table
+> were stripped. Authority now lives in this doc (A4/A16),
+> requirements F5/F7, the implementation plan's test rosters, and the
+> code. Entries referencing the strategy doc as authoritative for the
+> surface are historical.
+
+Hyperparameter-strategy fold-in (Round 1):
+
+- **A1 layout** updated to list `optimizer.py`, `scheduler.py`,
+  `loss.py`, `sampler.py`, `_extras.py`, and `_adapters.py` (renamed
+  from `_params_adapter.py`) under `config/`. The four-tier family
+  sub-configs land alongside the existing `tabular.py` / `tft.py` /
+  `recurrent.py`.
+- **A4 header note** added. (Subsequently updated when the strategy
+  doc was demoted: A4 + requirements F7 are authoritative for the
+  four-tier architecture, contracts, and per-model default search
+  space; the code carries verbatim schemas; the strategy doc holds
+  the rationale and the ALPHA → BETA → STABLE promotion procedure
+  only.)
+- **A4 step 3 (adapter pattern)** generalized from a single
+  `TabularConfigParams` example to the six v1 TFT adapters
+  (`TabularConfigParams`, `OptimizerParams`, `SchedulerParams`,
+  `LossParams`, `SamplerParams`, `TFTAdvancedParams`). Every adapter
+  `__init__` carries the `*` keyword-only marker per the Gemini-pass
+  finding on the strategy doc (positional-shift on BETA promotion
+  would silently break callers). The clone-safety paragraph now
+  covers all six adapter slots; the six per-adapter clone tests live
+  in Phase 1's `test_adapters.py`.
+- **A4 task-type-aware loss default** added: `_DEFAULT_LOSS_FOR_TASK`
+  map and `_build_config` injection logic; `LossConfig.strategy`
+  keeps no default at the pydantic layer (legal value depends on
+  `task_type` per F5).
+- **`BaseTrainingConfig` / `BaseModelConfig` snippets** rewritten to
+  show the nested family-sub-config shape:
+  `optimizer: OptimizerConfig`, `scheduler: SchedulerConfig`,
+  `loss: LossConfig`, `sampler: SamplerConfig`. The validity-matrix
+  validator call site now reads `self.loss.strategy` and
+  `self.sampler.strategy`; `check_combo` signature is unchanged
+  (still four strings).
+- **`TFTConfig` snippet** updated to add `advanced:
+  TFTAdvancedConfig = Field(default_factory=TFTAdvancedConfig)`.
+  `TFTAdvancedConfig` defined inline with the `extra: ExtraDict`
+  escape hatch; v1 ships empty otherwise (Tier 3 per F7 / this A4
+  section).
+- **`TabularToSequenceConfig.categorical_embed_dims`** corrected
+  to `CategoricalEmbedDims = tuple[tuple[str, int], ...]` (sorted,
+  hashable, via `BeforeValidator`). The earlier `Mapping[str, int]`
+  claim did not actually deliver hashability under pydantic v2.
+- **`ExtraDict` escape hatch subsection** added at end of A4:
+  documents `ExtraValue` restriction, `_normalize_extras`
+  validator, `_PROMOTED_KEYS_BY_FAMILY` registry,
+  `extract_deprecated_extras` helper, and the per-family
+  `_<NAME>_RESERVED` collision-detection sets.
+- **A16 `suggest_params` signature** updated with `search_advanced`
+  and `search_extras` keyword-only flags. Default behavior samples
+  ONLY STABLE fields; the per-model default search space is defined
+  by the A16 `suggest_params` implementation (Phase 8).
+- **A16 `_config_to_estimator_kwargs`** generalized to handle six
+  nested fields per the `_TFT_ADAPTER_MAP` pattern. The helper
+  pops every sub-config dict from `model_dump(mode="json")` and
+  wraps each in its matching adapter; `mode="json"` is the pinned
+  serialization mode per the F7 save/load contract, exercised by
+  `test_extra_dict_survives_json_roundtrip`.
+- **A16 validity-matrix sweep example** updated to read
+  `config.loss.strategy` and `config.sampler.strategy` from the
+  nested family configs (signature of `check_combo` itself is
+  unchanged).
+
+Hyperparameter-strategy fold-in (Round 2):
+
+- **Em dash slipped in A16 prose** (style r2-C1 / arch r2-C1).
+  Replaced ` — ` with `: ` plus follow-on prose. The doc is
+  em-dash-free.
+- **Clone-safety test count off by one** (arch r2-C2 / qa r2-C1).
+  Strategy doc was missing `test_tabular_config_params_clone_is_independent`
+  in the named-tests table; six adapter slots were claimed but only
+  five tests listed. Strategy doc table now lists six per-adapter
+  clone tests (one per adapter); architecture A4 clone-safety
+  paragraph and the Round 1 ledger entry rewritten to name each
+  adapter explicitly.
+- **`_config_to_estimator_kwargs` untested** (qa r2-C2). Two new
+  named tests added to the Phase 8 test roster:
+  `test_config_to_estimator_kwargs_round_trips_all_adapters` (every
+  adapter slot survives) and
+  `test_config_to_estimator_kwargs_extra_tuple_type_survives` (the
+  `extra` tuple round-trips via `mode="json"`). A16 prose now names
+  both tests as the helper's coverage.
+- **A8 build_loss prose drift** (arch r2-I1). Added a bridge note
+  at A8 acknowledging `loss_strategy: str` is the value of
+  `cfg.loss.strategy` (display label per the F5 bridge in
+  requirements). The function signature parameter name stays
+  `loss_strategy` for back-compat with the validity-matrix
+  vocabulary; the call site reads from the nested family configs.
+- **Flat-kwargs ambiguity in strategy doc** (arch r2-I2). Tightened
+  the strategy doc's "flat per-field kwargs DO NOT appear" to
+  scope only fields living on nested sub-configs; model-shape
+  fields on `<Model>Config` (`hidden_size`, `attention_heads`, etc.)
+  ARE flat top-level kwargs.
+- **`_adapter_map_for` undefined** (arch r2-I4). Architecture A16
+  defines the registry inline: `_ADAPTER_MAP_BY_CONFIG:
+  dict[type[BaseModelConfig], dict[str, type[BaseEstimator]]]` keyed
+  by concrete config class, plus a one-line `_adapter_map_for` body
+  looking up the registry.
+- **`model_dump` mode inconsistency between strategy and arch**
+  (qa r2-I1). The strategy doc's `_config_to_estimator_kwargs`
+  code sample originally used bare `model_dump()`; updated to
+  `model_dump(mode="json")` matching the architecture A16 sample
+  and the `test_extra_dict_survives_json_roundtrip` contract.
+- **v1.1 entries in `_DEFAULT_LOSS_FOR_TASK` unguarded** (qa r2-I2).
+  Added a prose note that v1.1 entries are present so v1.1
+  enablement is one-line, but they are unreachable in v1 because
+  `check_combo` rejects v1.1 task types before `_build_config`
+  runs. Named test
+  `test_v1_task_type_rejects_multilabel_and_regression_multioutput`
+  pins the guard.
+
+Gemini three-doc final pass:
+
+- **Reserved-keys collision check moved from factory to config layer**
+  (gemini-qa r1-C1). The Gemini QA pass caught a phase-ordering bug:
+  `test_adamw_reserved_keys_collision_raises` and
+  `test_sgd_reserved_keys_collision_raises` were placed in Phase 1
+  but the reserved-keys check lived in `build_optimizer` (Phase 4).
+  Moved the check to a `@model_validator(mode="after")` on
+  `OptimizerConfig` (and analogous validators on `SchedulerConfig`,
+  `LossConfig`, `SamplerConfig`). A4's escape-hatch subsection now
+  documents the config-layer check; the factory (Phase 4) trusts the
+  validated config and does not re-check. Reserved sets are now
+  `_RESERVED_BY_OPTIMIZER: dict[str, frozenset[str]]` keyed by
+  `cfg.name`.
+- **`extract_deprecated_extras` happy-path test added** (gemini-qa
+  r1-I2). The strategy doc named tests for the warning path and the
+  ambiguous-configuration error path but not for the unpromoted-key
+  passthrough case. Added
+  `test_extract_deprecated_extras_happy_path_passes_through` in
+  Phase 1; it asserts unpromoted `extra` keys pass through unchanged
+  with no `DeprecationWarning`.
+
+Phase 2 (data-layer Claude swarm):
+
+- **A9.1 `EntityTimeSeriesSplit.left_extension` draws from the
+  pre-gap-trim segment.** `split()` builds `left_extension` from the
+  preceding train segment before the `gap` clamp is applied, so the
+  `gap` separation is honored on the train side but a gap-window row
+  can still appear in the test fold's history-only prefix. A9.1's
+  semantics permit this (the left-extension rows are unscored context
+  per "no test target spans the overlap"), and there is no reachable
+  impact until a Phase 4+ splitter-consumer scores predictions. The
+  Phase 4 splitter-consumer review must verify those rows are masked
+  from loss before scoring.

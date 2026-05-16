@@ -1,0 +1,663 @@
+"""Tests for the panel-to-sequence transformer (A5 / F3)."""
+
+import logging
+
+import numpy as np
+import pandas as pd
+import pytest
+import torch
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
+
+from seq_sklearn.config.tabular import TabularToSequenceConfig
+from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
+from seq_sklearn.data.tabular_to_sequence import TabularToSequence
+from seq_sklearn.errors import ConfigError, DataContractError, NotFittedError
+from seq_sklearn.logging import Event
+
+
+def _panel() -> tuple[pd.DataFrame, np.ndarray]:
+    rows = []
+    y = []
+    for entity in range(4):
+        n = entity + 1  # 1, 2, 3, 4 rows
+        for t in range(n):
+            rows.append(
+                {
+                    "id": entity,
+                    "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                    "sc": f"s{entity % 2}",
+                    "sr": float(entity),
+                    "tr": float(t) + 0.5,
+                    "tc": f"c{t % 2}",
+                }
+            )
+            y.append(entity % 2)
+    return pd.DataFrame(rows), np.asarray(y)
+
+
+def _config(**overrides: object) -> TabularToSequenceConfig:
+    base: dict[str, object] = {
+        "id_col": "id",
+        "time_col": "time",
+        "static_categorical_cols": ("sc",),
+        "static_real_cols": ("sr",),
+        "time_varying_real_cols": ("tr",),
+        "time_varying_categorical_cols": ("tc",),
+        "lookback": 4,
+    }
+    base.update(overrides)
+    return TabularToSequenceConfig(**base)  # type: ignore[arg-type]
+
+
+def test_one_row_entity_left_padded_with_mask() -> None:
+    frame, y = _panel()
+    tts = TabularToSequence(_config(), "binary").fit(frame, y)
+    out = tts.transform(frame)
+    # Entities 0..3 have 1, 2, 3, 4 rows -> 1 + 2 + 3 + 4 = 10 windows.
+    mask = out["padding_mask"]
+    assert mask.shape == (10, 4)
+    # Entity 0's single window (batch row 0) is its sole window-end
+    # position 0 -> left-padded on lookback - 1 positions.
+    assert mask[0].tolist() == [True, True, True, False]
+    assert out["time_varying_real"].shape == (10, 4, 1)
+
+
+def test_duplicate_id_time_raises() -> None:
+    frame, y = _panel()
+    dup = pd.concat([frame, frame.iloc[[0]]], ignore_index=True)
+    y2 = np.concatenate([y, y[:1]])
+    with pytest.raises(DataContractError, match="duplicate"):
+        TabularToSequence(_config(), "binary").fit(dup, y2)
+
+
+def test_object_dtype_time_raises() -> None:
+    frame, y = _panel()
+    frame = frame.copy()
+    frame["time"] = frame["time"].astype(object).astype(str)
+    with pytest.raises(DataContractError, match="not supported"):
+        TabularToSequence(_config(), "binary").fit(frame, y)
+
+
+def test_fingerprint_stable_across_two_fits() -> None:
+    frame, y = _panel()
+    a = TabularToSequence(_config(), "binary").fit(frame, y)
+    b = TabularToSequence(_config(), "binary").fit(frame.copy(), y.copy())
+    assert a.feature_schema_fingerprint_ == b.feature_schema_fingerprint_
+    assert a.feature_schema_fingerprint_ is not None
+
+
+def test_mask_polarity_true_is_padding() -> None:
+    frame, y = _panel()
+    tts = TabularToSequence(_config(), "binary").fit(frame, y)
+    out = tts.transform(frame)
+    # Batch order: entity 0 (1 window: idx 0), entity 1 (2: idx 1,2),
+    # entity 2 (3: idx 3,4,5), entity 3 (4: idx 6,7,8,9).
+    # Entity 3's last window (window-end 3, batch idx 9) is full.
+    assert out["padding_mask"][9].tolist() == [False, False, False, False]
+    # Entity 1's first window (window-end 0, batch idx 1) is one real
+    # row left-padded on three positions; its second window (idx 2) has
+    # two real rows.
+    assert out["padding_mask"][1].tolist() == [True, True, True, False]
+    assert out["padding_mask"][2].tolist() == [True, True, False, False]
+
+
+def test_not_fitted_raises() -> None:
+    frame, _ = _panel()
+    with pytest.raises(NotFittedError):
+        TabularToSequence(_config(), "binary").transform(frame)
+    with pytest.raises(NotFittedError):
+        TabularToSequence(_config(), "binary").inverse_transform({})
+
+
+def test_target_dtype_classification_is_long() -> None:
+    frame, y = _panel()
+    out = TabularToSequence(_config(), "binary").fit_transform(frame, y)
+    assert out["target"].dtype == torch.long
+
+
+def test_target_dtype_regression_is_float() -> None:
+    frame, y = _panel()
+    yf = y.astype(float) + 0.25
+    out = TabularToSequence(_config(), "regression_point").fit_transform(frame, yf)
+    assert out["target"].dtype == torch.float32
+
+
+def test_multiclass_is_long() -> None:
+    frame, y = _panel()
+    out = TabularToSequence(_config(), "multiclass").fit_transform(frame, y)
+    assert out["target"].dtype == torch.long
+
+
+def test_y_length_mismatch_raises() -> None:
+    frame, y = _panel()
+    with pytest.raises(DataContractError, match="does not match"):
+        TabularToSequence(_config(), "binary").fit(frame, y[:-1])
+
+
+def test_tz_mixing_raises() -> None:
+    frame, y = _panel()
+    frame = frame.copy()
+    times = list(frame["time"])
+    mixed = [
+        t.tz_localize("UTC") if i % 2 == 0 else t.tz_localize(None) for i, t in enumerate(times)
+    ]
+    frame["time"] = pd.Series(mixed, dtype=object)
+    with pytest.raises(DataContractError, match="mixes tz-aware"):
+        TabularToSequence(_config(), "binary").fit(frame, y)
+
+
+def test_object_dtype_consistent_tz_passes_tz_check() -> None:
+    # An object-dtype time column with a single consistent tz reaches the
+    # tz-flag computation but does not raise on the tz-mixing rule; the
+    # dtype check upstream is what rejects it.
+    frame, y = _panel()
+    frame = frame.copy()
+    frame["time"] = pd.Series([t.tz_localize("UTC") for t in frame["time"]], dtype=object)
+    with pytest.raises(DataContractError, match="not supported"):
+        TabularToSequence(_config(), "binary").fit(frame, y)
+
+
+def test_missing_time_col_reported_by_check_columns() -> None:
+    frame, y = _panel()
+    frame = frame.drop(columns=["time"])
+    with pytest.raises(DataContractError, match="time_col"):
+        TabularToSequence(_config(), "binary").fit(frame, y)
+
+
+def test_sklearn_is_fitted_flag() -> None:
+    frame, y = _panel()
+    tts = TabularToSequence(_config(), "binary")
+    assert tts.__sklearn_is_fitted__() is False
+    tts.fit(frame, y)
+    assert tts.__sklearn_is_fitted__() is True
+
+
+def test_inverse_transform_without_tv_real() -> None:
+    rows = []
+    for entity in range(3):
+        for t in range(2):
+            rows.append(
+                {
+                    "id": entity,
+                    "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                    "tc": f"c{t}",
+                }
+            )
+    frame = pd.DataFrame(rows)
+    cfg = TabularToSequenceConfig(
+        id_col="id",
+        time_col="time",
+        time_varying_categorical_cols=("tc",),
+        lookback=4,
+    )
+    tts = TabularToSequence(cfg, "binary").fit(frame, np.zeros(6))
+    recovered = tts.inverse_transform(tts.transform(frame))
+    assert "tc" in recovered.columns
+    assert "tr" not in recovered.columns
+
+
+def test_min_periods_drops_entity_at_fit() -> None:
+    frame, y = _panel()
+    tts = TabularToSequence(_config(min_periods=3), "binary").fit(frame, y)
+    # Only entities 2 and 3 (3 and 4 rows) survive the fit floor; the
+    # scaler statistics come from those rows only.
+    assert tts.real_scaler_ is not None
+
+
+def test_min_periods_predict_nan_target_with_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    frame, y = _panel()
+    tts = TabularToSequence(_config(min_periods_predict=3), "regression_point").fit(
+        frame, y.astype(float)
+    )
+    with caplog.at_level(logging.WARNING, logger="seq_sklearn"):
+        out = tts.transform(frame)
+    events = [
+        r
+        for r in caplog.records
+        if getattr(r, "event", None) == Event.DATA_MIN_PERIODS_PREDICT_BREACH
+    ]
+    assert len(events) == 1
+    # Per-entity gate: entities 0 (1 row) and 1 (2 rows) are below the
+    # floor of 3, so count == 2 (one aggregated warning per call).
+    assert events[0].payload["count"] == 2
+    targets = out["target"].numpy()
+    # Entity 0 -> window idx 0; entity 1 -> window idx 1, 2: all NaN.
+    assert np.isnan(targets[0])
+    assert np.isnan(targets[1])
+    assert np.isnan(targets[2])
+
+
+def test_cardinality_cap_raises() -> None:
+    frame, y = _panel()
+    with pytest.raises(ConfigError, match="exceeds max_categorical_cardinality"):
+        TabularToSequence(_config(max_categorical_cardinality=1), "binary").fit(frame, y)
+
+
+def test_hash_high_cardinality_does_not_raise() -> None:
+    frame, y = _panel()
+    cfg = _config(max_categorical_cardinality=1, hash_high_cardinality=True)
+    tts = TabularToSequence(cfg, "binary").fit(frame, y)
+    assert "sc" in tts.hashed_columns_
+    out = tts.transform(frame)
+    # 1 + 2 + 3 + 4 = 10 windows across the four entities.
+    assert out["static_categorical"].shape == (10, 1)
+
+
+def test_inverse_transform_round_trips_reals() -> None:
+    frame, y = _panel()
+    tts = TabularToSequence(_config(), "binary").fit(frame, y)
+    out = tts.transform(frame)
+    recovered = tts.inverse_transform(out)
+    assert "tr" in recovered.columns
+    assert "sr" in recovered.columns
+    # sr is the entity-constant static real; each entity contributes one
+    # value per window. Counts: entity 0 -> 1, 1 -> 2, 2 -> 3, 3 -> 4.
+    expected = np.array([0.0] * 1 + [1.0] * 2 + [2.0] * 3 + [3.0] * 4)
+    np.testing.assert_allclose(np.sort(recovered["sr"].to_numpy()), expected, atol=1e-6)
+
+
+def test_inverse_transform_decodes_categoricals() -> None:
+    frame, y = _panel()
+    tts = TabularToSequence(_config(), "binary").fit(frame, y)
+    recovered = tts.inverse_transform(tts.transform(frame))
+    assert set(recovered["sc"].tolist()).issubset({"s0", "s1"})
+
+
+def test_inverse_transform_hash_columns_raise() -> None:
+    frame, y = _panel()
+    cfg = _config(max_categorical_cardinality=1, hash_high_cardinality=True)
+    tts = TabularToSequence(cfg, "binary").fit(frame, y)
+    with pytest.raises(NotImplementedError, match="hash-tricked"):
+        tts.inverse_transform(tts.transform(frame))
+
+
+def test_embedding_dim_heuristic_and_override() -> None:
+    frame, y = _panel()
+    cfg = _config(categorical_embed_dims={"sc": 7})
+    tts = TabularToSequence(cfg, "binary").fit(frame, y)
+    assert tts.embedding_dims_["sc"] == 7
+    assert tts.embedding_dims_["tc"] == min(50, round(1.6 * (2 + 1) ** 0.56))
+
+
+def test_clip_features_applied_after_scaling() -> None:
+    frame, y = _panel()
+    cfg = _config(clip_features=0.5)
+    out = TabularToSequence(cfg, "binary").fit_transform(frame, y)
+    tv = out["time_varying_real"].numpy()
+    assert tv.max() <= 0.5 + 1e-6
+    assert tv.min() >= -0.5 - 1e-6
+    sr = out["static_real"].numpy()
+    assert sr.max() <= 0.5 + 1e-6
+
+
+def test_scaling_static_real_inherit_vs_explicit() -> None:
+    frame, y = _panel()
+    inherit = TabularToSequence(_config(scaling_real="robust"), "binary").fit(frame, y)
+    explicit = TabularToSequence(
+        _config(scaling_real="robust", scaling_static_real="standard"), "binary"
+    ).fit(frame, y)
+    assert type(inherit.static_real_scaler_) is type(inherit.real_scaler_)
+    assert type(explicit.static_real_scaler_) is not type(explicit.real_scaler_)
+
+
+def test_scaling_static_real_none_passthrough() -> None:
+    frame, y = _panel()
+    cfg = _config(scaling_static_real="none")
+    tts = TabularToSequence(cfg, "binary").fit(frame, y)
+    out = tts.transform(frame)
+    recovered = tts.inverse_transform(out)
+    # "none" is an identity scaler: static-real values round-trip
+    # unchanged (entity-constant sr values 0, 1, 2, 3 by window count).
+    expected = np.array([0.0] * 1 + [1.0] * 2 + [2.0] * 3 + [3.0] * 4)
+    np.testing.assert_allclose(np.sort(recovered["sr"].to_numpy()), expected, atol=1e-9)
+
+
+def test_no_categorical_columns_path() -> None:
+    rows = []
+    y = []
+    for entity in range(3):
+        for t in range(5):
+            rows.append(
+                {
+                    "id": entity,
+                    "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                    "tr": float(t),
+                }
+            )
+            y.append(0)
+    frame = pd.DataFrame(rows)
+    cfg = TabularToSequenceConfig(
+        id_col="id", time_col="time", time_varying_real_cols=("tr",), lookback=3
+    )
+    out = TabularToSequence(cfg, "binary").fit_transform(frame, np.asarray(y))
+    # 3 entities x 5 rows -> 15 windows, lookback 3.
+    assert out["static_categorical"].shape == (15, 0)
+    assert out["time_varying_categorical"].shape == (15, 3, 0)
+    assert out["static_real"].shape == (15, 0)
+    rec = TabularToSequence(cfg, "binary").fit(frame, np.asarray(y)).inverse_transform(out)
+    assert "tr" in rec.columns
+
+
+def test_no_time_varying_real_path() -> None:
+    rows = []
+    for entity in range(3):
+        for t in range(2):
+            rows.append(
+                {
+                    "id": entity,
+                    "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                    "tc": f"c{t}",
+                }
+            )
+    frame = pd.DataFrame(rows)
+    cfg = TabularToSequenceConfig(
+        id_col="id",
+        time_col="time",
+        time_varying_categorical_cols=("tc",),
+        lookback=4,
+    )
+    out = TabularToSequence(cfg, "binary").fit_transform(frame, np.zeros(6))
+    # 3 entities x 2 rows -> 6 windows, lookback 4.
+    assert out["time_varying_real"].shape == (6, 4, 0)
+    assert out["time_varying_categorical"].shape == (6, 4, 1)
+
+
+def test_prediction_step_zero() -> None:
+    frame, y = _panel()
+    out = TabularToSequence(_config(prediction_step=0), "binary").fit_transform(frame, y)
+    # 1 + 2 + 3 + 4 = 10 windows.
+    assert out["target"].shape == (10,)
+
+
+def test_single_entity_k_gt_lookback_emits_k_sliding_windows() -> None:
+    k = 10
+    lookback = 4
+    rows = []
+    for t in range(k):
+        rows.append(
+            {
+                "id": 0,
+                "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                "sc": "a",
+                "sr": 1.0,
+                "tr": float(t),
+                "tc": "x",
+            }
+        )
+    frame = pd.DataFrame(rows)
+    out = TabularToSequence(_config(lookback=lookback), "binary").fit_transform(frame, np.zeros(k))
+    # One window per window-end position 0..k-1.
+    assert out["time_varying_real"].shape == (k, lookback, 1)
+    mask = out["padding_mask"].numpy()
+    # Window-end e < lookback - 1 is left-padded on lookback - 1 - e
+    # positions; e >= lookback - 1 is a full window.
+    for e in range(k):
+        expected_pad = max(0, lookback - 1 - e)
+        assert mask[e][:expected_pad].all()
+        assert not mask[e][expected_pad:].any()
+    # The single tv_real column equals the per-entity time counter
+    # (tr == t). The last (right-most, never padded) timestep of each
+    # window is its window-END value. Standard scaling is strictly
+    # monotone, so reading the window-end value out of the ACTUAL
+    # transform output and asserting it is strictly increasing across
+    # the batch proves windows are emitted oldest-to-newest (window i
+    # ends one period later than window i - 1). A regression that
+    # reversed the per-entity time sort would break this.
+    window_end_tr = out["time_varying_real"].numpy()[:, -1, 0]
+    assert np.all(np.diff(window_end_tr) > 0)
+    # Recover the integer time order the scaled values encode and pin
+    # it to 0, 1, ..., k - 1 (oldest window first).
+    assert np.argsort(window_end_tr).tolist() == list(range(k))
+
+
+def test_prediction_step_horizon_cap_and_interior_alignment() -> None:
+    n = 5
+    prediction_step = 2
+    rows = []
+    y = []
+    for t in range(n):
+        rows.append(
+            {
+                "id": 0,
+                "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                "sc": "a",
+                "sr": 1.0,
+                "tr": float(t),
+                "tc": "x",
+            }
+        )
+        # Distinct float label per row so the aligned target is checkable.
+        y.append(float(t) + 0.5)
+    frame = pd.DataFrame(rows)
+    out = TabularToSequence(
+        _config(lookback=4, prediction_step=prediction_step), "regression_point"
+    ).fit_transform(frame, np.asarray(y, dtype=float))
+    targets = out["target"].numpy()
+    assert targets.shape == (n,)
+    # Interior positions e with e + prediction_step <= n - 1 resolve to
+    # row e + prediction_step exactly.
+    for e in (0, 1, 2):
+        assert targets[e] == pytest.approx(float(e + prediction_step) + 0.5)
+    # Late positions e where e + prediction_step > n - 1 are capped to
+    # row n - 1 (no index error, the window is kept).
+    for e in (3, 4):
+        assert targets[e] == pytest.approx(float(n - 1) + 0.5)
+
+
+def test_unseen_entity_target_is_nan_regression() -> None:
+    frame, y = _panel()
+    tts = TabularToSequence(_config(), "regression_point").fit(frame, y.astype(float))
+    unseen = pd.DataFrame(
+        [
+            {
+                "id": 99,
+                "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                "sc": "s0",
+                "sr": 5.0,
+                "tr": float(t),
+                "tc": "c0",
+            }
+            for t in range(3)
+        ]
+    )
+    out = tts.transform(unseen)
+    # The unseen entity is not in the fit-time (id, time) target map, so
+    # every one of its windows resolves to NaN.
+    targets = out["target"].numpy()
+    assert targets.shape == (3,)
+    assert np.isnan(targets).all()
+
+
+def test_classification_min_periods_predict_breach_is_minus_one_sentinel() -> None:
+    frame, y = _panel()
+    tts = TabularToSequence(_config(min_periods_predict=3), "binary").fit(frame, y)
+    out = tts.transform(frame)
+    targets = out["target"].numpy()
+    # Entities 0 (1 row) and 1 (2 rows) are below the floor -> windows
+    # 0, 1, 2. Classification target is the -1 int sentinel, not 0/NaN.
+    assert out["target"].dtype == torch.long
+    assert targets[0] == -1
+    assert targets[1] == -1
+    assert targets[2] == -1
+
+
+def test_inverse_transform_unseen_categorical_round_trips_to_unk() -> None:
+    frame, y = _panel()
+    tts = TabularToSequence(_config(), "binary").fit(frame, y)
+    unseen = pd.DataFrame(
+        [
+            {
+                "id": 0,
+                "time": pd.Timestamp("2020-01-01"),
+                "sc": "BRAND_NEW_LEVEL",
+                "sr": 1.0,
+                "tr": 0.5,
+                "tc": "ALSO_NEW",
+            }
+        ]
+    )
+    recovered = tts.inverse_transform(tts.transform(unseen))
+    assert recovered["sc"].tolist() == ["<unk>"]
+    assert recovered["tc"].tolist() == ["<unk>"]
+
+
+def test_entity_id_codes_monotone_with_batch_blocks() -> None:
+    # Integer ids whose stringified sort order ("1", "10", "2") differs
+    # from the raw groupby order (1, 2, 10). Codes must follow the
+    # raw-value batch-emission order, not the stringified sort.
+    rows = []
+    counts = {1: 2, 2: 3, 10: 4}
+    for entity_id, n in counts.items():
+        for t in range(n):
+            rows.append(
+                {
+                    "id": entity_id,
+                    "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                    "sc": "a",
+                    # static real == original id so a block's code can be
+                    # mapped back to its source entity via inverse_transform.
+                    "sr": float(entity_id),
+                    "tr": float(t),
+                    "tc": "x",
+                }
+            )
+    frame = pd.DataFrame(rows)
+    tts = TabularToSequence(_config(), "binary")
+    out = tts.fit_transform(frame, np.zeros(len(rows)))
+    codes = out["entity_id"].numpy()
+    # Monotone non-decreasing across the whole batch.
+    assert np.all(np.diff(codes) >= 0)
+    # groupby(sort=True) emits 1, 2, 10 -> codes 0, 1, 2 with the
+    # per-entity window counts equal to the row counts.
+    np.testing.assert_array_equal(codes, np.array([0, 0, 1, 1, 1, 2, 2, 2, 2]))
+    # Each code maps back to the correct original id. inverse_transform
+    # writes the entity code under cfg.id_col ("id") and unscales the
+    # static real "sr", which was set equal to the original id.
+    recovered = tts.inverse_transform(out)
+    code_to_id = {1: [0, 0], 2: [1, 1, 1], 10: [2, 2, 2, 2]}
+    offset = 0
+    for original_id, expected_codes in code_to_id.items():
+        block = recovered.iloc[offset : offset + len(expected_codes)]
+        assert block["id"].tolist() == expected_codes
+        assert block["sr"].round().tolist() == [float(original_id)] * len(expected_codes)
+        offset += len(expected_codes)
+
+
+# max_examples=15 keeps the hypothesis budget small enough for the dev
+# loop while still sweeping the (1, 60) periods-per-entity range across
+# 12 entities; the synthetic generator's own RNG can trip the too_slow
+# health check on the wide range, so it is suppressed.
+@settings(max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(seed=st.integers(min_value=0, max_value=50))
+def test_property_tv_real_shape(seed: int) -> None:
+    """tv_real shape + the A5 sliding-window emission-order contract.
+
+    Pins the F3 variable-history shape ``(sum n_i, lookback,
+    n_tv_real)``, the A5 per-entity ``entity_id`` block contiguity, and
+    the A5 oldest-to-newest per-entity window order by reading the
+    window-end value of a monotone time-order column out of the actual
+    transform output.
+    """
+    gen = SyntheticPanelGenerator(
+        num_entities=12,
+        periods_per_entity=(1, 60),
+        prediction_step=0,
+        seed=seed,
+    )
+    panel, y = gen.generate()
+    # Strictly increasing per-entity time counter so the window-END
+    # value of each window is its 0-based time position. Standard
+    # scaling is monotone, so a strictly increasing window-end sequence
+    # within an entity block proves windows are emitted oldest-first.
+    panel = panel.sort_values(["id", "time"]).reset_index(drop=True)
+    panel["t_order"] = panel.groupby("id", sort=True).cumcount().astype(float)
+    tv_real_cols = (*gen.time_varying_real_cols, "t_order")
+    cfg = TabularToSequenceConfig(
+        id_col="id",
+        time_col="time",
+        static_categorical_cols=tuple(gen.static_categorical_cols),
+        static_real_cols=tuple(gen.static_real_cols),
+        time_varying_real_cols=tv_real_cols,
+        time_varying_categorical_cols=tuple(gen.time_varying_categorical_cols),
+        lookback=gen.lookback,
+        max_categorical_cardinality=10_000,
+    )
+    out = TabularToSequence(cfg, "binary").fit_transform(panel, y)
+    ordered = panel.sort_values(["id", "time"])
+    per_entity_counts = ordered.groupby("id", sort=True).size().to_numpy()
+    total_windows = int(per_entity_counts.sum())
+    assert out["time_varying_real"].shape == (
+        total_windows,
+        gen.lookback,
+        len(tv_real_cols),
+    )
+    t_order_col = len(tv_real_cols) - 1
+    window_end_t_order = out["time_varying_real"].numpy()[:, -1, t_order_col]
+    entity_codes = out["entity_id"].numpy()
+    offset = 0
+    for n_i in per_entity_counts:
+        block = entity_codes[offset : offset + n_i]
+        # Per-entity block contiguity (A5): one code across the block.
+        assert len(np.unique(block)) == 1
+        # Oldest-to-newest order (A5): the window-end time counter read
+        # from the ACTUAL output is strictly increasing within the
+        # block, so the Trainer's np.arange(n_i) reconstruction holds.
+        end_t_order = window_end_t_order[offset : offset + n_i]
+        if n_i > 1:
+            assert np.all(np.diff(end_t_order) > 0)
+        offset += n_i
+
+
+def test_static_unseen_categorical_logs_once_per_entity_not_per_window(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fit_rows = []
+    fit_y = []
+    for t in range(4):
+        fit_rows.append(
+            {
+                "id": 0,
+                "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                "sc": "known",
+                "sr": 1.0,
+                "tr": float(t),
+                "tc": "c0",
+            }
+        )
+        fit_y.append(0)
+    fit_frame = pd.DataFrame(fit_rows)
+    tts = TabularToSequence(_config(), "binary").fit(fit_frame, np.asarray(fit_y))
+
+    # One entity, six rows -> six windows. Its static-categorical value
+    # is unseen at fit time. The static encode is hoisted out of the
+    # window loop, so exactly one DATA_UNSEEN_CATEGORIES record is
+    # emitted for the entity (payload count == 1, the single distinct
+    # unseen static value), not one per window. Moving the static encode
+    # back inside the window loop would emit six records and fail this.
+    n_windows = 6
+    xform_rows = []
+    for t in range(n_windows):
+        xform_rows.append(
+            {
+                "id": 0,
+                "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+                "sc": "novel",
+                "sr": 1.0,
+                "tr": float(t),
+                "tc": "c0",
+            }
+        )
+    xform_frame = pd.DataFrame(xform_rows)
+
+    with caplog.at_level(logging.WARNING, logger="seq_sklearn"):
+        out = tts.transform(xform_frame)
+
+    assert out["static_categorical"].shape == (n_windows, 1)
+    unseen = [
+        r for r in caplog.records if getattr(r, "event", None) == Event.DATA_UNSEEN_CATEGORIES
+    ]
+    assert len(unseen) == 1
+    assert unseen[0].payload["count"] == 1

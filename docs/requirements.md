@@ -249,6 +249,25 @@ attribute is **internal** and not covered by the stability guarantee.
 | ALPHA | `seq_sklearn.tuning.suggest_params` default search space | search-space defaults may change without MINOR bump; pass an explicit search space for stable behavior |
 | INTERNAL | `seq_sklearn._*` modules | not part of the public API |
 
+### Per-hyperparameter stability tiers
+
+Hyperparameter exposure follows a separate tier system. Every
+documented hyperparameter carries one of three tiers:
+
+| Tier | Location | Removal / change cost |
+|---|---|---|
+| STABLE | Typed field on main config (`<Model>Config`) or family sub-config (`OptimizerConfig` / `SchedulerConfig` / `LossConfig` / `SamplerConfig`) | MAJOR bump required |
+| BETA | Typed field on `<Model>AdvancedConfig` or freshly-promoted family sub-config field | MINOR bump + `DeprecationWarning` cycle |
+| ALPHA | Entry in a sub-config's `extra: dict[str, str | int | float | bool | None]` escape hatch | No version bump; CHANGELOG entry only |
+
+This requirements doc (F5 / F7) and architecture A4 are authoritative
+for the hyperparameter-exposure surface; the code carries the verbatim
+schemas. The *procedure* for moving a knob between tiers (the
+ALPHA → BETA → STABLE promotion path, its benchmark-gate metrics, and
+the deprecation-alias contract) is the living maintainer workflow in
+`docs/hyperparameter_strategy.md`, which holds rationale and procedure
+only and is not authoritative for the surface itself.
+
 ### Deprecation policy
 
 Removal of public functionality requires at least one MINOR release
@@ -328,8 +347,9 @@ Classifier-only:
 
 Regressor-only:
 - `predict_quantiles(X, quantiles=None)` returning quantile estimates
-  per row. Requires the model to have been fit with `loss_strategy=
-  "pinball"` (see F5). Raises `seq_sklearn.errors.NotFittedError`
+  per row. Requires the model to have been fit with `loss.strategy=
+  "pinball"` (display label `loss_strategy="pinball"` per the F5
+  bridge table). Raises `seq_sklearn.errors.NotFittedError`
   (subclass of `sklearn.exceptions.NotFittedError`) if `fit` has not
   run; raises `PredictionError` on point-mode regressors with a message
   naming `predict` as the supported alternative. The `quantiles`
@@ -670,6 +690,31 @@ note.
 
 ### F5: Training pipeline
 
+**Note on config shape**: F5 prose and tables below use flat field
+names (`loss_strategy`, `imbalance_strategy`, `optimizer`, `scheduler`,
+`weight_decay`, `learning_rate`, `warmup_steps`, etc.) as display
+labels. Per F7 / architecture A4 these are now fields on nested family
+sub-configs:
+
+| Display label in F5 prose / tables | Nested access path |
+|---|---|
+| `loss_strategy` | `loss.strategy` (on `LossConfig`) |
+| `imbalance_strategy` | `sampler.strategy` (on `SamplerConfig`) |
+| `optimizer` (name) | `optimizer.name` (on `OptimizerConfig`) |
+| `scheduler` (name) | `scheduler.name` (on `SchedulerConfig`) |
+| `learning_rate` / `weight_decay` | `optimizer.learning_rate` / `optimizer.weight_decay` |
+| `warmup_steps` | `scheduler.warmup_steps` |
+| `focal_gamma` / `huber_delta` | `loss.focal_gamma` / `loss.huber_delta` |
+| `oversample_ratio` | `sampler.oversample_ratio` |
+
+The `check_combo` validator signature is unchanged (still four
+strings; the call site reads from the nested fields). The F5 legal-
+cell matrix below describes the same set of legal combinations
+regardless of access path. Sub-fields not in the table above
+(`OptimizerConfig.betas`, `OptimizerConfig.eps`, `SchedulerConfig.pct_start`,
+`LossConfig.label_smoothing`, etc.) are specified in architecture A4
+and carried verbatim in `src/seq_sklearn/config/`.
+
 A `Trainer` wraps pytorch-lightning to handle:
 
 - Optimizer and scheduler configuration via pydantic config.
@@ -689,8 +734,17 @@ A `Trainer` wraps pytorch-lightning to handle:
 - Gradient accumulation via `accumulate_grad_batches: int = 1`.
 - Gradient clipping via `gradient_clip_val: float | None = None`.
 
-**Optimizers (supported menu).** Single `optimizer` field on
-`BaseModelConfig`.
+**Optimizers (supported menu).** The `optimizer.name` field on
+`OptimizerConfig` (display label `optimizer` per the F5 bridge table)
+selects from the menu below; other `OptimizerConfig` fields
+(`learning_rate`, `weight_decay`, `betas`, `eps`, `momentum`,
+`nesterov`, `extra`) configure the chosen optimizer.
+
+This supersedes the Round 1 entry "Optimizer field (arch C5)" in the
+Addressed ledger below, which described an earlier flat
+`BaseModelConfig.optimizer: Literal[...]` shape. The four-tier
+hyperparameter refactor (F7) moved the field to
+`OptimizerConfig.name` on `BaseTrainingConfig`.
 
 | Optimizer | Notes |
 |---|---|
@@ -698,7 +752,12 @@ A `Trainer` wraps pytorch-lightning to handle:
 | `adam` | No decoupled weight decay. |
 | `sgd` | `momentum=0.9` constant; for callers who want a non-adaptive baseline. |
 
-**Learning-rate schedulers (supported menu).**
+**Learning-rate schedulers (supported menu).** The `scheduler.name`
+field on `SchedulerConfig` (display label `scheduler` per the F5
+bridge table) selects from the menu below; other `SchedulerConfig`
+fields (`warmup_steps`, `pct_start`, `div_factor`, `final_div_factor`,
+`plateau_factor`, `plateau_patience`, `plateau_threshold`, `min_lr`,
+`extra`) configure the chosen scheduler.
 
 | Scheduler | Notes |
 |---|---|
@@ -936,19 +995,40 @@ excluding the 1-row case.
 
 ### F7: Hyperparameter tuning compatibility (Optuna first-class)
 
-All model and training hyperparameters live in a single pydantic config
-class (`<Model>Config`, e.g. `TFTConfig` for v1) and are exposed as
-constructor arguments. `get_params` / `set_params` cover the sklearn
-search ecosystem (`GridSearchCV`, `RandomizedSearchCV`).
+Model and training hyperparameters compose hierarchically through a
+four-tier architecture (specified here and in architecture A4; the
+rationale for the four-tier shape is in `docs/hyperparameter_strategy.md`):
+
+- **Tier 1**: family sub-configs (`OptimizerConfig`, `SchedulerConfig`,
+  `LossConfig`, `SamplerConfig`) carry family-of-options fields.
+- **Tier 2**: `<Model>Config` (e.g. `TFTConfig`) carries cross-cutting
+  and model-shape fields; nests the family sub-configs as fields.
+- **Tier 3**: `<Model>AdvancedConfig` (e.g. `TFTAdvancedConfig`) carries
+  BETA experimental knobs.
+- **Tier 4**: every sub-config has an `extra: dict[str, str | int | float
+  | bool | None]` escape hatch for ALPHA-tier passthrough to torch /
+  lightning / optuna internals.
+
+The user-facing surface remains `<Model>Config` per the existing
+stability contract (constructor arguments via the BaseEstimator-adapter
+pattern; `get_params` / `set_params` flat double-underscore traversal).
+sklearn's `GridSearchCV` and `RandomizedSearchCV` compose without
+further plumbing: `set_params(optimizer__learning_rate=3e-4)` chains
+naturally.
 
 For Optuna specifically the library ships:
 
-- `seq_sklearn.tuning.suggest_params(trial: optuna.Trial, model_class: type, base: ModelConfig | None = None) -> ModelConfig`
-  with a per-model default search space covering architecture
-  hyperparameters, training hyperparameters, class-imbalance strategy
-  (F5), calibration strategy (F5), and optionally `lookback` and
-  `prediction_step` (F3) when the caller wants them tuned. The search
-  space samples only from the legal cells of the F5 validity matrix.
+- `seq_sklearn.tuning.suggest_params(trial: optuna.Trial, model_class: type[BaseSequenceClassifier | BaseSequenceRegressor], base: BaseModelConfig | None = None, *, search_advanced: bool = False, search_extras: bool = False) -> BaseModelConfig`
+  with a per-model default search space defined by the `suggest_params`
+  implementation (architecture A16; Phase 8 deliverable).
+  Default flags (`search_advanced=False, search_extras=False`) sample
+  only STABLE fields (the default search space defined by that A16
+  implementation); `search_advanced=True` also samples BETA fields on
+  `<Model>AdvancedConfig`;
+  `search_extras=True` samples from a curated per-family ALPHA-key list
+  (the list ships empty in v1; maintainers populate as ALPHA
+  passthroughs land). The search space samples only from the legal
+  cells of the F5 validity matrix regardless of which flags are set.
 - A runnable example at `docs/examples/optuna_search.py`.
 - A pruning hook native to `_LightningModule` using the
   deferred-raise pattern: `on_validation_epoch_end` calls
@@ -1325,28 +1405,57 @@ matches `num_classes` for multiclass.
 
 ### TFT hyperparameters
 
-In `TFTConfig` (pydantic):
+TFT-specific fields on `TFTConfig` (the main model config):
 
 - `hidden_size` (default 128)
 - `attention_heads` (default 4; must divide `hidden_size`)
 - `dropout` (default 0.1)
 - `variable_selection_dropout` (default 0.1)
 - `prediction_readout` (`"last_valid"` | `"mean_pool"`)
+- `tabular_config: TabularToSequenceConfig` (the preprocessing config)
+- `advanced: TFTAdvancedConfig` (BETA experimental knobs; empty in v1
+  with the `extra` ALPHA escape hatch; per F7)
 
-Plus training-side fields shared with all models: `learning_rate`,
-`weight_decay`, `batch_size`, `max_epochs`, `optimizer`, `scheduler`,
-`warmup_steps`, `gradient_clip_val`, `accumulate_grad_batches`,
-`precision`, `task_type`, `loss_strategy`, `imbalance_strategy`,
-`calibration_strategy`, `verbose`. The optimizer default is `adamw`;
-see F5 for the supported menu.
+Shared training-side hyperparameters live on `BaseTrainingConfig` and
+its nested family sub-configs (per F7's four-tier architecture):
+`batch_size`, `max_epochs`, `gradient_clip_val`,
+`accumulate_grad_batches`, `precision`, `val_fraction`, `cal_fraction`,
+`val_split_strategy`, `num_workers`, `pin_memory`, `seed`, `verbose`
+(cross-cutting; flat on `BaseTrainingConfig`), plus:
 
-`TFTConfig` extends `BaseModelConfig`. `model_config = ConfigDict(
-extra="forbid", frozen=True)`. Cross-field validators enforce:
-`prediction_step >= 0`, `lookback >= 1`, `0 <= dropout < 1`,
-`attention_heads divides hidden_size`, `quantiles strictly increasing
-in (0, 1)`, and the loss / imbalance / calibration validity matrix
-defined in F5. Unknown fields raise `ConfigError`. Mutability after
-construction is disallowed.
+- `optimizer: OptimizerConfig` (name, learning_rate, weight_decay,
+  betas, eps, momentum, nesterov, extra)
+- `scheduler: SchedulerConfig` (name, warmup_steps, OneCycleLR /
+  ReduceLROnPlateau / cosine sub-fields, extra)
+- `loss: LossConfig` (strategy, focal_gamma, focal_alpha, huber_delta,
+  label_smoothing, extra). No default for strategy; the estimator
+  injects `_DEFAULT_LOSS_FOR_TASK[task_type]` if omitted.
+- `sampler: SamplerConfig` (strategy, oversample_ratio, replacement,
+  extra)
+
+Plus `BaseModelConfig`-level shared fields: `task_type`,
+`calibration_strategy`, `threshold_tuning`, `threshold_metric`,
+`quantiles`.
+
+`TFTConfig` extends `BaseModelConfig` which extends `BaseTrainingConfig`.
+Every config carries `model_config = ConfigDict(extra="forbid",
+frozen=True)`. Cross-field validators:
+
+- On `TabularToSequenceConfig`: `prediction_step >= 0`, `lookback >= 1`
+  (enforced by pydantic `Field(ge=...)`).
+- On `TFTConfig`: `0 <= dropout < 1`, `0 <= variable_selection_dropout
+  < 1`, `attention_heads divides hidden_size`.
+- On `BaseModelConfig`: `quantiles strictly increasing in (0, 1)`,
+  `val_fraction + cal_fraction < 1`, the F5 validity matrix (call
+  site reads `self.loss.strategy` and `self.sampler.strategy` from
+  the nested family configs).
+
+Unknown fields raise `ConfigError`. Mutability after construction is
+disallowed.
+
+The full nested-config schema lives in architecture A4 and verbatim in
+`src/seq_sklearn/config/`; this section enumerates the v1 TFT surface
+for completeness.
 
 ## Non-functional requirements (library-wide)
 
@@ -1412,6 +1521,31 @@ thresholds in the same PR.
 **Required tests (highest-impact correctness).** Each item below is
 mandatory in v1; missing any blocks release.
 
+**Hyperparameter-strategy tests**. The four-tier hyperparameter
+architecture (F7 / architecture A4) introduces a named test roster.
+`docs/implementation_plan.md` owns the authoritative test names,
+intents, and per-phase assignment (the per-phase test rosters); the
+test files themselves are the ground truth. Tests assigned to Phase 1
+become mandatory v1 coverage at Phase 1 sign-off; tests assigned to
+Phase 6a (e.g. `test_outer_estimator_clone_does_not_alias_adapter_instances`,
+`test_loss_default_injection_per_task_type`) become mandatory when
+Phase 6a ships; tests assigned to Phase 8 (the `test_suggest_params_*`
+trio plus the two `test_config_to_estimator_kwargs_*` tests) become
+mandatory when Phase 8 ships; the deferred first-promotion test lands
+when the first ALPHA → BETA promotion occurs. Highlights of the Phase 1
+subset: adapter `*` keyword-only enforcement
+(`test_all_adapters_have_keyword_only_init`), reserved-key collision
+via the config-layer `_check_extra_not_reserved` model_validator
+(`test_adamw_reserved_keys_collision_raises`,
+`test_sgd_reserved_keys_collision_raises`), deprecation-alias
+machinery (`test_extract_deprecated_extras_meta_promoted_keys_exist`,
+`test_extract_deprecated_extras_both_typed_and_extra_raises_config_error`,
+`test_extract_deprecated_extras_happy_path_passes_through`),
+`extra` JSON round-trip (`test_extra_dict_survives_json_roundtrip`),
+and sorted-tuple hash stability
+(`test_extra_dict_stored_as_sorted_tuple`). The implementation plan's
+per-phase rosters govern precise per-phase release-gate timing.
+
 - **Mask correctness.** For every variable-length-aware layer (VSN,
   masked attention, mean pool), the test puts the model into
   `model.eval()` with a fixed seed and `torch.use_deterministic_algorithms(True)`,
@@ -1438,7 +1572,11 @@ mandatory in v1; missing any blocks release.
   a caller responsibility.
 - **save/load round-trip.** Fit, save, load in a fresh subprocess,
   predict on the same X, assert `torch.equal` on predictions and
-  attribute equality on the public config.
+  attribute equality on the public config. Attribute equality
+  includes nested sub-configs (`optimizer`, `scheduler`, `loss`,
+  `sampler`, `advanced`); each sub-config's `extra` tuple must
+  survive the round-trip with identical key order and value types
+  per the F7 `mode="json"` serialization pin.
 - **save/load version-mismatch warning.** Save a model, mutate
   `seq_sklearn_version` in the checkpoint metadata to a fake older
   value, reload, assert a single `UserWarning` whose message contains
@@ -1543,9 +1681,14 @@ mandatory in v1; missing any blocks release.
 - **Validity-matrix illegal-combo rejection.** Parametrize over every
   illegal `(task_type, loss_strategy, imbalance_strategy,
   calibration_strategy)` cell enumerated in F5. Each parametrized
-  case constructs the config and asserts `ConfigError` with a message
-  that names the offending field combination and the legal
-  alternatives.
+  case constructs the config (via the nested shape: pass
+  `LossConfig(strategy=loss_strategy)` and
+  `SamplerConfig(strategy=imbalance_strategy)` as sub-configs to
+  `BaseModelConfig`; the parametrization IDs remain the four-string
+  form because the `check_combo` signature is unchanged, so the
+  pytest cache stays stable across the refactor) and asserts
+  `ConfigError` with a message that names the offending field
+  combination and the legal alternatives.
 - **Structured-log event emission.** Parametrize over each event in
   the F11 table. For each event, exercise the code path that should
   emit it and assert (via `caplog`) that exactly one record appears
@@ -2331,3 +2474,58 @@ Gemini final pass (second; on the implementation plan, but with cross-doc impact
   (gemini-impl r1-C4).** Updated the rationale to "installed for
   transitive dependency hygiene; `PyTorchLightningPruningCallback`
   is NOT used".
+
+> Historical note: the fold-in ledger entries below describe edits
+> made when `docs/hyperparameter_strategy.md` was the authoritative
+> spec. That doc was subsequently demoted to rationale + promotion
+> procedure only; its schemas, test rosters, and search-space table
+> were stripped. Authority now lives in this doc (F5/F7), architecture
+> A4/A16, the implementation plan's test rosters, and the code.
+> Entries referencing the strategy doc as authoritative for the
+> surface are historical.
+
+Hyperparameter-strategy fold-in (Round 1):
+
+- **Per-hyperparameter stability tiers added.** New table at the end
+  of the "Per-module stability tiers" subsection maps STABLE / BETA /
+  ALPHA hyperparameter tiers to their config-shape locations (main
+  config / advanced sub-config / `extra` dict) and removal costs.
+  References `docs/hyperparameter_strategy.md` as authoritative for
+  the promotion path, benchmark gates, and deprecation-alias
+  contract.
+- **F7 four-tier architecture.** F7 prose rewritten to introduce the
+  four tiers (family sub-configs / main / advanced / `extra`). The
+  `suggest_params` signature now carries `search_advanced` and
+  `search_extras` keyword-only flags. Default search-space contents
+  are defined by the `suggest_params` implementation (architecture
+  A16; Phase 8 deliverable).
+- **TFT hyperparameters section** updated to reflect the nested
+  config shape: training-side fields nest under `OptimizerConfig`,
+  `SchedulerConfig`, `LossConfig`, `SamplerConfig`. Model-shape
+  fields remain flat on `TFTConfig` plus the new `advanced:
+  TFTAdvancedConfig` slot.
+- **F5 nested-config note** added at section top: validity matrix
+  prose still references `loss_strategy` / `imbalance_strategy` as
+  field names, but the access pattern is now `self.loss.strategy` /
+  `self.sampler.strategy`. `check_combo` signature unchanged.
+- **N1 required-tests block** now lists the four-tier-architecture
+  named test roster as mandatory v1 coverage alongside the existing
+  bullet list, pointing to `docs/implementation_plan.md`'s per-phase
+  test rosters as authoritative for test names and intents.
+
+Gemini three-doc final pass:
+
+- **F7 `suggest_params` signature type hints loosened** (gemini-arch
+  r1-I1). Tightened the type hints in F7 to match architecture A16:
+  `model_class: type[BaseSequenceClassifier | BaseSequenceRegressor]`,
+  `base: BaseModelConfig | None = None`, return type `BaseModelConfig`.
+- **N1 Phase 8 carve-out undercounted tests** (gemini-qa r1-I1). The
+  paragraph said "the `test_suggest_params_*` trio" but Phase 8 also
+  ships two `test_config_to_estimator_kwargs_*` tests. Updated to
+  include both.
+- **N1 highlights** updated to mention the new
+  `test_extract_deprecated_extras_happy_path_passes_through` (the
+  unpromoted-key passthrough contract that was missing test coverage
+  per Gemini qa r1-I2). The reserved-keys collision tests now reference
+  the model_validator location (Phase 1) rather than the build-factory
+  location (Phase 4).
