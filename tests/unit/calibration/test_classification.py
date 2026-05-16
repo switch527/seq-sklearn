@@ -250,12 +250,16 @@ def test_isotonic_before_fit_errors() -> None:
 )
 def test_binary_calibrators_preserve_shape_and_finiteness(logits_np: np.ndarray) -> None:
     logits = torch.from_numpy(logits_np)
-    g = torch.Generator().manual_seed(7)
-    # Labels correlated with the logits (20% flip) so the temperature
-    # fit stays well-posed; the property under test is shape/finiteness,
-    # not robustness to a degenerate (separable) calibration fold.
-    flip = torch.rand(logits.shape[0], generator=g) < 0.2
-    y = ((logits > 0) ^ flip).long()
+    # Balanced alternating labels UNCORRELATED with the logits: every
+    # generated fold is non-separable with both classes present, so the
+    # LBFGS calibrators always have a finite interior optimum and the
+    # property under test (shape + finiteness) holds universally. A
+    # logit-derived label scheme can yield a near-separable fold on
+    # small n where TemperatureScaling/PlattScaling correctly raise
+    # TrainingError; that divergence path is exercised separately by
+    # test_temperature_non_finite_input_raises_training_error and is not
+    # what this property asserts.
+    y = (torch.arange(logits.shape[0]) % 2).long()
     for cal in (TemperatureScaling("binary"), PlattScaling(), IsotonicCalibrator("binary")):
         assert isinstance(cal, _Calibrator)
         cal.fit(logits, y)
@@ -271,8 +275,10 @@ def test_binary_calibrators_preserve_shape_and_finiteness(logits_np: np.ndarray)
     ("cal", "where"),
     [
         (TemperatureScaling("binary"), "TemperatureScaling.fit"),
+        (TemperatureScaling("multiclass"), "TemperatureScaling.fit"),
         (PlattScaling(), "PlattScaling.fit"),
         (IsotonicCalibrator("binary"), "IsotonicCalibrator.fit"),
+        (IsotonicCalibrator("multiclass"), "IsotonicCalibrator.fit"),
     ],
 )
 def test_empty_fold_raises_valueerror_and_leaves_calibrator_unfitted(
