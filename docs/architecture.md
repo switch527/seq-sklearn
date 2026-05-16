@@ -2697,6 +2697,24 @@ Phase 5 (calibration Claude swarm, round 2):
   `np.diff(...) < 0.0` (ties are non-decreasing, not a crossing)
   against a `<= 0.0` mutation, per the F9 "non-decreasing" reading.
 
+Phase 5 (calibration Claude swarm, round 3):
+
+- **Flaky binary-calibrator hypothesis property de-flaked (qa-sonnet
+  CRITICAL C1).** The property derived labels from the logit sign with
+  a 20% flip; on small `n` that can produce a near-separable fold where
+  `TemperatureScaling` / `PlattScaling` correctly raise `TrainingError`
+  (LBFGS divergence), so the unconditional shape/finiteness assertion
+  failed nondeterministically and hypothesis replayed the stored
+  counterexample. Labels are now balanced alternating and uncorrelated
+  with the logits, so every generated fold is well-posed and the
+  property holds universally; the legitimate divergence path stays
+  covered by `test_temperature_non_finite_input_raises_training_error`.
+  `.hypothesis/` added to `.gitignore`. Verified 5x isolated (fresh
+  hypothesis DB) + 3x randomized full-suite.
+- **Multiclass empty-fold params added (arch-sonnet NITPICK).**
+  `TemperatureScaling("multiclass")` and `IsotonicCalibrator("multiclass")`
+  added to the empty-fold parametrization for symmetry.
+
 ## Deferred
 
 Round 1 (design-review swarm):
