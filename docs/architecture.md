@@ -869,6 +869,30 @@ PredictionError("window had zero valid timesteps after preprocessing")
 otherwise. L=1 windows are supported (last_valid index = 0).
 ```
 
+**Model-boundary contract.** `TFTBackbone.forward` validates its
+batch dict at the boundary and raises `PredictionError` for any of
+four preconditions; a Phase 4 estimator that assembles batches from a
+fitted `TabularToSequence` satisfies all four by construction (F3
+scaling yields finite reals, the per-column encoder yields in-range
+codes, F3 left-pads), so these guard a direct caller that bypasses
+Phase 2:
+
+1. NaN or inf in `time_varying_real` / `static_real` ->
+   `PredictionError("<name> contains NaN or inf; ...")`.
+2. A categorical index outside `[0, cardinality + 1)` (the embedding
+   table width, `<unk>` at 0) ->
+   `PredictionError("<name> column <i> has an index outside ...")`.
+3. A `padding_mask` that is not a contiguous leading block (interior
+   or leading-valid padding breaks the left-pad -> pack gather) ->
+   `PredictionError("padding_mask is not a contiguous leading block; ...")`.
+4. A window with zero valid timesteps (all padding) ->
+   `PredictionError("window had zero valid timesteps after preprocessing ...")`.
+
+Construction-time precondition: `InterpretableMultiHeadAttention`
+raises `ValueError` if `hidden_size % n_heads != 0`. On the TFT path
+the `TFTConfig` validator already enforces this, so it only guards a
+direct v2-family construction of the shared-V attention module.
+
 **Layer factory** (`models/_layers.py`): every `nn.Linear`,
 `nn.LayerNorm`, `nn.Embedding` instantiation routes through one
 module. v1 returns standard PyTorch layers; v2 (the FP8 pass per
@@ -2053,6 +2077,16 @@ def load(cls, path: str | Path) -> "BaseSequenceEstimator":
     return cls._reconstruct(weights, state)   # UserWarning on version mismatch
 ```
 
+`save_weights_and_state` / `load_weights_and_state` in
+`serialization.py` are low-level primitives: they persist and read
+`state` verbatim and do NOT synthesize the metadata block.
+`_collect_state` owns assembling `state`, and MUST include
+`schema_version` (set to `CURRENT_SCHEMA_VERSION`) along with the rest
+of the metadata block. A `state` missing `schema_version` round-trips
+into the `_migrate` "older than oldest supported" path on load and
+fails with a confusing error; the owner of correctness is
+`_collect_state`, not the primitive.
+
 No `torch.load` call anywhere in the save / load path (the library
 never opts out of `weights_only=True`). No `trust=True` /
 `weights_only=False` escape hatch exists in v1; a future model that
@@ -2370,6 +2404,26 @@ Round 1 (design-review swarm):
   with an example `class TFTClassifier(TransformerSequenceEstimator.Classifier, BaseSequenceClassifier)`.
 - **Style line 1233 / line 1247 (style r1-I1, r1-I2).** Rewritten
   in place during the CI wall-clock and A20 edits.
+
+Phase 3 doc-sync (post-Gemini final-pass code/doc drift audit):
+
+- **A6 `forward()` precondition contract.** Rounds 1-2 added three
+  runtime guards (NaN/inf on real inputs, categorical index
+  out-of-range, non-contiguous padding) and round 3 added the
+  `InterpretableMultiHeadAttention` `hidden_size % n_heads` check;
+  only the pre-existing zero-valid guard was in A6. A6 now has a
+  "Model-boundary contract" block enumerating all four `forward()`
+  `PredictionError` preconditions plus the attention construction-time
+  `ValueError`. DOC-ONLY: the design was sound (F3 / `TFTConfig`
+  already constrain the estimator path; the guards protect a direct
+  caller), so no Phase 4 design review was required.
+- **A17 `schema_version` ownership.** The `def0cdc` serialization
+  docstring stated the caller (`_collect_state`) owns assembling
+  `schema_version` while the primitive persists `state` verbatim; A17
+  prose did not. A17 now states this explicitly next to the `save`
+  skeleton so a Phase 4 author does not ship a `_collect_state` that
+  omits `schema_version` and hits the confusing "older than oldest
+  supported" load failure. DOC-ONLY.
 
 ## Deferred
 
