@@ -170,6 +170,13 @@ def test_deterministic_gate_off_on_mixed_precision(
     assert called == []
 
 
+def test_deterministic_gate_off_on_32_not_true() -> None:
+    # Pins the "32-true" literal against the near-miss "32": the gate
+    # must not relax to a prefix / substring match.
+    trainer = Trainer(_StubTransformer(), _config(), _model_factory)  # type: ignore[arg-type]
+    assert trainer._deterministic("32") is False
+
+
 # --- F5 DataLoader defaults --------------------------------------------
 
 
@@ -276,6 +283,14 @@ def test_window_time_index_empty() -> None:
     assert Trainer._window_time_index(np.array([], dtype=int)).size == 0
 
 
+def test_window_time_index_non_monotone_raises() -> None:
+    # A future non-TTS caller passing an unordered entity_id must fail
+    # loudly here instead of silently corrupting the fold ordinals.
+    eids = np.array([0, 1, 0, 1])
+    with pytest.raises(AssertionError, match="monotone"):
+        Trainer._window_time_index(eids)
+
+
 # --- _TensorDictDataset ------------------------------------------------
 
 
@@ -346,6 +361,122 @@ def test_class_weighted_multiclass_sets_non_uniform_weight() -> None:
     assert isinstance(loss, nn.CrossEntropyLoss)
     assert loss.weight is not None
     assert torch.allclose(loss.weight, expected)
+
+
+# --- F5 no-leakage: strict-subset train_idx mutation pins --------------
+#
+# These assert the production logic slices by train_idx (it does); they
+# FAIL if `targets[train_idx]` is replaced with `targets`. Every other
+# class-weight / sampler test passes train_idx = arange(N) so the slice
+# is an identity no-op and the mutation survives the rest of the suite.
+
+
+def test_class_weights_binary_uses_only_train_fold_balance() -> None:
+    cfg = _config(sampler=SamplerConfig(strategy="class_weighted"))
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    # Full panel: 4 pos / 4 neg -> pos_weight 1.0. Train fold (strict
+    # subset) sees 6 neg / 2 pos -> pos_weight 3.0; the held-out tail is
+    # all-positive. The slice MUST restrict to the fold.
+    targets = torch.tensor([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1], dtype=torch.float32).reshape(-1, 1)
+    train_idx = np.array([0, 1, 2, 3, 4, 5, 6, 7])  # 6 neg, 2 pos
+    weights = trainer._class_weights(train_idx, targets)
+    assert weights is not None
+    assert torch.allclose(weights, torch.tensor([3.0]))  # fold-restricted
+    full = trainer._class_weights(np.arange(12), targets)
+    assert full is not None
+    assert torch.allclose(full, torch.tensor([1.0]))  # differs from fold
+
+
+def test_class_weights_multiclass_uses_only_train_fold_balance() -> None:
+    cfg = _config(task_type="multiclass", sampler=SamplerConfig(strategy="class_weighted"))
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    # Full panel counts [3, 3, 3]; train fold (strict subset) counts
+    # [4, 1, 1]. Fold-restricted weights differ from the panel weights.
+    targets = torch.tensor([0, 0, 0, 1, 1, 1, 2, 2, 2, 0, 1, 2], dtype=torch.int64)
+    train_idx = np.array([0, 1, 2, 9, 4, 7])  # classes: 0,0,0,0,1,2
+    weights = trainer._class_weights(train_idx, targets)
+    assert weights is not None
+    expected_fold = torch.tensor([6.0 / 4.0, 6.0 / 1.0, 6.0 / 1.0])
+    assert torch.allclose(weights, expected_fold)
+    full = trainer._class_weights(np.arange(12), targets)
+    assert full is not None
+    assert not torch.allclose(weights, full)  # fold balance, not panel
+
+
+def test_train_sampler_undersample_uses_only_train_fold_balance() -> None:
+    cfg = _config(sampler=SamplerConfig(strategy="undersample_majority"))
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    # Full panel: 6 neg / 6 pos. Train fold (strict subset) is 5 neg /
+    # 1 pos, so undersampling cuts to the fold minority (1 per class -> 2
+    # indices, all drawn from train_idx). The panel balance would give 12.
+    targets = torch.tensor([0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0], dtype=torch.int64).reshape(-1, 1)
+    train_idx = np.array([0, 1, 2, 3, 4, 5])  # 5 neg, 1 pos
+    sampler = trainer._train_sampler(train_idx, targets)
+    assert sampler is not None
+    drawn = list(sampler)
+    assert len(drawn) == 2  # fold minority (1) per class, not panel (6)
+    assert set(drawn).issubset(set(train_idx.tolist()))
+
+
+def test_train_sampler_oversample_uses_only_train_fold_balance() -> None:
+    cfg = _config(sampler=SamplerConfig(strategy="oversample_minority"))
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    # Train fold (strict subset) is 4 neg / 1 pos; oversampling lifts the
+    # minority to the fold majority (8 total), every index in train_idx.
+    targets = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1], dtype=torch.int64).reshape(-1, 1)
+    train_idx = np.array([0, 1, 2, 3, 4])  # 4 neg, 1 pos
+    sampler = trainer._train_sampler(train_idx, targets)
+    assert sampler is not None
+    drawn = list(sampler)
+    assert len(drawn) == 8  # fold-balanced (4+4), not panel-balanced
+    assert set(drawn).issubset(set(train_idx.tolist()))
+
+
+# --- CRITICAL 2: multiclass vocabulary sized from the full targets -----
+
+
+def test_class_weights_multiclass_vocab_from_full_not_train_fold() -> None:
+    cfg = _config(task_type="multiclass", sampler=SamplerConfig(strategy="class_weighted"))
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    # Class 2 is held entirely out of the train fold. Sizing the vocab
+    # from train_idx alone would yield a length-2 vector and an opaque
+    # CrossEntropyLoss shape mismatch on the first forward.
+    targets = torch.tensor([0, 0, 1, 1, 2, 2], dtype=torch.int64)
+    train_idx = np.array([0, 1, 2, 3])  # classes 0,0,1,1 (no class 2)
+    weights = trainer._class_weights(train_idx, targets)
+    assert weights is not None
+    assert weights.numel() == 3  # full K, not the fold's 2
+    # class 2 has zero fold count -> clamp(min=1.0) -> sum/1 weight.
+    assert torch.allclose(weights, torch.tensor([4.0 / 2.0, 4.0 / 2.0, 4.0 / 1.0]))
+
+
+# --- IMPROVEMENT 3: degenerate binary fold falls back to 1.0 -----------
+
+
+def test_class_weights_binary_all_positive_fold_falls_back(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cfg = _config(sampler=SamplerConfig(strategy="class_weighted"))
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    targets = torch.ones(6, 1, dtype=torch.float32)  # no negatives
+    with caplog.at_level("WARNING", logger="seq_sklearn.training.trainer"):
+        weights = trainer._class_weights(np.arange(6), targets)
+    assert weights is not None
+    assert torch.allclose(weights, torch.tensor([1.0]))
+    assert any("no negative" in r.message and r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_class_weights_binary_all_negative_fold_falls_back(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cfg = _config(sampler=SamplerConfig(strategy="class_weighted"))
+    trainer = Trainer(_StubTransformer(), cfg, _model_factory)  # type: ignore[arg-type]
+    targets = torch.zeros(6, 1, dtype=torch.float32)  # no positives
+    with caplog.at_level("WARNING", logger="seq_sklearn.training.trainer"):
+        weights = trainer._class_weights(np.arange(6), targets)
+    assert weights is not None
+    assert torch.allclose(weights, torch.tensor([1.0]))
+    assert any("no positive" in r.message and r.levelname == "WARNING" for r in caplog.records)
 
 
 # --- A16: optuna_trial threads from Trainer.fit into _LightningModule --
@@ -429,6 +560,34 @@ def test_resume_path_threads_to_ckpt_path(monkeypatch: pytest.MonkeyPatch) -> No
     )
     trainer.fit(object())
     assert captured["ckpt_path"] == "/tmp/run.ckpt"
+
+
+def test_resume_path_path_object_threads_to_ckpt_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_fit(
+        self: pl.Trainer,
+        model: object,
+        train: object,
+        val: object,
+        ckpt_path: object = None,
+    ) -> None:
+        del self, model, train, val
+        captured["ckpt_path"] = ckpt_path
+
+    _force_cpu(monkeypatch)
+    monkeypatch.setattr(pl.Trainer, "fit", fake_fit)
+    cfg = _config(scheduler=_constant_scheduler())
+    trainer = Trainer(
+        _StubTransformer(),  # type: ignore[arg-type]
+        cfg,
+        _model_factory,
+        resume_path=Path("/tmp/run.ckpt"),
+    )
+    trainer.fit(object())
+    assert captured["ckpt_path"] == "/tmp/run.ckpt"  # str() of the Path
 
 
 def test_no_resume_path_passes_none_ckpt(monkeypatch: pytest.MonkeyPatch) -> None:

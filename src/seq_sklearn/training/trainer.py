@@ -171,14 +171,20 @@ class Trainer:
         """F5 ``class_weighted`` weights derived from the train fold.
 
         Returns ``None`` for every sampler strategy except
-        ``class_weighted`` (A8 ~1204-1209: ``class_weights`` is non-None
-        only under that strategy). For ``binary`` the result is the
-        scalar ``pos_weight = neg_count / pos_count`` consumed by
-        ``BCEWithLogitsLoss``; for ``multiclass`` it is the per-class
-        inverse-frequency vector consumed by ``CrossEntropyLoss``. Both
-        are computed from the transformed targets restricted to
-        ``train_idx`` so the held-out folds never leak into the weighting
-        (F5 requirements.md ~786-787).
+        ``class_weighted`` (A8 architecture.md:1208, the authority for
+        the train-fold-only derivation; F5 requirements.md ~786-787 only
+        states "frequency-based per-class weights"). The F5 validity
+        matrix guarantees ``loss.strategy == "cross_entropy"`` whenever
+        this branch is reached, and ``build_loss`` re-asserts it. For
+        ``binary`` the result is the scalar ``pos_weight = neg_count /
+        pos_count`` consumed by ``BCEWithLogitsLoss``; for ``multiclass``
+        it is the per-class inverse-frequency vector consumed by
+        ``CrossEntropyLoss``. Frequencies are counted over the targets
+        restricted to ``train_idx`` so the held-out folds never leak into
+        the weighting, but the multiclass vocabulary is sized from the
+        FULL transformed targets so a class entirely held out of the
+        train fold still gets a slot (a shorter weight vector would raise
+        an opaque shape mismatch on the first forward; A8 ~1209).
         """
         if self.config.sampler.strategy != "class_weighted":
             return None
@@ -187,12 +193,20 @@ class Trainer:
             labels = fold.reshape(-1)
             pos = float((labels == 1).sum().item())
             neg = float((labels == 0).sum().item())
-            pos_weight = neg / pos if pos > 0 else 1.0
-            return torch.tensor([pos_weight], dtype=torch.float32)
-        # multiclass: per-class inverse frequency over the train fold.
-        labels = fold.reshape(-1).to(torch.int64)
-        n_classes = int(labels.max().item()) + 1
-        counts = torch.bincount(labels, minlength=n_classes).to(torch.float32)
+            if pos <= 0 or neg <= 0:
+                absent = "positive" if pos <= 0 else "negative"
+                logger.warning(
+                    "class_weighted binary fold has no %s samples; "
+                    "pos_weight falls back to 1.0 (no reweighting)",
+                    absent,
+                )
+                return torch.tensor([1.0], dtype=torch.float32)
+            return torch.tensor([neg / pos], dtype=torch.float32)
+        # multiclass: per-class inverse frequency over the train fold,
+        # vocabulary sized from the full transformed targets.
+        n_classes = int(targets.reshape(-1).to(torch.int64).max().item()) + 1
+        fold_labels = fold.reshape(-1).to(torch.int64)
+        counts = torch.bincount(fold_labels, minlength=n_classes).to(torch.float32)
         return counts.sum() / torch.clamp(counts, min=1.0)
 
     def _configure_loss(self, class_weights: Tensor | None) -> nn.Module:
