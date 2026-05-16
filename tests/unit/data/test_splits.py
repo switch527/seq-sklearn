@@ -175,16 +175,39 @@ def test_unsorted_window_time_index_handled() -> None:
 def test_single_window_entity_no_negative_slices() -> None:
     entity_ids = np.array([0, 1])
     wti = np.array([0, 0])
-    train, val, cal = compute_three_way_split(
-        entity_ids,
-        wti,
-        val_fraction=0.6,
-        cal_fraction=0.3,
-        val_split_strategy="time_ordered",
-        calibration_set_provided=False,
-    )
+    # round(0.3 * 1) == 0 per single-window entity, so cal is empty and
+    # the empty-cal UserWarning fires; expected for this degenerate input.
+    with pytest.warns(UserWarning, match="cal_fraction"):
+        train, val, cal = compute_three_way_split(
+            entity_ids,
+            wti,
+            val_fraction=0.6,
+            cal_fraction=0.3,
+            val_split_strategy="time_ordered",
+            calibration_set_provided=False,
+        )
     total = len(train) + len(val) + len(cal)
     assert total == 2
+
+
+def test_random_multi_entity_short_panel_both_warnings_fire() -> None:
+    # Random policy with >1 entity warns about leakage; an all-short
+    # panel also rounds n_cal to 0. Both independent UserWarnings must
+    # fire; neither suppresses the other.
+    entity_ids = np.array([0, 1])
+    wti = np.array([0, 0])
+    with pytest.warns(UserWarning, match="leaks future information") as records:
+        compute_three_way_split(
+            entity_ids,
+            wti,
+            val_fraction=0.0,
+            cal_fraction=0.1,
+            val_split_strategy="random",
+            calibration_set_provided=False,
+        )
+    messages = [str(r.message) for r in records]
+    assert any("leaks future information" in m for m in messages)
+    assert any("cal_fraction" in m for m in messages)
 
 
 def test_one_window_and_multi_window_entity_same_call() -> None:

@@ -2600,3 +2600,16 @@ Gemini three-doc final pass:
   `test_extract_deprecated_extras_happy_path_passes_through` in
   Phase 1; it asserts unpromoted `extra` keys pass through unchanged
   with no `DeprecationWarning`.
+
+Phase 2 (data-layer Claude swarm):
+
+- **A9.1 `EntityTimeSeriesSplit.left_extension` draws from the
+  pre-gap-trim segment.** `split()` builds `left_extension` from the
+  preceding train segment before the `gap` clamp is applied, so the
+  `gap` separation is honored on the train side but a gap-window row
+  can still appear in the test fold's history-only prefix. A9.1's
+  semantics permit this (the left-extension rows are unscored context
+  per "no test target spans the overlap"), and there is no reachable
+  impact until a Phase 4+ splitter-consumer scores predictions. The
+  Phase 4 splitter-consumer review must verify those rows are masked
+  from loss before scoring.
