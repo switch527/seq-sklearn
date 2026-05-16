@@ -43,8 +43,6 @@ from seq_sklearn.models._backbone import BackboneOutput, BaseBackbone
 
 __all__ = ["_LightningModule"]
 
-logger = logging.getLogger(__name__)
-
 
 class _LightningModule(pl.LightningModule):
     """Internal Lightning module wrapping a backbone / head / loss triple.
@@ -65,7 +63,7 @@ class _LightningModule(pl.LightningModule):
         scheduler_factory: Callable[[optim.Optimizer], dict[str, object]] | None,
         val_metric_name: str = "val_loss",
         bptt_window: int | None = None,
-        optuna_trial: optuna.Trial | None = None,
+        optuna_trial: optuna.trial.BaseTrial | None = None,
     ) -> None:
         super().__init__()
         self.backbone = backbone
@@ -76,7 +74,6 @@ class _LightningModule(pl.LightningModule):
         self.val_metric_name = val_metric_name
         self.bptt_window = bptt_window
         self._optuna_trial = optuna_trial
-        self._consecutive_nan = 0
         self._pending_prune: tuple[int, float] | None = None
         self._last_train_output: BackboneOutput | None = None
         self._logger = logging.getLogger("seq_sklearn.training")

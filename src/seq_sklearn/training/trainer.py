@@ -27,6 +27,7 @@ from pathlib import Path
 
 import lightning.pytorch as pl
 import numpy as np
+import optuna
 import torch
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from torch import Tensor, nn
@@ -166,19 +167,57 @@ class Trainer:
         global_idx = train_idx[resampled]
         return SubsetRandomSampler(global_idx.tolist())
 
-    def _configure_loss(self) -> nn.Module:
+    def _class_weights(self, train_idx: np.ndarray, targets: Tensor) -> Tensor | None:
+        """F5 ``class_weighted`` weights derived from the train fold.
+
+        Returns ``None`` for every sampler strategy except
+        ``class_weighted`` (A8 ~1204-1209: ``class_weights`` is non-None
+        only under that strategy). For ``binary`` the result is the
+        scalar ``pos_weight = neg_count / pos_count`` consumed by
+        ``BCEWithLogitsLoss``; for ``multiclass`` it is the per-class
+        inverse-frequency vector consumed by ``CrossEntropyLoss``. Both
+        are computed from the transformed targets restricted to
+        ``train_idx`` so the held-out folds never leak into the weighting
+        (F5 requirements.md ~786-787).
+        """
+        if self.config.sampler.strategy != "class_weighted":
+            return None
+        fold = targets[train_idx]
+        if self.config.task_type == "binary":
+            labels = fold.reshape(-1)
+            pos = float((labels == 1).sum().item())
+            neg = float((labels == 0).sum().item())
+            pos_weight = neg / pos if pos > 0 else 1.0
+            return torch.tensor([pos_weight], dtype=torch.float32)
+        # multiclass: per-class inverse frequency over the train fold.
+        labels = fold.reshape(-1).to(torch.int64)
+        n_classes = int(labels.max().item()) + 1
+        counts = torch.bincount(labels, minlength=n_classes).to(torch.float32)
+        return counts.sum() / torch.clamp(counts, min=1.0)
+
+    def _configure_loss(self, class_weights: Tensor | None) -> nn.Module:
         """Build the F5 loss, routing ``cfg.loss`` through the extras alias.
 
         The ALPHA -> BETA ``extra`` promotion for the loss family is the
         Phase 4b call-site obligation (Phase 4a left ``build_loss``
         intentionally string-in). Routing happens here so a promoted
-        ``extra`` key reaches its typed field before the strings are read.
+        ``extra`` key reaches its typed field before the strings are
+        read. ``class_weights`` is the F5 ``class_weighted`` weight
+        tensor (``None`` for every other strategy), threaded from
+        :meth:`fit` where the train fold and transformed targets are
+        both in scope (A8 ~1204-1209).
         """
-        loss_cfg, _extra = extract_deprecated_extras(self.config.loss, "loss")
+        loss_cfg, extra = extract_deprecated_extras(self.config.loss, "loss")
+        if extra:
+            logger.warning(
+                "ignoring unrecognized loss.extra key(s) %s: build_loss is "
+                "string-in and consumes only typed loss fields",
+                sorted(extra),
+            )
         return build_loss(
             self.config.task_type,
             loss_cfg.strategy,
-            class_weights=None,
+            class_weights=class_weights,
             focal_gamma=loss_cfg.focal_gamma,
             huber_delta=loss_cfg.huber_delta,
             quantiles=self.config.quantiles,
@@ -241,10 +280,20 @@ class Trainer:
             enable_progress_bar=self.config.verbose,
         )
 
-    def _build_module(self, n_train: int) -> _LightningModule:
-        """Wire the curried factories and wrap the model triple (A7 step 3/4)."""
+    def _build_module(
+        self,
+        n_train: int,
+        class_weights: Tensor | None,
+        optuna_trial: optuna.trial.BaseTrial | None,
+    ) -> _LightningModule:
+        """Wire the curried factories and wrap the model triple (A7 step 3/4).
+
+        ``optuna_trial`` threads from :meth:`fit` into the
+        :class:`_LightningModule` constructor (A16 ~1990-1994: the trial
+        reaches the module via ``fit``, never via the pydantic config).
+        """
         backbone, head = self.model_factory()
-        loss = self._configure_loss()
+        loss = self._configure_loss(class_weights)
         optimizer_factory = partial(build_optimizer, config=self.config.optimizer)
         scheduler_factory = partial(
             build_scheduler,
@@ -259,9 +308,16 @@ class Trainer:
             optimizer_factory=optimizer_factory,
             scheduler_factory=scheduler_factory,
             val_metric_name=self._val_metric_name,
+            optuna_trial=optuna_trial,
         )
 
-    def fit(self, x_panel: object, *, calibration_set_provided: bool = False) -> _LightningModule:
+    def fit(
+        self,
+        x_panel: object,
+        *,
+        calibration_set_provided: bool = False,
+        optuna_trial: optuna.trial.BaseTrial | None = None,
+    ) -> _LightningModule:
         """Run the A7 sequence: split, loaders, module, ``pl_trainer.fit``.
 
         ``x_panel`` is the validated panel the fitted transformer accepts.
@@ -269,7 +325,10 @@ class Trainer:
         layer (Phase 6) can build the calibrator on the held-out fold.
         ``resume_path`` threads to ``pl_trainer.fit(ckpt_path=...)`` per
         A20 item 5; :class:`RngStateCallback` restores RNG state on that
-        path so a resumed run continues bit-identically.
+        path so a resumed run continues bit-identically. ``optuna_trial``
+        threads into the :class:`_LightningModule` constructor (A16
+        ~1990-1994: via ``fit``, never the config) for the deferred-prune
+        hook.
         """
         batch = self.transformer.transform(x_panel)  # type: ignore[arg-type]
         entity_ids = batch["entity_id"].cpu().numpy()
@@ -283,6 +342,8 @@ class Trainer:
             val_split_strategy=self.config.val_split_strategy,
             calibration_set_provided=calibration_set_provided,
         )
+
+        class_weights = self._class_weights(train_idx, batch["target"])
 
         dataset = _TensorDictDataset(batch)
         loader_kwargs = self._dataloader_kwargs()
@@ -310,7 +371,7 @@ class Trainer:
 
         precision = self._resolve_precision()
         pl_trainer = self.build_pl_trainer(precision)
-        module = self._build_module(len(train_idx))
+        module = self._build_module(len(train_idx), class_weights, optuna_trial)
         ckpt_path = str(self.resume_path) if self.resume_path is not None else None
         pl_trainer.fit(module, train_loader, val_loader, ckpt_path=ckpt_path)
         return module
@@ -322,8 +383,21 @@ class Trainer:
         ``TabularToSequence.transform`` emits each entity's windows
         contiguously and time-ascending, so the ordinal is
         ``concatenate([arange(n_i) for n_i in per_entity_counts])`` (A5).
+
+        The ``np.unique`` count vector is value-sorted, which lines up
+        with the emitted blocks only because
+        ``TabularToSequence.transform`` assigns ``entity_id`` codes in
+        batch-emission order via ``enumerate(groupby(..., sort=True))``
+        (tabular_to_sequence.py:232-234), making ``entity_id`` monotone
+        non-decreasing across the batch. The precondition is asserted so
+        a future non-TTS caller passing an unordered ``entity_id`` fails
+        loudly here instead of silently corrupting the fold ordinals.
         """
         if entity_ids.size == 0:
             return np.empty(0, dtype=int)
+        assert bool(np.all(np.diff(entity_ids) >= 0)), (
+            "entity_ids must be monotone non-decreasing; "
+            "TabularToSequence.transform guarantees this by construction"
+        )
         _values, counts = np.unique(entity_ids, return_counts=True)
         return np.concatenate([np.arange(c) for c in counts])
