@@ -8,6 +8,8 @@ dispatch. Still abstract: a concrete family supplies
 :meth:`_build_backbone_head`.
 """
 
+from typing import cast
+
 import numpy as np
 import pandas as pd
 import torch
@@ -112,8 +114,17 @@ class BaseSequenceClassifier(ClassifierMixin, BaseSequenceEstimator):
         return torch.softmax(raw, dim=1).numpy()
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:  # noqa: N803
-        """Class probabilities ``(n_samples, n_classes)`` (F1)."""
-        return self._proba_from_raw(self._predict_raw(X))
+        """Class probabilities ``(n_samples, n_classes)`` (F1).
+
+        Rows of entities below ``min_periods_predict`` are NaN-filled
+        (correct shape, never zero-filled) per the F NaN-in-output
+        contract; the aggregated breach WARNING fires once per call
+        inside ``transform``.
+        """
+        raw, below = self._predict_raw(X)
+        proba = self._proba_from_raw(raw)
+        proba[below] = np.nan
+        return proba
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:  # noqa: N803
         """Class labels; binary honours ``decision_threshold_`` when tuned (F1)."""
@@ -144,6 +155,6 @@ class BaseSequenceClassifier(ClassifierMixin, BaseSequenceEstimator):
             proba_pos = torch.sigmoid(raw.reshape(-1))
         tuner = ThresholdTuner(self.threshold_metric)
         tuner.fit(proba_pos, targets)
-        threshold = tuner.threshold_
-        assert threshold is not None  # set by ThresholdTuner.fit
-        self.decision_threshold_ = float(threshold)
+        # ThresholdTuner.fit always sets threshold_; cast (not assert,
+        # which python -O strips) narrows the float | None for pyright.
+        self.decision_threshold_ = float(cast("float", tuner.threshold_))

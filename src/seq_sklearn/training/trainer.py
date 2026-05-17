@@ -35,7 +35,7 @@ from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 
 from seq_sklearn.config._extras import extract_deprecated_extras
 from seq_sklearn.config.base import BaseModelConfig
-from seq_sklearn.data.splits import compute_three_way_split
+from seq_sklearn.data.splits import compute_three_way_split, window_time_index
 from seq_sklearn.data.tabular_to_sequence import TabularToSequence
 from seq_sklearn.errors import ConfigError
 from seq_sklearn.hardware import detect
@@ -390,31 +390,10 @@ class Trainer:
 
     @staticmethod
     def _window_time_index(entity_ids: np.ndarray) -> np.ndarray:
-        """Reconstruct per-entity time ordinals from the contiguous blocks.
+        """Delegate to :func:`seq_sklearn.data.splits.window_time_index`.
 
-        ``TabularToSequence.transform`` emits each entity's windows
-        contiguously and time-ascending, so the ordinal is
-        ``concatenate([arange(n_i) for n_i in per_entity_counts])`` (A5).
-
-        The ``np.unique`` count vector is value-sorted, which lines up
-        with the emitted blocks only because
-        ``TabularToSequence.transform`` assigns ``entity_id`` codes in
-        batch-emission order via ``enumerate(groupby(..., sort=True))``
-        (tabular_to_sequence.py:232-234), making ``entity_id`` monotone
-        non-decreasing across the batch. The precondition is enforced
-        with a raise (not an ``assert``, which ``python -O`` strips) so a
-        future non-TTS caller passing an unordered ``entity_id`` fails
-        loudly here instead of silently corrupting the fold ordinals.
-
-        Raises:
-            ValueError: ``entity_ids`` is not monotone non-decreasing.
+        Single source of truth shared with the estimator's
+        calibration-fold seam so the two cannot drift; kept as a thin
+        Trainer-private alias for the existing call site / tests.
         """
-        if entity_ids.size == 0:
-            return np.empty(0, dtype=int)
-        if not bool(np.all(np.diff(entity_ids) >= 0)):
-            raise ValueError(
-                "entity_ids must be monotone non-decreasing; "
-                "TabularToSequence.transform guarantees this by construction"
-            )
-        _values, counts = np.unique(entity_ids, return_counts=True)
-        return np.concatenate([np.arange(c) for c in counts])
+        return window_time_index(entity_ids)

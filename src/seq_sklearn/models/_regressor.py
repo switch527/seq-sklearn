@@ -11,7 +11,6 @@ concrete family supplies :meth:`_build_backbone_head`.
 import numpy as np
 import pandas as pd
 from sklearn.base import RegressorMixin
-from torch import Tensor
 
 from seq_sklearn.calibration._protocol import _Calibrator
 from seq_sklearn.calibration.regression import (
@@ -75,32 +74,32 @@ class BaseSequenceRegressor(RegressorMixin, BaseSequenceEstimator):
         if "quantiles_" in state:
             self.quantiles_ = np.asarray(state["quantiles_"], dtype=np.float64)
 
-    def _raw_predict_matrix(self, X: pd.DataFrame) -> Tensor:  # noqa: N803
-        """``(N, Q)`` raw quantile matrix (Q == 1 for point regression)."""
-        raw = self._predict_raw(X)
-        return raw.reshape(raw.shape[0], -1)
-
-    def _calibrated_matrix(self, X: pd.DataFrame) -> Tensor:  # noqa: N803
-        """The quantile matrix `predict` / `predict_quantiles` both report.
+    def _calibrated_matrix(self, X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:  # noqa: N803
+        """``(calibrated (N, Q) matrix, below-floor row mask)``.
 
         Calibrated when a calibrator is fitted, else raw. Shared so the
-        point estimate (``predict``) is the same median ``predict_quantiles``
-        returns; otherwise the two would disagree by the calibration
-        offset.
+        point estimate (``predict``) is the same median
+        ``predict_quantiles`` returns; otherwise the two would disagree
+        by the calibration offset. Below-floor entity rows are
+        NaN-filled here so every regressor predict path satisfies the
+        F NaN-in-output contract (never zero-filled).
         """
-        raw = self._raw_predict_matrix(X)
+        raw, below = self._predict_raw(X)
+        mat = raw.reshape(raw.shape[0], -1)
         if self.calibrator_ is not None:
-            return self.calibrator_.transform(raw)
-        return raw
+            mat = self.calibrator_.transform(mat)
+        out = mat.numpy()
+        out[below] = np.nan
+        return out, below
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:  # noqa: N803
         """Point predictions; quantile mode returns the calibrated median (F1)."""
-        mat = self._calibrated_matrix(X)
+        mat, _ = self._calibrated_matrix(X)
         if not self._is_quantile():
-            return mat.reshape(-1).numpy()
+            return mat.reshape(-1)
         q = np.asarray(self.quantiles_, dtype=np.float64)
         median_col = int(np.argmin(np.abs(q - 0.5)))
-        return mat[:, median_col].numpy()
+        return mat[:, median_col]
 
     def predict_quantiles(
         self,
@@ -123,7 +122,7 @@ class BaseSequenceRegressor(RegressorMixin, BaseSequenceEstimator):
                 "use predict instead"
             )
         fit_q = np.asarray(self.quantiles_, dtype=np.float64)
-        calibrated = self._calibrated_matrix(X).numpy()
+        calibrated, _ = self._calibrated_matrix(X)
         if quantiles is None:
             return calibrated
         requested = np.asarray(quantiles, dtype=np.float64)

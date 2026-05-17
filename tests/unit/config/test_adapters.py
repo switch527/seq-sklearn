@@ -210,3 +210,37 @@ def test_tft_advanced_params_to_pydantic_produces_correct_config() -> None:
     cfg = TFTAdvancedParams(extra={"beta_knob": 7}).to_pydantic()
     assert isinstance(cfg, TFTAdvancedConfig)
     assert dict(cfg.extra) == {"beta_knob": 7}
+
+
+# ---- Outer-estimator clone deep-clones every nested adapter (A4)
+
+
+def test_outer_estimator_clone_does_not_alias_adapter_instances() -> None:
+    """``sklearn.base.clone`` of the estimator yields fresh adapters.
+
+    The A4-draft "clone each adapter in __init__" was dropped because it
+    breaks ``sklearn.base.clone``; correctness now relies on clone's own
+    deep-clone of nested estimators. This pins that: every one of the six
+    adapter slots on a cloned estimator must be a distinct object from
+    the original's (no shared mutable state) while comparing equal by
+    params.
+    """
+    from tests._test_models._dummy_estimator import _DummySequenceClassifier
+
+    original = _DummySequenceClassifier(
+        task_type="binary",
+        tabular_config=TabularConfigParams(time_varying_real_cols=("tr",), lookback=3),
+        optimizer=OptimizerParams(name="sgd", learning_rate=0.01),
+        scheduler=SchedulerParams(name="one_cycle", warmup_steps=5),
+        loss=LossParams(strategy="huber", huber_delta=2.5),
+        sampler=SamplerParams(strategy="undersample_majority"),
+        advanced=TFTAdvancedParams(extra={"knob": 1}),
+    )
+    cloned = sklearn.base.clone(original)
+
+    for slot in ("tabular_config", "optimizer", "scheduler", "loss", "sampler", "advanced"):
+        orig_adapter = getattr(original, slot)
+        clone_adapter = getattr(cloned, slot)
+        assert clone_adapter is not orig_adapter, f"{slot} adapter aliased after clone"
+        assert type(clone_adapter) is type(orig_adapter)
+        assert clone_adapter.get_params(deep=True) == orig_adapter.get_params(deep=True)

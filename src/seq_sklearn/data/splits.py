@@ -13,9 +13,38 @@ import numpy as np
 
 from seq_sklearn.errors import ConfigError
 
-__all__ = ["compute_three_way_split"]
+__all__ = ["compute_three_way_split", "window_time_index"]
 
 logger = logging.getLogger(__name__)
+
+
+def window_time_index(entity_ids: np.ndarray) -> np.ndarray:
+    """Per-entity time ordinals from the contiguous emitted blocks (A5).
+
+    ``TabularToSequence.transform`` emits each entity's windows
+    contiguously and time-ascending, so the ordinal is
+    ``concatenate([arange(n_i) for n_i in per_entity_counts])``. The
+    ``np.unique`` count vector is value-sorted, which lines up with the
+    emitted blocks only because ``transform`` assigns ``entity_id``
+    codes in batch-emission order, making ``entity_id`` monotone
+    non-decreasing. The precondition is a ``raise`` (not an ``assert``,
+    which ``python -O`` strips) so a non-TTS caller passing an unordered
+    ``entity_id`` fails loudly instead of silently corrupting the fold
+    ordinals. Single implementation shared by the Trainer and the
+    estimator so the calibration fold cannot drift between them.
+
+    Raises:
+        ValueError: ``entity_ids`` is not monotone non-decreasing.
+    """
+    if entity_ids.size == 0:
+        return np.empty(0, dtype=int)
+    if not bool(np.all(np.diff(entity_ids) >= 0)):
+        raise ValueError(
+            "entity_ids must be monotone non-decreasing; "
+            "TabularToSequence.transform guarantees this by construction"
+        )
+    _values, counts = np.unique(entity_ids, return_counts=True)
+    return np.concatenate([np.arange(c) for c in counts])
 
 
 def compute_three_way_split(

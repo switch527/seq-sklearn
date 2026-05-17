@@ -110,11 +110,20 @@ def test_build_config_wraps_validation_error_as_config_error() -> None:
         est._build_config()
 
 
-def test_window_time_index_empty_returns_empty() -> None:
-    from seq_sklearn.models._base import _window_time_index
+def test_window_time_index_shared_helper_and_monotone_guard() -> None:
+    # The estimator's calibration-fold seam uses the single shared
+    # splits.window_time_index (same impl the Trainer delegates to), and
+    # the monotone-entity_id precondition raises (not silently corrupts).
+    from seq_sklearn.data.splits import window_time_index
+    from seq_sklearn.training.trainer import Trainer
 
-    out = _window_time_index(np.empty(0, dtype=int))
-    assert out.shape == (0,)
+    assert window_time_index(np.empty(0, dtype=int)).shape == (0,)
+    np.testing.assert_array_equal(
+        window_time_index(np.array([0, 0, 1, 1, 1])), np.array([0, 1, 0, 1, 2])
+    )
+    assert Trainer._window_time_index is not None
+    with pytest.raises(ValueError, match="monotone non-decreasing"):
+        window_time_index(np.array([1, 0, 1]))
 
 
 def test_calibration_set_with_positive_cal_fraction_raises(

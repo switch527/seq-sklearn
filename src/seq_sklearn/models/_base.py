@@ -8,11 +8,10 @@ is omitted. ``fit`` plumbs :class:`TabularToSequence` -> :class:`Trainer`
 (curried-factory pattern, A7), then fits the optional calibrator on the
 held-out calibration fold (A9). Save / load is the A17 two-file format.
 
-The class is abstract: a concrete family supplies ``_config_cls`` and
-:meth:`_build_backbone_head`; the classifier / regressor mix-ins overlay
-``predict*`` and the F1.1 fit-state attributes. The synthetic
-``_DummySequenceClassifier`` / ``_DummySequenceRegressor`` exercise the
-whole shell before TFT specifics land in Phase 7.
+The class is abstract: a concrete family supplies ``_config_cls``,
+``_config_kwargs`` and :meth:`_build_backbone_head`; the classifier /
+regressor mix-ins overlay ``predict*`` and the F1.1 fit-state
+attributes.
 """
 
 import platform
@@ -41,9 +40,9 @@ from seq_sklearn.config._adapters import (
 )
 from seq_sklearn.config.base import BaseModelConfig
 from seq_sklearn.config.tabular import TabularToSequenceConfig
-from seq_sklearn.data.splits import compute_three_way_split
+from seq_sklearn.data.splits import compute_three_way_split, window_time_index
 from seq_sklearn.data.tabular_to_sequence import TabularToSequence
-from seq_sklearn.errors import ConfigError, NotFittedError
+from seq_sklearn.errors import ConfigError, DataContractError, NotFittedError
 from seq_sklearn.serialization import (
     CURRENT_SCHEMA_VERSION,
     load_weights_and_state,
@@ -72,22 +71,6 @@ _MIXED_PRECISION = ("bf16-mixed", "16-mixed")
 _PUNTED_MSG = "{name} is not supported in seq-sklearn v1; see docs/roadmap.md"
 
 
-def _window_time_index(entity_ids: np.ndarray) -> np.ndarray:
-    """Per-entity time ordinals from the contiguous batch blocks (A5).
-
-    ``TabularToSequence.transform`` emits each entity's windows
-    contiguously, time-ascending, with ``entity_id`` monotone
-    non-decreasing, so the ordinal is
-    ``concatenate([arange(n_i) for n_i])``. Mirrors
-    ``Trainer._window_time_index`` so the estimator locates the same
-    calibration fold the Trainer held out for the identical config.
-    """
-    if entity_ids.size == 0:
-        return np.empty(0, dtype=int)
-    _, counts = np.unique(entity_ids, return_counts=True)
-    return np.concatenate([np.arange(c) for c in counts])
-
-
 class BaseSequenceEstimator(BaseEstimator, ABC):
     """Abstract sklearn estimator shell shared by every model family.
 
@@ -96,8 +79,8 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
     unconfigured instances (A4 step 2).
     """
 
-    # Concrete families set this to their config subclass (TFTConfig in
-    # Phase 7); the base / dummy build a plain BaseModelConfig.
+    # Concrete subclasses override this with their config class (e.g.
+    # the TFT family's TFTConfig); the base / dummy use BaseModelConfig.
     _config_cls: ClassVar[type[BaseModelConfig]] = BaseModelConfig
 
     # Fit-state attributes (F1.1), declared so pyright tracks them on the
@@ -207,6 +190,18 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
 
     # --- config bridge (A4 step 4) ---------------------------------
 
+    def _config_kwargs(self) -> dict[str, object]:
+        """Family-specific extra kwargs for ``_config_cls`` construction.
+
+        The base / dummy build a plain ``BaseModelConfig`` and add
+        nothing. A concrete family whose ``_config_cls`` adds required
+        fields (the TFT family's ``TFTConfig`` declares the required
+        ``tabular_config`` plus model-shape fields, ``extra='forbid'``)
+        overrides this so ``_build_config`` stays a single shared
+        implementation instead of a copy-paste per family.
+        """
+        return {}
+
     def _build_config(self) -> BaseModelConfig:
         if self.loss is not None:
             loss = self.loss
@@ -214,32 +209,33 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
             # The map value is always a valid LossConfig strategy literal;
             # LossParams' Literal annotation does not narrow a str.
             loss = LossParams(strategy=_DEFAULT_LOSS_FOR_TASK[self.task_type])  # type: ignore[arg-type]
+        shared: dict[str, object] = {
+            "task_type": self.task_type,
+            "loss": loss.to_pydantic(),
+            "sampler": self.sampler.to_pydantic(),
+            "optimizer": self.optimizer.to_pydantic(),
+            "scheduler": self.scheduler.to_pydantic(),
+            "calibration_strategy": self.calibration_strategy,
+            "threshold_tuning": self.threshold_tuning,
+            "threshold_metric": self.threshold_metric,
+            "quantiles": self.quantiles,
+            "batch_size": self.batch_size,
+            "max_epochs": self.max_epochs,
+            "gradient_clip_val": self.gradient_clip_val,
+            "accumulate_grad_batches": self.accumulate_grad_batches,
+            "precision": self.precision,
+            "early_stopping_patience": self.early_stopping_patience,
+            "val_check_interval": self.val_check_interval,
+            "val_fraction": self.val_fraction,
+            "cal_fraction": self.cal_fraction,
+            "val_split_strategy": self.val_split_strategy,
+            "num_workers": self.num_workers,
+            "pin_memory": self.pin_memory,
+            "seed": self.seed,
+            "verbose": self.verbose,
+        }
         try:
-            return self._config_cls(
-                task_type=self.task_type,  # type: ignore[arg-type]
-                loss=loss.to_pydantic(),
-                sampler=self.sampler.to_pydantic(),
-                optimizer=self.optimizer.to_pydantic(),
-                scheduler=self.scheduler.to_pydantic(),
-                calibration_strategy=self.calibration_strategy,  # type: ignore[arg-type]
-                threshold_tuning=self.threshold_tuning,
-                threshold_metric=self.threshold_metric,  # type: ignore[arg-type]
-                quantiles=self.quantiles,
-                batch_size=self.batch_size,
-                max_epochs=self.max_epochs,
-                gradient_clip_val=self.gradient_clip_val,
-                accumulate_grad_batches=self.accumulate_grad_batches,
-                precision=self.precision,  # type: ignore[arg-type]
-                early_stopping_patience=self.early_stopping_patience,
-                val_check_interval=self.val_check_interval,
-                val_fraction=self.val_fraction,
-                cal_fraction=self.cal_fraction,
-                val_split_strategy=self.val_split_strategy,  # type: ignore[arg-type]
-                num_workers=self.num_workers,
-                pin_memory=self.pin_memory,
-                seed=self.seed,
-                verbose=self.verbose,
-            )
+            return self._config_cls(**shared, **self._config_kwargs())  # type: ignore[arg-type]
         except ValidationError as exc:
             raise ConfigError(str(exc)) from exc
 
@@ -276,12 +272,16 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         # seed thread (A7 / F5).
         torch.manual_seed(self.seed)
         np.random.seed(self.seed)
-        tts_config = self.tabular_config.to_pydantic()
-        transformer = TabularToSequence(tts_config, self.task_type)  # type: ignore[arg-type]
-        transformer.fit(X, y)
-
+        # Encode targets BEFORE fitting the transformer: TabularToSequence
+        # builds a numeric (id, time) -> label map (it casts y with
+        # float()), so a classifier's raw string / object labels must be
+        # LabelEncoded first. _set_target_fit_state pins classes_ /
+        # quantiles_ off the encoded y.
         y_encoded = self._encode_targets(y)
         self._set_target_fit_state(y_encoded)
+        tts_config = self.tabular_config.to_pydantic()
+        transformer = TabularToSequence(tts_config, self.task_type)  # type: ignore[arg-type]
+        transformer.fit(X, y_encoded)
 
         def model_factory() -> tuple[nn.Module, nn.Module]:
             return self._build_backbone_head(config, transformer)
@@ -339,7 +339,7 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         entity_ids = batch["entity_id"].cpu().numpy()
         _, _, cal_idx = compute_three_way_split(
             entity_ids,
-            _window_time_index(entity_ids),
+            window_time_index(entity_ids),
             val_fraction=self.val_fraction,
             cal_fraction=self.cal_fraction,
             val_split_strategy=self.val_split_strategy,  # type: ignore[arg-type]
@@ -386,6 +386,25 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
             tensors[f"head.{name}"] = value
         return tensors
 
+    def _hyperparams(self) -> dict[str, object]:
+        """The full ``__init__`` surface as JSON primitives.
+
+        ``get_params(deep=True)`` flattens every adapter to scalar
+        leaf keys; the adapter OBJECTS themselves are dropped (they
+        rebuild from the leaf keys via ``set_params`` on load). Tuples
+        become lists and ``Path`` becomes ``str`` through JSON; both
+        round-trip back into the estimator without behaviour change.
+        Persisting this so a loaded estimator's ``get_params`` /
+        ``sklearn.base.clone`` work (F1) rather than AttributeError on
+        the un-restored constructor params.
+        """
+        out: dict[str, object] = {}
+        for key, value in self.get_params(deep=True).items():
+            if isinstance(value, BaseEstimator):
+                continue
+            out[key] = str(value) if isinstance(value, Path) else value
+        return out
+
     def _collect_state(self) -> dict[str, object]:
         return {
             "schema_version": CURRENT_SCHEMA_VERSION,
@@ -397,7 +416,12 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
             "feature_schema_fingerprint": self.feature_schema_fingerprint_,
             "created_at": datetime.now(UTC).isoformat(),
             "task_type": self.task_type,
-            "config": self.config_.model_dump(mode="json"),
+            "hyperparams": self._hyperparams(),
+            # exclude=tabular_config: a no-op for BaseModelConfig (no
+            # such field) and the de-dup for TFTConfig (which embeds it)
+            # so the flat `tabular_config` key below is the single
+            # authoritative transformer-config dump (A17).
+            "config": self.config_.model_dump(mode="json", exclude={"tabular_config"}),
             "tabular_config": self.tabular_config.to_pydantic().model_dump(mode="json"),
             "feature_names_in_": list(self.feature_names_in_),
             "n_outputs_": self.n_outputs_,
@@ -428,19 +452,13 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         """Reconstruct an estimator from the A17 directory (no pickle, A17)."""
         weights, state = load_weights_and_state(path)
         config = cls._config_cls.model_validate(state["config"])
-        obj = cls.__new__(cls)
-        BaseEstimator.__init__(obj)
-        obj.task_type = cast("str", state["task_type"])
-        obj.calibration_strategy = cast("str", state["calibration_strategy"])
-        # Restore the hyperparameter attributes the prediction path and
-        # the family head-sizing (`_build_backbone_head`) read; the
-        # frozen config is the source of truth (no adapters on a loaded
-        # instance).
-        obj.quantiles = config.quantiles
-        obj.threshold_tuning = config.threshold_tuning
-        obj.threshold_metric = config.threshold_metric
-        obj.precision = config.precision
-        obj.seed = config.seed
+        # Reconstruct through the real constructor + set_params so the
+        # full hyperparameter surface (every __init__ scalar AND the six
+        # rebuilt adapters) is restored: a loaded estimator's
+        # get_params(deep=True) / sklearn.base.clone then work (F1).
+        hyperparams = cast("dict[str, object]", state["hyperparams"])
+        obj = cls(task_type=cast("str", state["task_type"]))
+        obj.set_params(**hyperparams)
         obj.config_ = config
         obj.feature_names_in_ = np.asarray(state["feature_names_in_"], dtype=object)
         obj.n_features_in_ = len(obj.feature_names_in_)
@@ -478,16 +496,48 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
             return self._loaded_backbone, self._loaded_head
         return self._module.backbone, self._module.head
 
-    def _predict_raw(self, X: pd.DataFrame) -> Tensor:  # noqa: N803
-        """Transform ``X`` and run the prediction model (eval, no grad)."""
+    def _predict_raw(self, X: pd.DataFrame) -> tuple[Tensor, np.ndarray]:  # noqa: N803
+        """Transform ``X`` and run the prediction model (eval, no grad).
+
+        The predict-time schema fingerprint must match the fit-time one
+        (F4): a column-set / dtype / config drift between fit and
+        predict is rejected with :class:`DataContractError` rather than
+        silently producing wrong predictions.
+        """
         self._check_fitted()
+        predict_fingerprint = self.transformer_._build_fingerprint(X)
+        if predict_fingerprint != self.feature_schema_fingerprint_:
+            raise DataContractError(
+                "predict X schema does not match the fit-time schema "
+                "(feature_schema_fingerprint mismatch); the declared "
+                "columns / dtypes must be identical to fit (F4)"
+            )
         batch = self.transformer_.transform(X)
         backbone, head = self._predict_module()
         backbone.eval()
         head.eval()
         with torch.no_grad():
             logits = head(backbone(batch).representation)
-        return logits.detach().cpu()
+        return logits.detach().cpu(), self._below_floor_mask(batch)
+
+    def _below_floor_mask(self, batch: dict[str, Tensor]) -> np.ndarray:
+        """Per-output-row mask of entities below ``min_periods_predict``.
+
+        ``TabularToSequence.transform`` emits exactly ``n`` windows for
+        an ``n``-row entity, so the per-entity-code window count equals
+        the entity's row count; a code whose count is below
+        ``min_periods_predict`` is a below-floor entity. Those output
+        rows are NaN-filled by the family predict so a short entity
+        never gets a silently-wrong finite prediction (requirements
+        F NaN-in-output: predict_proba / predict_quantiles return
+        NaN of the correct shape, never zero-filled). The aggregated
+        breach WARNING is emitted once per call by ``transform`` itself.
+        """
+        entity_ids = batch["entity_id"].cpu().numpy()
+        floor = self.transformer_.config.min_periods_predict
+        codes, counts = np.unique(entity_ids, return_counts=True)
+        below_codes = set(codes[counts < floor].tolist())
+        return np.array([e in below_codes for e in entity_ids], dtype=bool)
 
     def _check_fitted(self) -> None:
         if not hasattr(self, "transformer_"):

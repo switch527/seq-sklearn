@@ -2101,15 +2101,25 @@ specific pruning callback is not imported into seq-sklearn).
 `save(path)` writes a directory at `path/` containing:
 
 - `path/weights.safetensors`: tensor-only archive in the safetensors
-  format. Holds the state dicts (backbone, head, any calibrator
-  tensor state) plus tensorizable fit-state (`classes_`,
-  `n_features_in_`, `n_outputs_`, `quantiles_` as a 1D tensor,
-  `decision_threshold_` as a 0D tensor when present).
+  format. Holds only the backbone and head state dicts. (Phase 6a
+  reconciliation: the fit-state attributes are NOT tensorized, see
+  below.)
 - `path/state.json`: human-readable JSON. Holds the pydantic config
-  dump (`model_dump`), `feature_names_in_` (list of strings), the
-  `tabular_to_sequence_state` (categorical-encoder vocabularies as
-  arrays of strings; scaler statistics as floats), the calibrator's
-  `serialize()` output, and the metadata block.
+  dump (`model_dump`), the `__init__` hyperparameter snapshot (so a
+  loaded estimator's `get_params` / `sklearn.base.clone` work),
+  `feature_names_in_` (list of strings), the
+  `tabular_to_sequence_state` (the transformer's `serialize()` output),
+  the calibrator's `serialize()` output, the metadata block, AND the
+  fit-state attributes `classes_` / `n_outputs_` / `quantiles_` /
+  `decision_threshold_` as JSON. Phase 6a reconciliation: the F1.1
+  draft / the earlier bullet put these in `weights.safetensors` as
+  tensors, but `classes_` is a `LabelEncoder` class vector that is
+  frequently non-numeric (string labels) and does not tensorize; a
+  calibrator's and the transformer's fitted state already live in
+  `state.json`, so all non-tensor fit-state is co-located there for one
+  coherent JSON contract. `weights.safetensors` is therefore strictly
+  the neural weights. The byte-equal save/load round-trip tests prove
+  correctness.
 
 ```python
 def save(self, path: str | Path) -> None:
@@ -2828,6 +2838,58 @@ Phase 6a (estimator-shell implementation):
   noted as also touching `data/encoders.py`, `data/tabular_to_sequence.py`,
   and `training/losses.py` for the above (beyond the `models/` files).
 
+Phase 6a (estimator Claude swarm, round 1):
+
+- **`load()` now restores the full `__init__` surface (code-opus/sonnet
+  CRITICAL).** The first cut set only ~7 params, so a loaded
+  estimator's `get_params(deep=True)` / `sklearn.base.clone` raised
+  `AttributeError` (F1 breakage). `_collect_state` now persists a
+  `hyperparams` snapshot (`get_params(deep=True)` minus the adapter
+  objects, JSON-coerced); `load()` reconstructs via `cls(task_type=...)`
+  + `set_params(**hyperparams)` so the six adapters and every scalar
+  are restored. Verified: loaded `get_params`/`clone` work, predictions
+  byte-equal.
+- **`_build_config` Phase-7 seam (arch-opus CRITICAL).** The hardcoded
+  kwarg block could not construct `TFTConfig` (required `tabular_config`
+  + model-shape fields, `extra='forbid'`). Split into a shared kwarg
+  dict + a `_config_kwargs()` family hook (`{}` for base/dummy; the TFT
+  family overrides to add `tabular_config` + model-shape) so the base
+  keeps one `_build_config`.
+- **`window_time_index` unified with a precondition guard (arch-sonnet
+  CRITICAL).** The estimator's private copy omitted the
+  monotone-`entity_id` `ValueError` the Trainer's had, risking a
+  silently-wrong calibration fold for a non-TTS caller. Moved to
+  `data/splits.window_time_index` (single source, with the guard);
+  `Trainer._window_time_index` is a thin delegating alias. Resolves the
+  duplication IMPROVEMENT too.
+- **A17 / F4 fit-state location reconciled (arch-opus CRITICAL).** The
+  spec said `classes_`/`n_outputs_`/`quantiles_`/`decision_threshold_`
+  go in `weights.safetensors`; `classes_` is a `LabelEncoder` vector
+  that is commonly non-numeric (string labels) and does not tensorize.
+  A17 + F4 amended: `weights.safetensors` is strictly backbone/head
+  tensors; all fit-state is JSON in `state.json` alongside the
+  calibrator/transformer state. Byte-equal round-trip tests prove it.
+- **`tabular_config` no longer double-serialized (arch-sonnet
+  CRITICAL).** `_collect_state` dumps `config` with
+  `exclude={"tabular_config"}` (no-op for `BaseModelConfig`; drops the
+  embedded copy for the Phase-7 `TFTConfig`) so the flat
+  `tabular_config` key is the single authoritative transformer-config
+  dump.
+- **Missing plan-mandated tests added.** `test_short_entity_predict`
+  (below-floor entities -> NaN-filled prediction rows + exactly one
+  aggregated breach log, the estimator predict path), the
+  estimator-level `test_load_version_mismatch_warning`, the N1
+  fit-state-attribute contract test (all F1.1 attrs + shapes/dtypes +
+  `config_` frozen), and the all-six-adapter clone-no-alias test. The
+  stale subprocess-load docstring is corrected.
+- **IMPROVEMENTs resolved.** `feature_schema_fingerprint_` is now
+  re-validated at predict (mismatch -> `DataContractError`, the F4
+  intent); `_build_calibrator_from` reads `self.calibration_strategy`
+  set from the loaded config (single source); the control-flow
+  `assert` in the classifier threshold path is an explicit guard; the
+  Phase-7 process-label comments in `_base.py` are reworded to plain
+  rationale.
+
 ## Deferred
 
 Round 1 (design-review swarm):
@@ -3244,3 +3306,24 @@ Phase 5 (Gemini cross-family final-pass):
   (`test_isotonic_*_roundtrip`) pass and the Phase 5 qa swarm
   experimentally measured max-abs-diff `0.0` across the round trip.
   No code change.
+
+Phase 6a (estimator Claude swarm, round 1):
+
+- **Random-split calibration-fold seam not estimator-tested
+  (qa-opus/sonnet IMPROVEMENT).** Deferred: no Phase 6a deliverable
+  test names a random-split calibration test, and two architecture
+  reviewers verified the logic is deterministically correct,
+  `splits._random_split` uses `np.arange(n)` with no RNG, so the
+  estimator's `compute_three_way_split` recomputation yields the exact
+  fold the Trainer held out for both `time_ordered` and `random`. The
+  default-path (time_ordered) calibration round-trip is covered;
+  adding a random-split estimator test is a non-core robustness
+  addition, not a correctness gap.
+- **Double / triple panel windowing (arch IMPROVEMENT).** Deferred:
+  `Trainer.fit` transforms `X`, the estimator transforms again for the
+  calibration fold and again per `predict`. Caching the fold between
+  the Trainer and the estimator requires the frozen Phase-4 Trainer to
+  expose its held-out batch + `cal_idx` (a Phase-4 API change outside
+  the Phase 6a module list); v1 panels are small and this is a
+  performance, not correctness, concern. Revisit when a Trainer-seam
+  refactor is in scope.

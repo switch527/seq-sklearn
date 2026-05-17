@@ -3,13 +3,17 @@
 Fit + save in this process, then reload in a brand-new Python process
 and re-predict; predictions must be byte-equal. This is the test that
 genuinely needs the fitted ``TabularToSequence`` (encoder vocab, scaler
-stats) persisted in ``state.json`` rather than re-derived. A second
-variant checks the ``UserWarning`` on a persisted-version mismatch.
+stats) persisted in ``state.json`` rather than re-derived. The second
+test mutates the persisted ``seq_sklearn_version`` and reloads through
+the estimator's ``load`` classmethod (not just the Phase-3 helper),
+asserting exactly one version-mismatch ``UserWarning``.
 """
 
+import json
 import subprocess
 import sys
 import textwrap
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -100,3 +104,29 @@ def test_subprocess_reload_byte_equal(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert result.returncode == 0, result.stderr
     after = np.load(out_npy)
     assert np.array_equal(after, before)
+
+
+def test_load_version_mismatch_warning_via_estimator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import seq_sklearn
+
+    _force_cpu(monkeypatch)
+    x, y = _panel()
+    est = _estimator().fit(x, y)
+    model_dir = tmp_path / "model"
+    est.save(model_dir)
+
+    state_path = model_dir / "state.json"
+    state = json.loads(state_path.read_text())
+    state["seq_sklearn_version"] = "0.0.0-ancient"
+    state_path.write_text(json.dumps(state))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _DummySequenceClassifier.load(model_dir)
+    mismatch = [w for w in caught if issubclass(w.category, UserWarning)]
+    assert len(mismatch) == 1
+    msg = str(mismatch[0].message)
+    assert "0.0.0-ancient" in msg
+    assert seq_sklearn.__version__ in msg

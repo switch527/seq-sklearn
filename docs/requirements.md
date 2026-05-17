@@ -649,16 +649,19 @@ containing two files. The two-file split exists to enforce
 "no pickle in the public artifact":
 
 - `path/weights.safetensors`: tensor-only archive in the safetensors
-  format. Holds the state dicts (backbone, head, calibrator if it
-  exposes tensor state) plus tensorizable fit-state (`classes_`,
-  `n_features_in_`, `n_outputs_`, `quantiles_` as a 1-D tensor,
-  `decision_threshold_` as a 0-D tensor when present).
+  format. Holds only the backbone and head state dicts. (Phase 6a
+  reconciliation: fit-state attributes are persisted as JSON in
+  `state.json`, not tensorized here, because `classes_` is a
+  `LabelEncoder` vector that is commonly non-numeric and the
+  calibrator / transformer fitted state already live in `state.json`.)
 - `path/state.json`: human-readable JSON. Holds the pydantic config
-  dump (`model_dump`), `feature_names_in_` (list of strings), the
-  `tabular_to_sequence_state` (categorical-encoder vocabularies as
-  arrays of strings; scaler statistics as floats), the calibrator's
-  `serialize()` output (each calibrator returns a JSON-compatible
-  dict), and the metadata block below.
+  dump (`model_dump`), the `__init__` hyperparameter snapshot (so a
+  reloaded estimator's `get_params` / `clone` work), `feature_names_in_`
+  (list of strings), the `tabular_to_sequence_state` (the transformer's
+  `serialize()` output), the calibrator's `serialize()` output (each
+  calibrator returns a JSON-compatible dict), the fit-state attributes
+  `classes_` / `n_outputs_` / `quantiles_` / `decision_threshold_`
+  as JSON, and the metadata block below.
 
 **Why two files.** PyTorch 2.6+ flipped `torch.load`'s `weights_only`
 default to `True` and refuses non-tensor Python objects unless

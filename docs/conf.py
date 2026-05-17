@@ -8,11 +8,12 @@ Reference / Examples triad. This skeleton is the minimal-viable v1
 shape; the gallery and topic-organized guide come post-v1.
 """
 
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 project = "seq-sklearn"
 author = "Steve"
-copyright = "2026, seq-sklearn contributors"  # noqa: A001
+copyright = "2026, seq-sklearn contributors"
 
 try:
     release = _pkg_version("seq-sklearn")
