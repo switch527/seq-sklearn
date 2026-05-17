@@ -485,7 +485,17 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
     def load(cls, path: str | Path) -> "BaseSequenceEstimator":
         """Reconstruct an estimator from the A17 directory (no pickle, A17)."""
         weights, state = load_weights_and_state(path)
-        config = cls._config_cls.model_validate(state["config"])
+        # `_collect_state` dumps `config` with exclude={"tabular_config"}
+        # (A17: the transformer config is persisted once, as the flat
+        # `tabular_config` key, the single authoritative copy). A
+        # `_config_cls` that embeds `tabular_config` as a required field
+        # (the TFT family's `TFTConfig`) must have it merged back before
+        # validation; `BaseModelConfig` has no such field so this is a
+        # no-op for the base / dummy path.
+        config_state = cast("dict[str, object]", state["config"])
+        if "tabular_config" in cls._config_cls.model_fields:
+            config_state = {**config_state, "tabular_config": state["tabular_config"]}
+        config = cls._config_cls.model_validate(config_state)
         # Reconstruct through the real constructor + set_params so the
         # full hyperparameter surface (every __init__ scalar AND the six
         # rebuilt adapters) is restored: a loaded estimator's

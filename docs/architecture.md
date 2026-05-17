@@ -86,6 +86,7 @@ src/seq_sklearn/
         __init__.py
         backbone.py                 TFTBackbone (nn.Module)
         blocks.py                   VSN, GRN, GLU, AddNorm
+        _estimator.py               _TFTEstimatorMixin (shared A4 __init__ / _config_kwargs / _build_tft_backbone)
         classifier.py               TFTClassifier
         regressor.py                TFTRegressor
     recurrent/
@@ -179,9 +180,17 @@ class TransformerSequenceEstimator:
 ```
 
 Concrete model files inherit from the family mixin AND the
-`BaseSequence*` class. Example:
-`class TFTClassifier(TransformerSequenceEstimator.Classifier, BaseSequenceClassifier): ...`
-The mixin overrides template methods the base class calls.
+`BaseSequence*` class. The TFT family additionally leads the MRO with
+`_TFTEstimatorMixin` (in `models/transformer/tft/_estimator.py`), which
+owns the shared A4-adapter `__init__`, `_config_cls=TFTConfig`,
+`_config_kwargs`, and `_build_tft_backbone` so the ~30-param
+constructor is not duplicated across the classifier and regressor (the
+same single-source discipline as `data.splits.window_time_index`).
+Example:
+`class TFTClassifier(_TFTEstimatorMixin, TransformerSequenceEstimator.Classifier, BaseSequenceClassifier): ...`
+The mixin overrides template methods the base class calls;
+`super().__init__` resolves cooperatively through the composed MRO to
+`BaseSequenceEstimator.__init__`.
 
 The `TFTBackbone` is a pure `nn.Module` owned by the estimator. The
 estimator holds:
@@ -327,7 +336,14 @@ estimator. The canonical pattern derived for seq-sklearn:
    # sub-configs specified later in this A4 section and carried
    # verbatim in src/seq_sklearn/config/.
 
-   class TFTClassifier(ClassifierMixin, BaseEstimator):
+   # The real class composes the shared TFT mixin + the Phase-6b
+   # transformer mixin + the Phase-6a family shell; the __init__ body
+   # below lives on _TFTEstimatorMixin (see A2 / models/transformer/tft).
+   class TFTClassifier(
+       _TFTEstimatorMixin,
+       TransformerSequenceEstimator.Classifier,
+       BaseSequenceClassifier,
+   ):
        def __init__(
            self,
            *,                              # mandatory keyword-only
@@ -639,8 +655,8 @@ so ALPHA → BETA promotion is one registry edit. The reserved-keys
 collision check (preventing `extra=(("lr", 0.1),)` from colliding
 with the typed `OptimizerConfig.learning_rate` kwarg at
 `torch.optim.AdamW(...)` construction) lives at the CONFIG layer
-as a `@model_validator(mode="after")` on each family sub-config —
-NOT at the factory call site — so the validation fires at
+as a `@model_validator(mode="after")` on each family sub-config,
+NOT at the factory call site, so the validation fires at
 `OptimizerConfig(...)` construction time and Phase 1 owns the test.
 The factories (Phase 4) trust the validated configs and do not
 re-check. Reserved-key sets keyed by `cfg.name`:
@@ -2152,7 +2168,16 @@ def load(cls, path: str | Path) -> "BaseSequenceEstimator":
     if obj.loss is None and any(k.startswith("loss__") for k in state["hyperparams"]):
         obj.loss = LossParams()
     obj.set_params(**state["hyperparams"])         # restores the 6 adapters + scalars
-    obj.config_ = cls._config_cls.model_validate(state["config"])
+    # `_collect_state` dumps `config` with exclude={"tabular_config"}
+    # (the transformer config is persisted once, as the authoritative
+    # flat `tabular_config` key). A `_config_cls` that requires
+    # `tabular_config` (the TFT family's `TFTConfig`) must have it
+    # merged back before validation; `BaseModelConfig` has no such
+    # field so this is a no-op for the base / dummy path.
+    config_state = state["config"]
+    if "tabular_config" in cls._config_cls.model_fields:
+        config_state = {**config_state, "tabular_config": state["tabular_config"]}
+    obj.config_ = cls._config_cls.model_validate(config_state)
     obj.transformer_ = TabularToSequence.deserialize(...)
     obj._restore_family_state(state)               # family hook: classes_ / quantiles_ / threshold
     backbone, head = obj._build_backbone_head(obj.config_, obj.transformer_)  # family hook
@@ -2506,7 +2531,7 @@ Round 1 (design-review swarm):
   declares the test that counts V-projection weights (1, not H).
 - **Classifier/Regressor mixin shape (arch r1-NITPICK 1).**
   Clarified as nested classes on `TransformerSequenceEstimator`
-  with an example `class TFTClassifier(TransformerSequenceEstimator.Classifier, BaseSequenceClassifier)`.
+  with an example `class TFTClassifier(_TFTEstimatorMixin, TransformerSequenceEstimator.Classifier, BaseSequenceClassifier)`.
 - **Style line 1233 / line 1247 (style r1-I1, r1-I2).** Rewritten
   in place during the CI wall-clock and A20 edits.
 
@@ -3194,6 +3219,55 @@ Post-Gemini confirming swarm (Phase 1-6 integration):
   `LossParams` pre-injection so a future family implementor reading the
   canonical reference does not reproduce the C1 bug.
 
+Phase 7 (TFT concrete Claude swarm, round 1):
+
+- **`_base.load()` re-merges `tabular_config` for a tabular-config-
+  bearing `_config_cls` (Phase-6a A17 seam, Phase 7 first to hit it).**
+  `_collect_state` dumps `config` with `exclude={"tabular_config"}` (the
+  transformer config is the single authoritative flat key); `load()`
+  validated `state["config"]` directly, which works for the dummy's
+  `BaseModelConfig` (no such field) but fails for `TFTConfig` (required
+  `tabular_config`). `load()` now merges it back, gated on
+  `"tabular_config" in cls._config_cls.model_fields` (no-op for the
+  base path). Pinned mutation-sensitively: the TFT clf/reg e2e save/
+  load tests now assert `reloaded.config_ == est.config_` (and the
+  nested `tabular_config`), not just byte-equal predictions, so a
+  revert of the re-merge fails the suite.
+- **`_TFTEstimatorMixin` shared module (code-opus / arch IMPROVEMENT).**
+  The not-in-plan `models/transformer/tft/_estimator.py` holds the
+  shared A4-adapter `__init__`, `_config_cls`, `_config_kwargs`,
+  `_build_tft_backbone`; `TFTClassifier`/`TFTRegressor` are thin. This
+  is the project's standing DRY discipline (window_time_index /
+  below_floor_mask); the TYPE_CHECKING `_MixinBase` alias gives pyright
+  the cooperative-`super` signature while the runtime base stays
+  `object`. A1 / A2 / A4 reconciled to show the 3-base form + the new
+  module.
+- **`TFTRegressor` init/clone unit coverage (qa CRITICAL).** The
+  regressor MRO diverges from the classifier after the shared mixin, so
+  `test_classifier_init.py` did not transfer. Added
+  `test_regressor_init.py` (mirrors it + a quantile-mode clone
+  round-trip pinning `quantiles` / `task_type`).
+- **Multiclass + empty-categorical e2e (qa IMPROVEMENT).** Added lean
+  (1-epoch, hidden=8) TFT e2e cases: multiclass head/softmax through
+  the real backbone, and the empty-categorical-side `_static_pad` /
+  `_tv_pad` path wired through the estimator.
+
+Phase 7 (TFT concrete Claude swarm, round 2):
+
+- **`prediction_readout="mean_pool"` estimator-wiring e2e (qa-sonnet /
+  qa-opus IMPROVEMENT).** Round 1 deferred this as a config
+  passthrough; two qa agents correctly distinguished that storing the
+  value verbatim is not the same as it flowing through
+  `_config_kwargs -> TFTConfig -> _build_tft_backbone` to the backbone
+  readout (a passthrough break would silently fall back to
+  `last_valid` while the backbone unit test still passes). Resolved,
+  not deferred: added `test_tft_classifier_mean_pool_readout_roundtrip`
+  (asserts `config_.prediction_readout == "mean_pool"` and a byte-equal
+  save/load). Supersedes the round-1 mean_pool Deferred entry.
+- **Silent-NaN guards (qa NITPICK).** Added `np.isfinite(...)` to the
+  multiclass `predict_proba` and the quantile `predict_quantiles`
+  assertions so a NaN-producing path cannot satisfy shape + sum-to-1.
+
 ## Deferred
 
 Round 1 (design-review swarm):
@@ -3704,3 +3778,107 @@ Post-Gemini confirming swarm (Phase 1-6 integration):
   then so the abstraction is shaped by a real second caller rather than
   guessed. The A17 pseudocode now documents the step so a Phase-7
   author cannot miss it.
+
+Phase 7 (TFT concrete Claude swarm, round 1):
+
+- **`prediction_readout="mean_pool"` TFT e2e: SUPERSEDED.** Round 1
+  deferred this; Round 2 resolved it (see the round-2 Addressed block:
+  `test_tft_classifier_mean_pool_readout_roundtrip`). The round-1
+  deferral reason (config passthrough, low signal) was wrong: it is the
+  estimator's `_config_kwargs` wiring, not a pure passthrough.
+- **Regressor empty-categorical e2e (qa-opus IMPROVEMENT, round 2).**
+  Deferred: the empty-categorical cardinality wiring lives in the
+  SHARED `_TFTEstimatorMixin._build_tft_backbone`, already pinned end
+  to end by `test_tft_classifier_no_categorical_columns`. `TFTRegressor`
+  differs from `TFTClassifier` only in the head + family base (not the
+  backbone cardinality path), and both regressor modes (point +
+  quantile) already round-trip via the e2e. A regressor-side empty-cat
+  e2e would re-exercise identical shared mixin code for a different
+  head; near-zero marginal signal for the ~1-2 min/pass cost. Revisit
+  if a family-specific empty-side branch ever appears.
+- **`_restore_default_loss_adapter` base classmethod (arch-opus
+  IMPROVEMENT-3, re-evaluated in Phase 7).** Still deferred: Phase 7
+  composes a mixin but does NOT override `load()`, so there is still no
+  second caller to shape the abstraction. The inline `load()`
+  loss-restore + the now-also-inline `tabular_config` re-merge remain
+  the single call site; extracting a hook is premature until a v2/v3
+  family overrides `load`. The A17 pseudocode documents both steps so a
+  future author cannot miss them.
+
+Phase 7 (CPU/CUDA parity boundary check, post-consensus):
+
+- **First integrated CPU/CUDA validation of the Phases 1-7 stack.**
+  After the 4-round Claude swarm consensus, the authorized GPU parity
+  suite ran on an NVIDIA RTX PRO 6000 Blackwell (CUDA available, GPU
+  idle at run start). `test_tft_classifier_gpu_cpu_predict_proba_parity`
+  (the full `TabularToSequence -> Trainer -> calibrator -> TFTClassifier`
+  pipeline trained and predicted on CUDA, asserted equal to the CPU run
+  within `allclose` tolerance) and
+  `test_calibrators_accept_cuda_input_and_return_cpu` both PASSED
+  (2 passed, 10 deselected, 9.68s, exit 0). This is the first time the
+  whole stack has been exercised end to end on CUDA, not just CPU: it
+  confirms the v1 CPU+CUDA equal-support requirement holds through the
+  first concrete model. Metal/ROCm remain out of v1 scope. Two benign
+  warnings (a Lightning `_pytree` deprecation in the dependency, and a
+  non-empty `checkpoints/` dir from a prior run) are not code findings.
+
+Phase 7 (Gemini cross-family final-pass, post-consensus):
+
+The scarce Gemini code final-pass ran after the 4-round Claude swarm
+consensus (file-access preflight passed: 6 targets readable). Gemini
+emitted CRITICAL: 1, IMPROVEMENT: 0, NITPICK: 1. Both path:line claims
+were verified against the source. Claude perspective recorded per the
+gemini-final-pass protocol (agreed / disagreed-with-reason / missed /
+hallucinated).
+
+Addressed:
+
+- **Gemini NITPICK `_base.py:515` (cited :530, line drift): JSON
+  round-trip widens tuple params to lists through
+  `set_params(**hyperparams)`.** VERIFIED, accurate in substance.
+  `load()` feeds the `model_dump(mode="json")` hyperparams (JSON arrays
+  deserialized as `list`) straight into `set_params`, so `reloaded`
+  carries `list` for `quantiles` and the `tabular_config` tuple fields.
+  Pydantic re-coerces these in `_build_config()`, so `reloaded.config_`
+  is byte-symmetric with the original (the qa swarm pinned
+  `reloaded.config_ == est.config_` and the quantile round-trip across
+  all 4 rounds: behavior is correct). The only residue is that
+  `sklearn.base.clone(reloaded)` would propagate `list`. Documented here
+  rather than fixed: adding "known tuple field" coercion to the generic
+  `load()` is exactly the speculative special-casing the project rules
+  forbid, it has zero behavioral effect, and the verbatim-param sklearn
+  contract is already satisfied (clone produces a functionally identical
+  estimator; `config_` is the authoritative typed surface).
+
+Deferred:
+
+- **Gemini CRITICAL `_base.py:118`/`:158`: `BaseSequenceEstimator`
+  (layer-1 shell) is typed against the concrete `TFTAdvancedParams`
+  adapter.** VERIFIED-but-DISAGREED, downgraded to Deferred. (1) Out of
+  Phase 7 diff scope: this is Phase 6a code (commit `93ded4e`), not in
+  `main..HEAD`; Gemini ran shell-blind ("Shell access unavailable. CI
+  gates assumed") and could not scope to the diff. (2) Not a requirement
+  violation: Gemini cites `requirements.md:195-207` but `:203-207`
+  states "v1's only concrete model is TFT" and "v3 adds the recurrent
+  abstraction when its first model ships", the requirements deliberately
+  scope multi-family genericization to future versions, refuting the
+  premise that v1 must support PatchTST without touching the shell.
+  (3) Zero behavioral coupling: `TFTAdvancedParams` is structurally
+  empty in v1 (only the generic `extra` passthrough bag); this is a
+  type-annotation name, not a behavioral dependency. (4) Same documented
+  "premature abstraction until the second family/caller exists"
+  principle already applied in the Deferred ledger to
+  `_restore_default_loss_adapter` and the inline `load()` hook; the
+  mandatory keyword-only `*` adapter marker makes widening the shell
+  param type a MINOR-additive change when family 2 ships. (5) The
+  4-round, 8-agent dual-model swarm (two opus architecture reviewers)
+  read `_base.py` in full every round and did not raise this: the
+  consensus is intentional, not an oversight. Revisit when the second
+  model family lands and a generic advanced-params base type has a real
+  second caller to shape it.
+
+Consensus status: Gemini surfaced no VALID new Phase 7 CRITICAL (the one
+raised is out-of-scope, requirement-refuted, behaviorally inert, and of
+the already-deferred class). The 4-round Claude consensus stands; no
+fifth Claude round is warranted for a downgraded forward-looking note.
+The disagreement is surfaced to the user for override.
