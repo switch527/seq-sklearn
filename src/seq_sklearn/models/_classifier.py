@@ -126,14 +126,27 @@ class BaseSequenceClassifier(ClassifierMixin, BaseSequenceEstimator):
         proba[below] = np.nan
         return proba
 
+    def _index_from_proba(self, proba: np.ndarray) -> np.ndarray:
+        """Class-index vector from a probability matrix.
+
+        Binary honours ``decision_threshold_`` when tuned, else argmax.
+        Shared by :meth:`predict` and the transformer family's
+        ``predict_with_attention`` (whose A15.1 ``predictions`` field is
+        class indices) so both resolve indices identically. A below-floor
+        NaN row argmaxes / threshold-compares to 0, the documented A2
+        behaviour (the breach WARNING already fired inside ``transform``).
+        """
+        if self.task_type == "binary" and hasattr(self, "decision_threshold_"):
+            return (proba[:, 1] >= self.decision_threshold_).astype(np.int64)
+        return proba.argmax(axis=1)
+
+    def _labels_from_proba(self, proba: np.ndarray) -> np.ndarray:
+        """Map a probability matrix to class labels via :meth:`_index_from_proba`."""
+        return np.asarray(self.classes_)[self._index_from_proba(proba)]
+
     def predict(self, X: pd.DataFrame) -> np.ndarray:  # noqa: N803
         """Class labels; binary honours ``decision_threshold_`` when tuned (F1)."""
-        proba = self.predict_proba(X)
-        if self.task_type == "binary" and hasattr(self, "decision_threshold_"):
-            idx = (proba[:, 1] >= self.decision_threshold_).astype(np.int64)
-        else:
-            idx = proba.argmax(axis=1)
-        return np.asarray(self.classes_)[idx]
+        return self._labels_from_proba(self.predict_proba(X))
 
     def _post_fit(
         self,

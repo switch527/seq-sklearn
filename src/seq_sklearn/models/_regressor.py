@@ -11,6 +11,7 @@ concrete family supplies :meth:`_build_backbone_head`.
 import numpy as np
 import pandas as pd
 from sklearn.base import RegressorMixin
+from torch import Tensor
 
 from seq_sklearn.calibration._protocol import _Calibrator
 from seq_sklearn.calibration.regression import (
@@ -85,12 +86,22 @@ class BaseSequenceRegressor(RegressorMixin, BaseSequenceEstimator):
         F NaN-in-output contract (never zero-filled).
         """
         raw, below = self._predict_raw(X)
+        return self._calibrate_raw(raw, below), below
+
+    def _calibrate_raw(self, raw: Tensor, below: np.ndarray) -> np.ndarray:
+        """Calibrated ``(N, Q)`` matrix from raw head logits + below mask.
+
+        Split from :meth:`_calibrated_matrix` so the transformer
+        family's ``predict_with_attention`` reuses the identical
+        calibrate-then-NaN-fill logic on the single backbone forward
+        pass it already holds, instead of a second predict pass.
+        """
         mat = raw.reshape(raw.shape[0], -1)
         if self.calibrator_ is not None:
             mat = self.calibrator_.transform(mat)
         out = mat.numpy()
         out[below] = np.nan
-        return out, below
+        return out
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:  # noqa: N803
         """Point predictions; quantile mode returns the calibrated median (F1)."""

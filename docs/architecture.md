@@ -2371,8 +2371,13 @@ architecture phase:
    time based on what plays nicely with `accumulate_grad_batches`.
 2. **Variable-selection-weight return shape for
    `predict_with_attention`**: CPU numpy array vs. on-device tensor.
-   Default plan: CPU numpy for callable convenience, on-device on
-   opt-in via a `device=` argument; pin during implementation.
+   **RESOLVED** (Phase 6b): default CPU `np.ndarray` for callable
+   convenience; a `device=` keyword on `predict_with_attention` flips
+   every field to a detached on-device `Tensor`. Implemented on the
+   `TransformerSequenceEstimator.Classifier` / `.Regressor` mixins in
+   `models/transformer/_base.py`; the A15.1 dataclass field type stays
+   `np.ndarray` (the default) with the tensor path as documented BETA
+   runtime behaviour.
 3. **Native ONNX `Attention` op (opset 23)**: PyTorch issue #149662
    tracks landing the native op. Not stable as of torch 2.12. Watch
    list; once it ships, we can drop the math-backend forcing in the
@@ -2967,6 +2972,42 @@ Phase 6a (estimator Claude swarm, round 3):
   IMPROVEMENT).** `test_calibrator_strategy_with_cal_fraction_zero_raises`
   isolates the `_make_calibrator() is not None` arm of `needs_fold`
   (the prior test only triggered the `threshold_tuning` arm).
+
+Phase 6b (family-base implementation):
+
+- **Phase-6a `_forward_backbone` seam (cross-phase, behaviour-preserving).**
+  `predict_with_attention` needs the full `BackboneOutput` (the
+  introspection tensors), not just `representation`, from the SAME
+  forward pass `_predict_raw` uses (a second pass could disagree).
+  `_base.py` extracts `_forward_backbone(X) -> (output, head, batch,
+  below)`; `_predict_raw` now delegates to it. `_classifier.py` splits
+  `_index_from_proba` (shared by `predict` and the mixin, whose A15.1
+  `predictions` field is class indices); `_regressor.py` splits
+  `_calibrate_raw` (shared by `_calibrated_matrix` and the mixin so the
+  attention path reuses the identical calibrate-then-NaN-fill on its
+  single pass). All three are pure refactors: the full Phase-6a +
+  integration suite stays green unchanged.
+- **`predict_with_attention.predictions` is class indices, not labels
+  (A15.1 literal).** A15.1 annotates the classifier `predictions`
+  field `# (N,) class indices`. The mixin returns the integer index
+  vector (`_index_from_proba`), NOT the `classes_`-mapped labels
+  `predict` returns; callers map via `est.classes_`. This keeps the
+  `device=` path tensorisable (string labels do not tensorise) and
+  matches the A15.1 comment verbatim. The family-base test asserts
+  `classes_[predictions] == predict(X)` for consistency.
+- **A20 item 2 RESOLVED: `device=` keyword.** `predict_with_attention`
+  defaults to CPU `np.ndarray`; a `device=` keyword flips every field
+  to a detached on-device `Tensor`. Pinned here per A20 item 2's
+  "pin during implementation". The A15.1 dataclass field type stays
+  `np.ndarray` (the default and common case); the `device` path's
+  tensors are the documented BETA runtime behaviour.
+- **Introspection tensors are NOT NaN-filled for below-floor entities.**
+  The F NaN-in-output contract scopes NaN to the prediction surface
+  (`probabilities` / `logits` / regression `predictions`), which the
+  mixin NaN-fills exactly as the base predict path. The attention /
+  variable-selection tensors are diagnostics, not predictions, and
+  stay finite so a caller can still inspect what the model attended to
+  for a short entity.
 
 ## Deferred
 

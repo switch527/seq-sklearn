@@ -43,6 +43,7 @@ from seq_sklearn.config.tabular import TabularToSequenceConfig
 from seq_sklearn.data.splits import compute_three_way_split, window_time_index
 from seq_sklearn.data.tabular_to_sequence import TabularToSequence
 from seq_sklearn.errors import ConfigError, DataContractError, NotFittedError
+from seq_sklearn.models._backbone import BackboneOutput
 from seq_sklearn.serialization import (
     CURRENT_SCHEMA_VERSION,
     load_weights_and_state,
@@ -522,8 +523,18 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
             return self._loaded_backbone, self._loaded_head
         return self._module.backbone, self._module.head
 
-    def _predict_raw(self, X: pd.DataFrame) -> tuple[Tensor, np.ndarray]:  # noqa: N803
-        """Transform ``X`` and run the prediction model (eval, no grad).
+    def _forward_backbone(
+        self,
+        X: pd.DataFrame,  # noqa: N803
+    ) -> tuple[BackboneOutput, nn.Module, dict[str, Tensor], np.ndarray]:
+        """Transform ``X`` and run the backbone (eval, no grad).
+
+        Returns ``(backbone_output, head, batch, below_floor_mask)``.
+        The full :class:`BackboneOutput` (not just ``representation``)
+        is returned so the transformer family's
+        ``predict_with_attention`` can read the introspection tensors
+        from the SAME forward pass ``_predict_raw`` uses, rather than a
+        second pass that could disagree.
 
         The predict-time schema fingerprint must match the fit-time one
         (F4): a column-set / dtype / config drift between fit and
@@ -543,8 +554,15 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         backbone.eval()
         head.eval()
         with torch.no_grad():
-            logits = head(backbone(batch).representation)
-        return logits.detach().cpu(), self._below_floor_mask(batch)
+            output = backbone(batch)
+        return output, head, batch, self._below_floor_mask(batch)
+
+    def _predict_raw(self, X: pd.DataFrame) -> tuple[Tensor, np.ndarray]:  # noqa: N803
+        """Backbone + head logits and the below-floor mask (F4 fingerprint)."""
+        output, head, _batch, below = self._forward_backbone(X)
+        with torch.no_grad():
+            logits = head(output.representation)
+        return logits.detach().cpu(), below
 
     def _below_floor_mask(self, batch: dict[str, Tensor]) -> np.ndarray:
         """Per-output-row mask of entities below ``min_periods_predict``.
