@@ -377,13 +377,16 @@ class Trainer:
         # estimator already drops them from the recomputed cal fold;
         # filter them here so the Trainer never fits on a sentinel.
         below = self._below_floor_mask(entity_ids)
+        pre_train, pre_val = train_idx.size, val_idx.size
         train_idx = train_idx[~below[train_idx]]
         val_idx = val_idx[~below[val_idx]]
-        # Symmetric with the estimator's empty-calibration-fold guard:
-        # if every train / val window was below-floor, fail loudly here
-        # rather than hand Lightning an empty loader (silent EarlyStopping
-        # / checkpoint degradation on a never-logged val_loss).
-        if train_idx.size == 0 or val_idx.size == 0:
+        # Scoped to the below-floor cause only: raise when a fold that
+        # was non-empty BEFORE the filter is emptied BY it (symmetric
+        # with the estimator's empty-calibration-fold guard). A fold
+        # already empty pre-filter (e.g. val_fraction=0) is a distinct,
+        # pre-existing situation and is left to the prior behaviour so
+        # this message stays accurate to its actual cause.
+        if (pre_train > 0 and train_idx.size == 0) or (pre_val > 0 and val_idx.size == 0):
             raise ConfigError(
                 "the train / val fold is empty after dropping below-floor "
                 f"windows: every entity has fewer than min_periods_predict="

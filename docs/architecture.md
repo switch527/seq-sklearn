@@ -2147,7 +2147,8 @@ def load(cls, path: str | Path) -> "BaseSequenceEstimator":
     # `loss` is the one adapter __init__ stores verbatim as None (F5
     # task-aware default injection must see "unspecified"); restore a
     # default LossParams before set_params so persisted `loss__*`
-    # leaves have an object to route onto instead of None.set_params.
+    # leaves have an object to route onto instead of failing
+    # set_params on None.
     if obj.loss is None and any(k.startswith("loss__") for k in state["hyperparams"]):
         obj.loss = LossParams()
     obj.set_params(**state["hyperparams"])         # restores the 6 adapters + scalars

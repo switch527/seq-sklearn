@@ -297,7 +297,7 @@ def test_fit_filters_below_floor_classifier_class_weighted(
     ).fit(x, y)  # must not raise RuntimeError from bincount(-1)
     proba = est.predict_proba(x)
     assert proba.shape[0] == len(x)
-    assert np.allclose(np.nansum(proba, axis=1)[: 16 * 5], 1.0)
+    assert np.allclose(np.nansum(proba, axis=1)[: 16 * 8], 1.0)
 
 
 def test_fit_all_below_floor_raises_configerror(
