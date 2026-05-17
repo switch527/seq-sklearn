@@ -161,3 +161,13 @@ def test_needs_calibration_fold_but_cal_fraction_zero_raises() -> None:
     x = pd.DataFrame({"id": [0], "time": [pd.Timestamp("2021-01-01")], "sr": [0.0]})
     with pytest.raises(ConfigError, match="cal_fraction"):
         est.fit(x, np.array([0]))
+
+
+def test_calibrator_strategy_with_cal_fraction_zero_raises() -> None:
+    # The OTHER needs_fold operand: a configured calibrator (not
+    # threshold_tuning) with cal_fraction=0 and no calibration_set must
+    # also raise at the fit boundary naming cal_fraction (F2).
+    est = _clf(calibration_strategy="platt", threshold_tuning=False, cal_fraction=0.0)
+    x = pd.DataFrame({"id": [0], "time": [pd.Timestamp("2021-01-01")], "sr": [0.0]})
+    with pytest.raises(ConfigError, match="cal_fraction"):
+        est.fit(x, np.array([0]))

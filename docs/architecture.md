@@ -2942,6 +2942,32 @@ Phase 6a (estimator Claude swarm, round 2):
   prose and two rhetorical capitalized `AND`s in the ledger are
   reworded.
 
+Phase 6a (estimator Claude swarm, round 3):
+
+- **Mutation-sensitive test for the Round-2 `keep` sentinel filter
+  (code-opus / qa-sonnet / qa-opus CRITICAL).** The Round-2 fix had
+  100% line+branch but no test that would fail if `keep = cal_idx[...]`
+  were reverted (every prior test reaching it used
+  `min_periods_predict=1`, so the mask was all-False). Added
+  `test_calibration_fold_drops_below_floor_sentinel_rows` and
+  `test_calibration_fold_threshold_tuner_path_no_sentinel`: a panel
+  where a below-floor entity provably lands in the recomputed
+  `cal_idx`, with explicit preconditions (`below[cal_idx].any()` and
+  the unfiltered fold carries `-1`) so reverting the filter fails the
+  test. Both the calibrator and the threshold-tuner consumers of
+  `_calibration_fold` are exercised, and the estimator-side fold
+  alignment (`len == (~below)[cal_idx].sum()`) is asserted.
+- **Empty post-filter fold raises a typed `ConfigError`
+  (code-sonnet IMPROVEMENT).** When `keep` empties (every cal-fold
+  entity below `min_periods_predict`) the calibrator previously raised
+  a deep, unnamed `ValueError`. `_calibration_fold` now raises a
+  `ConfigError` naming `min_periods_predict` / `cal_fraction`.
+  `test_calibration_fold_all_below_floor_raises_configerror` covers it.
+- **Empty-fold guard's calibrator operand tested (qa-sonnet / qa-opus
+  IMPROVEMENT).** `test_calibrator_strategy_with_cal_fraction_zero_raises`
+  isolates the `_make_calibrator() is not None` arm of `needs_fold`
+  (the prior test only triggered the `threshold_tuning` arm).
+
 ## Deferred
 
 Round 1 (design-review swarm):
@@ -3409,3 +3435,17 @@ Phase 6a (estimator Claude swarm, round 2):
   sklearn-contract reason the A4-draft clone-in-`__init__` was dropped
   (a regression guard); trimming it risks losing the rationale.
   style-opus rated it defer-acceptable.
+
+Phase 6a (estimator Claude swarm, round 3):
+
+- **Trainer-vs-estimator cal-fold cross-check under sentinel-drop
+  (qa-opus I2).** Deferred: the new mutation-sensitive test asserts the
+  estimator-side invariant (the recomputed fold is exactly
+  `cal_idx` minus below-floor windows). Cross-checking that this equals
+  the Trainer's actual held-out cal rows requires the frozen Phase-4
+  Trainer to expose its held-out batch + `cal_idx`, the same Phase-4
+  API change deferred for the double/triple-windowing item. The split
+  is a pure deterministic function of identical inputs (verified by two
+  architecture reviewers across rounds 1-3), so the estimator-side
+  assertion is sufficient for v1; revisit with the Trainer-seam
+  refactor.

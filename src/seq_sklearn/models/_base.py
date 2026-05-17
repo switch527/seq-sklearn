@@ -359,6 +359,15 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
             calibration_set_provided=False,
         )
         keep = cal_idx[~self._below_floor_mask(batch)[cal_idx]]
+        if keep.size == 0:
+            raise ConfigError(
+                "the recomputed calibration fold is empty after dropping "
+                "below-floor windows: every calibration-fold entity has "
+                f"fewer than min_periods_predict="
+                f"{self.transformer_.config.min_periods_predict} rows. Lower "
+                "min_periods_predict, raise cal_fraction, or pass an explicit "
+                "calibration_set (F2)"
+            )
         return self._raw_outputs(batch)[keep], batch["target"][keep]
 
     def _post_fit(
