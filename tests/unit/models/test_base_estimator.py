@@ -11,9 +11,10 @@ import numpy as np
 import pandas as pd
 import pytest
 import sklearn
+import sklearn.exceptions
 
 from seq_sklearn.config._adapters import OptimizerParams, TabularConfigParams
-from seq_sklearn.errors import ConfigError
+from seq_sklearn.errors import ConfigError, NotFittedError
 from tests._test_models._dummy_estimator import (
     _DummySequenceClassifier,
     _DummySequenceRegressor,
@@ -50,6 +51,18 @@ def test_clone_is_independent_no_adapter_aliasing() -> None:
     assert clone.optimizer is not opt
     clone.optimizer.learning_rate = 1.0
     assert est.optimizer.learning_rate == 5e-4
+
+
+def test_predict_proba_before_fit_raises_notfitted() -> None:
+    # Classifier-shell error path: predict_proba pre-fit raises and is
+    # catchable as BOTH the seq-sklearn and the sklearn NotFittedError
+    # (dual-parent MRO), matching the regressor predict_quantiles path.
+    est = _clf()
+    x = pd.DataFrame({"id": [0], "time": [pd.Timestamp("2021-01-01")], "sr": [0.0]})
+    with pytest.raises(NotFittedError):
+        est.predict_proba(x)
+    with pytest.raises(sklearn.exceptions.NotFittedError):
+        est.predict_proba(x)
 
 
 @pytest.mark.parametrize("method", ["partial_fit", "fit_predict", "fit_transform"])
@@ -121,7 +134,12 @@ def test_window_time_index_shared_helper_and_monotone_guard() -> None:
     np.testing.assert_array_equal(
         window_time_index(np.array([0, 0, 1, 1, 1])), np.array([0, 1, 0, 1, 2])
     )
-    assert Trainer._window_time_index is not None
+    # Trainer's static alias delegates to the same shared impl (not just
+    # truthy): identical output on the same input.
+    np.testing.assert_array_equal(
+        Trainer._window_time_index(np.array([0, 0, 1])),
+        window_time_index(np.array([0, 0, 1])),
+    )
     with pytest.raises(ValueError, match="monotone non-decreasing"):
         window_time_index(np.array([1, 0, 1]))
 
@@ -133,3 +151,13 @@ def test_calibration_set_with_positive_cal_fraction_raises(
     x = pd.DataFrame({"id": [0], "time": [pd.Timestamp("2021-01-01")], "sr": [0.0]})
     with pytest.raises(ConfigError, match="cal_fraction"):
         est.fit(x, np.array([0]), calibration_set=(x, np.array([0])))
+
+
+def test_needs_calibration_fold_but_cal_fraction_zero_raises() -> None:
+    # threshold_tuning (or a calibrator) with cal_fraction=0 and no
+    # calibration_set has no fold to fit on: rejected at the fit
+    # boundary naming cal_fraction, not deep in the calibrator (F2).
+    est = _clf(threshold_tuning=True, cal_fraction=0.0)
+    x = pd.DataFrame({"id": [0], "time": [pd.Timestamp("2021-01-01")], "sr": [0.0]})
+    with pytest.raises(ConfigError, match="cal_fraction"):
+        est.fit(x, np.array([0]))

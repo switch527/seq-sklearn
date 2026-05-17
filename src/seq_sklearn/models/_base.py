@@ -263,6 +263,14 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
                 "calibration_set with cal_fraction=0, or drop it and let the "
                 "three-way split carve the calibration fold (F2)"
             )
+        needs_fold = self._make_calibrator() is not None or self.threshold_tuning
+        if needs_fold and calibration_set is None and self.cal_fraction <= 0.0:
+            raise ConfigError(
+                f"calibration_strategy={self.calibration_strategy!r} / "
+                f"threshold_tuning={self.threshold_tuning} needs a calibration "
+                "fold but cal_fraction=0 and no calibration_set was given; set "
+                "cal_fraction > 0 or pass calibration_set (F2)"
+            )
         config = self._build_config()
         # Seed before any randomness (backbone weight init in
         # model_factory, the SubsetRandomSampler in Trainer.fit) so two
@@ -329,7 +337,12 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         Otherwise the same deterministic three-way split the Trainer
         applied is recomputed (identical config + identical
         ``window_time_index`` derivation) so the calibrator fits on the
-        rows training held out.
+        rows training held out. Below-floor windows
+        (``min_periods <= n < min_periods_predict``) survive
+        ``TabularToSequence.fit`` but carry sentinel targets (``-1``
+        classification / ``NaN`` regression from ``transform``); they are
+        dropped from the recomputed fold so the calibrator / threshold
+        tuner never fit on a sentinel label.
         """
         if calibration_set is not None:
             x_cal, y_cal = calibration_set
@@ -345,7 +358,8 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
             val_split_strategy=self.val_split_strategy,  # type: ignore[arg-type]
             calibration_set_provided=False,
         )
-        return self._raw_outputs(batch)[cal_idx], batch["target"][cal_idx]
+        keep = cal_idx[~self._below_floor_mask(batch)[cal_idx]]
+        return self._raw_outputs(batch)[keep], batch["target"][keep]
 
     def _post_fit(
         self,
@@ -425,7 +439,10 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
             "tabular_config": self.tabular_config.to_pydantic().model_dump(mode="json"),
             "feature_names_in_": list(self.feature_names_in_),
             "n_outputs_": self.n_outputs_,
-            "calibration_strategy": self.calibration_strategy,
+            # calibration_strategy is NOT a top-level key: it round-trips
+            # through `hyperparams` (an __init__ scalar) and load()
+            # restores it via set_params, so a duplicate here would be a
+            # dead, migration-confusing field (A17).
             "tabular_to_sequence_state": self.transformer_.serialize(),
             "calibrator": (self.calibrator_.serialize() if self.calibrator_ is not None else None),
             **self._family_state(),

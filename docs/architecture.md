@@ -1004,8 +1004,10 @@ STABLE.
      manually.
 5. Wraps the model in `_LightningModule`.
 6. Calls `pl_trainer.fit(lightning_module, train_loader, val_loader)`.
-7. After fit, builds the calibrator on the calibration fold and runs
-   the threshold tuner if `threshold_tuning=True`.
+7. Returns the fitted `_LightningModule`. Calibration is NOT the
+   Trainer's job: `BaseSequenceEstimator.fit` builds the calibrator and
+   runs the threshold tuner on the recomputed calibration fold
+   (`_fit_calibrator` / `_post_fit`) after `Trainer.fit` returns.
 
 **`_LightningModule`** with an explicit constructor for unit testing:
 
@@ -2109,7 +2111,7 @@ specific pruning callback is not imported into seq-sklearn).
   loaded estimator's `get_params` / `sklearn.base.clone` work),
   `feature_names_in_` (list of strings), the
   `tabular_to_sequence_state` (the transformer's `serialize()` output),
-  the calibrator's `serialize()` output, the metadata block, AND the
+  the calibrator's `serialize()` output, the metadata block, and the
   fit-state attributes `classes_` / `n_outputs_` / `quantiles_` /
   `decision_threshold_` as JSON. Phase 6a reconciliation: the F1.1
   draft / the earlier bullet put these in `weights.safetensors` as
@@ -2118,8 +2120,8 @@ specific pruning callback is not imported into seq-sklearn).
   calibrator's and the transformer's fitted state already live in
   `state.json`, so all non-tensor fit-state is co-located there for one
   coherent JSON contract. `weights.safetensors` is therefore strictly
-  the neural weights. The byte-equal save/load round-trip tests prove
-  correctness.
+  the neural weights. Covered by the byte-equal save/load round-trip
+  tests.
 
 ```python
 def save(self, path: str | Path) -> None:
@@ -2130,12 +2132,23 @@ def save(self, path: str | Path) -> None:
 
 @classmethod
 def load(cls, path: str | Path) -> "BaseSequenceEstimator":
-    path = Path(path)
-    from safetensors.torch import load_file
-    weights = load_file(str(path / "weights.safetensors"))
-    state = json.loads((path / "state.json").read_text())
-    return cls._reconstruct(weights, state)   # UserWarning on version mismatch
+    weights, state = load_weights_and_state(path)  # UserWarning on version mismatch
+    obj = cls(task_type=state["task_type"])
+    obj.set_params(**state["hyperparams"])         # restores the 6 adapters + scalars
+    obj.config_ = cls._config_cls.model_validate(state["config"])
+    obj.transformer_ = TabularToSequence.deserialize(...)
+    obj._restore_family_state(state)               # family hook: classes_ / quantiles_ / threshold
+    backbone, head = obj._build_backbone_head(obj.config_, obj.transformer_)  # family hook
+    # load_state_dict(weights) into backbone/head
+    obj.calibrator_ = obj._build_calibrator_from(state["calibrator"])  # family hook
+    return obj
 ```
+
+There is no `_reconstruct` method; `load` inlines the reconstruction.
+The Phase-7 override surface is the family hooks named above
+(`_restore_family_state`, `_build_backbone_head`,
+`_build_calibrator_from`, plus `_config_kwargs` on the build path), not
+a single `_reconstruct` seam.
 
 `save_weights_and_state` / `load_weights_and_state` in
 `serialization.py` are low-level primitives: they persist and read
@@ -2235,7 +2248,8 @@ def _migrate(weights: WeightDict, state: StateDict) -> tuple[WeightDict, StateDi
     return weights, state
 ```
 
-`_reconstruct` calls `_migrate` before consuming the dicts. The N1
+`load_weights_and_state` calls `_migrate` before returning the dicts,
+so `load` consumes already-migrated state. The N1
 save/load round-trip test exercises the no-op identity path
 (v1 -> v1, `MIGRATIONS` is empty so `_migrate` short-circuits).
 
@@ -2803,8 +2817,8 @@ Phase 6a (estimator-shell implementation):
   `sklearn.base.clone`.** The A4 step-3 draft (clone adapters in
   `__init__`) is incompatible with sklearn: `clone` re-checks param
   identity and rejects any constructor that "modifies a parameter",
-  AND `clone` already deep-clones every nested param before
-  re-construction, so the in-`__init__` clone is both breaking and
+  and `clone` already deep-clones every nested param before
+  re-construction, so the in-`__init__` clone breaks clone and is
   redundant. `__init__` now stores params verbatim with the
   None-default-instance idiom; clone-safety is sklearn's job. A4 step 3
   is corrected to describe this; the A4 example block is illustrative
@@ -2868,7 +2882,7 @@ Phase 6a (estimator Claude swarm, round 1):
   that is commonly non-numeric (string labels) and does not tensorize.
   A17 + F4 amended: `weights.safetensors` is strictly backbone/head
   tensors; all fit-state is JSON in `state.json` alongside the
-  calibrator/transformer state. Byte-equal round-trip tests prove it.
+  calibrator/transformer state. Covered by the byte-equal round-trip tests.
 - **`tabular_config` no longer double-serialized (arch-sonnet
   CRITICAL).** `_collect_state` dumps `config` with
   `exclude={"tabular_config"}` (no-op for `BaseModelConfig`; drops the
@@ -2889,6 +2903,44 @@ Phase 6a (estimator Claude swarm, round 1):
   `assert` in the classifier threshold path is an explicit guard; the
   Phase-7 process-label comments in `_base.py` are reworded to plain
   rationale.
+
+Phase 6a (estimator Claude swarm, round 2):
+
+- **Sentinel targets excluded from the recomputed calibration fold
+  (code-opus IMPROVEMENT).** When `min_periods_predict > min_periods`,
+  an entity with `min_periods <= n < min_periods_predict` survives
+  `TabularToSequence.fit` but `transform` injects a sentinel target
+  (`-1` classification / `NaN` regression). `_calibration_fold`
+  returned `batch["target"][cal_idx]` unfiltered, so the calibrator /
+  threshold tuner could fit on sentinel labels. The recomputed-split
+  branch now drops below-floor windows via `_below_floor_mask`. (The
+  explicit-`calibration_set` branch is unaffected: its targets are the
+  caller's real `y_cal`.)
+- **Empty-calibration-fold config guard (arch-opus IMPROVEMENT).**
+  `calibration_strategy != 'none'` or `threshold_tuning=True` with
+  `cal_fraction=0` and no `calibration_set` previously failed deep in
+  the calibrator with a message that never named the cause. `fit` now
+  raises `ConfigError` naming `cal_fraction` at the boundary (F2).
+- **Dead `calibration_strategy` state key removed (arch-sonnet
+  IMPROVEMENT).** It round-trips through `hyperparams` and `load()`
+  restores it via `set_params`; the duplicate top-level key in
+  `_collect_state` was never read and is migration-confusing. Removed.
+- **A17 / A7 doc drift fixed (arch-sonnet IMPROVEMENT).** The A17 `load`
+  skeleton named a non-existent `_reconstruct` seam; rewritten to the
+  inlined constructor + `set_params` + family-hook reconstruction the
+  code actually uses, naming the Phase-7 override surface. A7 step 7
+  incorrectly attributed calibration to the Trainer; corrected to state
+  the estimator owns it after `Trainer.fit` returns.
+- **qa / weak-assertion test gaps closed.** Regressor below-floor
+  NaN-fill now has a behavioral test (`predict` + `predict_quantiles`,
+  parallel to the classifier one); classifier `predict_proba` pre-fit
+  `NotFittedError` is asserted at the shell level; `decision_threshold_`
+  ABSENCE after `load` is asserted (binary-no-tuning and multiclass);
+  the vacuous `Trainer._window_time_index is not None` assertion now
+  checks delegation by output equality.
+- **Style.** The recurring "tests prove correctness" reviewer-vouching
+  prose and two rhetorical capitalized `AND`s in the ledger are
+  reworded.
 
 ## Deferred
 
@@ -3327,3 +3379,33 @@ Phase 6a (estimator Claude swarm, round 1):
   the Phase 6a module list); v1 panels are small and this is a
   performance, not correctness, concern. Revisit when a Trainer-seam
   refactor is in scope.
+
+Phase 6a (estimator Claude swarm, round 2):
+
+- **`_calibration_fold` recomputed twice when both a calibrator and
+  `threshold_tuning` are set (arch-opus IMPROVEMENT-2).** Deferred:
+  `_fit_calibrator` and the classifier `_post_fit` each call
+  `_calibration_fold` (a transform + forward over the panel). Same
+  rationale as the double/triple-windowing deferral above, a small-panel
+  perf cost with no correctness impact; threading the computed
+  `(raw, targets)` through both call sites is the same Trainer-seam
+  refactor and is revisited together.
+- **Encoder-vocab persistence unverified at the integration boundary
+  (qa-opus IMPROVEMENT).** Deferred: every estimator e2e/subprocess
+  panel is all-numeric, so the byte-equal reload proves persisted
+  scaler-stats but not categorical encoder vocab. The TTS
+  encoder serialize/deserialize is 100% line+branch covered at the
+  unit level (`tests/unit/data`); a categorical integration panel is a
+  non-core robustness addition, not a correctness gap.
+- **`predict` returns class 0 for below-floor binary entities
+  (code-sonnet I1).** Deferred: not a defect. requirements.md scopes
+  the NaN-in-output contract to `predict_proba` / `predict_quantiles`
+  (a label array cannot carry NaN). `predict` calls `predict_proba`
+  internally, so the aggregated `min_periods_predict_breach` WARNING
+  still fires for `predict` callers via `transform`; the signal is not
+  lost.
+- **Verbose clone-wiring comment in `_base.py` (style-opus
+  IMPROVEMENT-2).** Deferred: the comment documents the non-obvious
+  sklearn-contract reason the A4-draft clone-in-`__init__` was dropped
+  (a regression guard); trimming it risks losing the rationale.
+  style-opus rated it defer-acceptable.

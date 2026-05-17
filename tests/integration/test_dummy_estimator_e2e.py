@@ -97,6 +97,9 @@ def test_save_load_same_process_byte_equal(
     reloaded = _DummySequenceClassifier.load(tmp_path)  # type: ignore[arg-type]
     after = reloaded.predict_proba(x)
     assert np.array_equal(after, before)
+    # A2: binary w/o threshold_tuning -> attribute ABSENT after load,
+    # not silently resurrected from a stray state.json key.
+    assert not hasattr(reloaded, "decision_threshold_")
 
 
 def test_save_load_with_temperature_calibration(
@@ -161,6 +164,7 @@ def test_multiclass_isotonic_predict_and_round_trip(
     est.save(tmp_path)  # type: ignore[arg-type]
     reloaded = _DummySequenceClassifier.load(tmp_path)  # type: ignore[arg-type]
     assert np.array_equal(reloaded.predict_proba(x), before)
+    assert not hasattr(reloaded, "decision_threshold_")  # A2 survives load
 
 
 def test_binary_platt_with_threshold_tuning(
