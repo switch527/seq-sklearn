@@ -42,8 +42,7 @@ def test_attention_output_field_snapshot() -> None:
 
 def test_regression_attention_output_field_snapshot() -> None:
     assert (
-        tuple(f.name for f in dataclasses.fields(RegressionAttentionOutput))
-        == _REGRESSION_FIELDS
+        tuple(f.name for f in dataclasses.fields(RegressionAttentionOutput)) == _REGRESSION_FIELDS
     )
 
 

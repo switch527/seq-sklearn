@@ -295,7 +295,7 @@ def test_regressor_predict_with_attention_independent_oracle(
     assert not np.allclose(out1.predictions, out2.predictions)
 
 
-def _patch_fixed_representation(monkeypatch: pytest.MonkeyPatch, est: object, value: float):
+def _patch_fixed_representation(monkeypatch: pytest.MonkeyPatch, est: object, value: float) -> None:
     backbone = est._module.backbone  # type: ignore[attr-defined]
     orig = backbone.forward
 

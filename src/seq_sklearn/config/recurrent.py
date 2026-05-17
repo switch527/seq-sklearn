@@ -32,9 +32,7 @@ class RecurrentSequenceEstimatorConfig(BaseModelConfig):
 
     bidirectional: bool = False
     recurrent_dropout: float = Field(default=0.1, ge=0.0, lt=1.0)
-    recurrent_dropout_kind: Literal["weight_drop", "variational", "bernoulli"] = (
-        "weight_drop"
-    )
+    recurrent_dropout_kind: Literal["weight_drop", "variational", "bernoulli"] = "weight_drop"
     hidden_init_strategy: Literal["zero", "learned", "per_entity"] = "zero"
     readout: Literal["last_valid", "mean_pool", "attention"] = "last_valid"
     bptt_window: int | None = Field(default=None, ge=1)
