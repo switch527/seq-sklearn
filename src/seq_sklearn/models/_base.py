@@ -363,7 +363,7 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
             raise ConfigError(
                 "the recomputed calibration fold is empty after dropping "
                 "below-floor windows: every calibration-fold entity has "
-                f"fewer than min_periods_predict="
+                "fewer than min_periods_predict="
                 f"{self.transformer_.config.min_periods_predict} rows. Lower "
                 "min_periods_predict, raise cal_fraction, or pass an explicit "
                 "calibration_set (F2)"
