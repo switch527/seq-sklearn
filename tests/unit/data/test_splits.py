@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from seq_sklearn.data.splits import compute_three_way_split
+from seq_sklearn.data.splits import below_floor_mask, compute_three_way_split
 from seq_sklearn.errors import ConfigError
 
 
@@ -291,3 +291,21 @@ def test_all_short_entities_empty_cal_warns_random() -> None:
         )
     assert cal.size == 0
     assert len(train) == 1
+
+
+def test_below_floor_mask_flags_short_entities() -> None:
+    # entity 0: 4 windows (>= floor 3 -> kept), entity 1: 2 windows
+    # (< 3 -> below floor), entity 2: 3 windows (== floor -> kept).
+    entity_ids = np.array([0, 0, 0, 0, 1, 1, 2, 2, 2])
+    mask = below_floor_mask(entity_ids, floor=3)
+    expected = np.array([False, False, False, False, True, True, False, False, False])
+    np.testing.assert_array_equal(mask, expected)
+
+
+def test_below_floor_mask_floor_one_is_all_false() -> None:
+    entity_ids = np.array([0, 1, 1, 2, 2, 2])
+    assert not below_floor_mask(entity_ids, floor=1).any()
+
+
+def test_below_floor_mask_empty() -> None:
+    assert below_floor_mask(np.array([], dtype=int), floor=3).shape == (0,)

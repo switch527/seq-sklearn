@@ -1,5 +1,6 @@
 """Tests for the categorical encoder and real-feature scalers (F3)."""
 
+import json
 import logging
 
 import numpy as np
@@ -116,3 +117,47 @@ def test_identity_scaler_is_noop() -> None:
 def test_unknown_strategy_raises() -> None:
     with pytest.raises(ValueError, match="unknown scaler strategy"):
         make_scaler("nope")  # type: ignore[arg-type]
+
+
+# --- A17 fitted-state serialization (Phase 6a save/load hook) ---------
+
+
+@pytest.mark.parametrize("strategy", ["standard", "robust", "quantile_uniform", "none"])
+def test_scaler_fitted_state_json_roundtrip(strategy: str) -> None:
+    # Fitted state must survive json.dumps/loads and reconstruct a
+    # scaler whose transform is byte-equal (N1 FP32 CPU exact equality),
+    # with no re-fit and no pickled sklearn object.
+    rng = np.random.default_rng(1)
+    x = rng.normal(2.0, 5.0, size=(150, 3))
+    src = make_scaler(strategy)  # type: ignore[arg-type]
+    src.fit(x)
+    blob = json.loads(json.dumps(src.get_fitted_state()))
+    restored = make_scaler(strategy).set_fitted_state(blob)  # type: ignore[arg-type]
+    assert np.array_equal(restored.transform(x), src.transform(x))
+
+
+@pytest.mark.parametrize("strategy", ["standard", "robust", "quantile_uniform", "none"])
+def test_scaler_get_fitted_state_before_fit_raises(strategy: str) -> None:
+    with pytest.raises(NotFittedError):
+        make_scaler(strategy).get_fitted_state()  # type: ignore[arg-type]
+
+
+def test_categorical_encoder_fitted_state_json_roundtrip() -> None:
+    enc = CategoricalEncoder()
+    enc.fit({"c1": np.array(["a", "b", "a"]), "c2": np.array([1, 2, 3])})
+    cols = {"c1": np.array(["a", "z", "b"]), "c2": np.array([2, 9, 1])}
+    blob = json.loads(json.dumps(enc.get_fitted_state()))
+    restored = CategoricalEncoder().set_fitted_state(blob)
+    for name in ("c1", "c2"):
+        np.testing.assert_array_equal(restored.transform(cols)[name], enc.transform(cols)[name])
+    assert restored.__sklearn_is_fitted__() is True
+
+
+def test_categorical_encoder_get_fitted_state_before_fit_raises() -> None:
+    with pytest.raises(NotFittedError):
+        CategoricalEncoder().get_fitted_state()
+
+
+def test_categorical_encoder_set_fitted_state_bad_payload_raises() -> None:
+    with pytest.raises(ValueError, match="must be a dict"):
+        CategoricalEncoder().set_fitted_state({"vocabularies": ["not", "a", "dict"]})

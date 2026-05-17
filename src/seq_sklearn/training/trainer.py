@@ -35,7 +35,11 @@ from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 
 from seq_sklearn.config._extras import extract_deprecated_extras
 from seq_sklearn.config.base import BaseModelConfig
-from seq_sklearn.data.splits import compute_three_way_split
+from seq_sklearn.data.splits import (
+    below_floor_mask,
+    compute_three_way_split,
+    window_time_index,
+)
 from seq_sklearn.data.tabular_to_sequence import TabularToSequence
 from seq_sklearn.errors import ConfigError
 from seq_sklearn.hardware import detect
@@ -323,6 +327,16 @@ class Trainer:
             optuna_trial=optuna_trial,
         )
 
+    def _below_floor_mask(self, entity_ids: np.ndarray) -> np.ndarray:
+        """Below-`min_periods_predict` window mask (shared `splits` impl).
+
+        Delegates to :func:`seq_sklearn.data.splits.below_floor_mask`,
+        the single source the estimator's calibration-fold / predict
+        path also uses, so the Trainer's train / val drop and the
+        estimator's drop cannot diverge.
+        """
+        return below_floor_mask(entity_ids, self.transformer.config.min_periods_predict)
+
     def fit(
         self,
         x_panel: object,
@@ -354,6 +368,31 @@ class Trainer:
             val_split_strategy=self.config.val_split_strategy,
             calibration_set_provided=calibration_set_provided,
         )
+
+        # Entities with fewer windows than min_periods_predict carry
+        # sentinel targets (-1 classification / NaN regression) from
+        # TabularToSequence.transform. They must not enter the train /
+        # val folds: torch.bincount on -1 raises in _class_weights, and
+        # NaN regression targets trip the F9 non-finite-loss abort. The
+        # estimator already drops them from the recomputed cal fold;
+        # filter them here so the Trainer never fits on a sentinel.
+        below = self._below_floor_mask(entity_ids)
+        pre_train, pre_val = train_idx.size, val_idx.size
+        train_idx = train_idx[~below[train_idx]]
+        val_idx = val_idx[~below[val_idx]]
+        # Scoped to the below-floor cause only: raise when a fold that
+        # was non-empty BEFORE the filter is emptied BY it (symmetric
+        # with the estimator's empty-calibration-fold guard). A fold
+        # already empty pre-filter (e.g. val_fraction=0) is a distinct,
+        # pre-existing situation and is left to the prior behaviour so
+        # this message stays accurate to its actual cause.
+        if (pre_train > 0 and train_idx.size == 0) or (pre_val > 0 and val_idx.size == 0):
+            raise ConfigError(
+                "the train / val fold is empty after dropping below-floor "
+                f"windows: every entity has fewer than min_periods_predict="
+                f"{self.transformer.config.min_periods_predict} rows. Lower "
+                "min_periods_predict or supply longer-tenure entities."
+            )
 
         class_weights = self._class_weights(train_idx, batch["target"])
 
@@ -390,31 +429,10 @@ class Trainer:
 
     @staticmethod
     def _window_time_index(entity_ids: np.ndarray) -> np.ndarray:
-        """Reconstruct per-entity time ordinals from the contiguous blocks.
+        """Delegate to :func:`seq_sklearn.data.splits.window_time_index`.
 
-        ``TabularToSequence.transform`` emits each entity's windows
-        contiguously and time-ascending, so the ordinal is
-        ``concatenate([arange(n_i) for n_i in per_entity_counts])`` (A5).
-
-        The ``np.unique`` count vector is value-sorted, which lines up
-        with the emitted blocks only because
-        ``TabularToSequence.transform`` assigns ``entity_id`` codes in
-        batch-emission order via ``enumerate(groupby(..., sort=True))``
-        (tabular_to_sequence.py:232-234), making ``entity_id`` monotone
-        non-decreasing across the batch. The precondition is enforced
-        with a raise (not an ``assert``, which ``python -O`` strips) so a
-        future non-TTS caller passing an unordered ``entity_id`` fails
-        loudly here instead of silently corrupting the fold ordinals.
-
-        Raises:
-            ValueError: ``entity_ids`` is not monotone non-decreasing.
+        Single source of truth shared with the estimator's
+        calibration-fold seam so the two cannot drift; kept as a thin
+        Trainer-private alias for the existing call site / tests.
         """
-        if entity_ids.size == 0:
-            return np.empty(0, dtype=int)
-        if not bool(np.all(np.diff(entity_ids) >= 0)):
-            raise ValueError(
-                "entity_ids must be monotone non-decreasing; "
-                "TabularToSequence.transform guarantees this by construction"
-            )
-        _values, counts = np.unique(entity_ids, return_counts=True)
-        return np.concatenate([np.arange(c) for c in counts])
+        return window_time_index(entity_ids)

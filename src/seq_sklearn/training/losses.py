@@ -40,6 +40,34 @@ logger = logging.getLogger(__name__)
 _LEGAL_TASK_LOSS: frozenset[tuple[str, str]] = legal_task_loss_pairs()
 
 
+class _ScalarOutputLoss(nn.Module):
+    """Bridge a single-logit head to a scalar-target loss.
+
+    Binary and point-regression heads emit ``(B, 1)`` (the F1.1
+    ``out_dim`` contract), but ``BCEWithLogitsLoss`` /
+    ``BinaryFocalLoss`` / ``MSELoss`` / ``L1Loss`` / ``HuberLoss``
+    require the prediction and target to be the same ``(B,)`` shape and
+    float dtype (the ``TabularToSequence`` target is ``long`` for
+    classification). This adapter squeezes the trailing singleton and
+    casts the target to the prediction dtype so the head contract and
+    the loss contract meet without either side special-casing the
+    other. Multiclass cross-entropy and pinball keep their ``(B, K)``
+    head and are never wrapped.
+    """
+
+    def __init__(self, inner: nn.Module) -> None:
+        super().__init__()
+        self.inner = inner
+
+    def forward(self, logits: Tensor, target: Tensor) -> Tensor:
+        # Scalar-output losses need prediction and target to share the
+        # same shape; flatten both to (B,) so a (B, 1) head and either a
+        # (B,) or (B, 1) target line up. dtype is matched to the
+        # prediction (the classification target is long).
+        flat = logits.reshape(-1)
+        return self.inner(flat, target.reshape(-1).to(flat.dtype))
+
+
 class BinaryFocalLoss(nn.Module):
     """Binary focal loss on raw logits.
 
@@ -152,19 +180,19 @@ def build_loss(
         )
 
     if task_type == "binary" and loss_strategy == "cross_entropy":
-        return nn.BCEWithLogitsLoss(pos_weight=class_weights)
+        return _ScalarOutputLoss(nn.BCEWithLogitsLoss(pos_weight=class_weights))
     if task_type == "multiclass" and loss_strategy == "cross_entropy":
         return nn.CrossEntropyLoss(weight=class_weights)
     if loss_strategy == "focal":
         if task_type == "binary":
-            return BinaryFocalLoss(gamma=focal_gamma)
+            return _ScalarOutputLoss(BinaryFocalLoss(gamma=focal_gamma))
         return MulticlassFocalLoss(gamma=focal_gamma)
     if task_type == "regression_point":
         if loss_strategy == "mse":
-            return nn.MSELoss()
+            return _ScalarOutputLoss(nn.MSELoss())
         if loss_strategy == "mae":
-            return nn.L1Loss()
-        return nn.HuberLoss(delta=huber_delta)
+            return _ScalarOutputLoss(nn.L1Loss())
+        return _ScalarOutputLoss(nn.HuberLoss(delta=huber_delta))
     # Only (regression_quantile, pinball) remains.
     if quantiles is None:
         raise ConfigError(

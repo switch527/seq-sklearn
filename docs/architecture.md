@@ -341,6 +341,12 @@ estimator. The canonical pattern derived for seq-sklearn:
            hidden_size: int = 128,
            # ... TFTConfig flat fields (model-shape only) mirrored
        ) -> None:
+           # NOTE (Phase 6a Addressed): the sklearn.base.clone(...) calls
+           # below are SUPERSEDED. They break sklearn.base.clone (which
+           # rejects a constructor that modifies a param and already
+           # deep-clones nested params). __init__ stores params verbatim
+           # with the None-default-instance idiom; see the Phase 6a
+           # ledger entry.
            self.task_type = task_type
            self.tabular_config = (
                sklearn.base.clone(tabular_config)
@@ -954,11 +960,11 @@ class RecurrentSequenceEstimator(BaseSequenceEstimator, ABC):
 # src/seq_sklearn/config/recurrent.py
 class RecurrentSequenceEstimatorConfig(BaseModelConfig):
     bidirectional: bool = False
-    recurrent_dropout: float = 0.1
+    recurrent_dropout: float = Field(default=0.1, ge=0.0, lt=1.0)
     recurrent_dropout_kind: Literal["weight_drop", "variational", "bernoulli"] = "weight_drop"
     hidden_init_strategy: Literal["zero", "learned", "per_entity"] = "zero"
     readout: Literal["last_valid", "mean_pool", "attention"] = "last_valid"
-    bptt_window: int | None = None
+    bptt_window: int | None = Field(default=None, ge=1)
 ```
 
 The v1 test instantiates a no-op concrete subclass (defined inline in
@@ -977,6 +983,16 @@ STABLE.
 2. Calls `data.splits.compute_three_way_split(...)` for the train /
    val / cal split (F2). All split logic lives in `data/splits.py`;
    the Trainer does not implement split semantics inline.
+2a. Drops below-`min_periods_predict` windows from `train_idx` /
+   `val_idx` via `data.splits.below_floor_mask` (the shared helper the
+   estimator's calibration fold / predict path also uses). Those
+   windows carry sentinel targets (`-1` classification / `NaN`
+   regression) from `transform`; training on them raises in
+   `_class_weights` (`torch.bincount(-1)`) or trips the F9
+   non-finite-loss abort. If every train / val window is below-floor
+   the Trainer raises `ConfigError` (symmetric with the estimator's
+   empty-calibration-fold guard) rather than handing Lightning an
+   empty loader.
 3. Builds DataLoaders with the F5 defaults
    (`num_workers=min(4, os.cpu_count() or 1)`, `pin_memory=True` on CUDA,
    `persistent_workers=True` when `num_workers > 0`).
@@ -998,8 +1014,10 @@ STABLE.
      manually.
 5. Wraps the model in `_LightningModule`.
 6. Calls `pl_trainer.fit(lightning_module, train_loader, val_loader)`.
-7. After fit, builds the calibrator on the calibration fold and runs
-   the threshold tuner if `threshold_tuning=True`.
+7. Returns the fitted `_LightningModule`. Calibration is NOT the
+   Trainer's job: `BaseSequenceEstimator.fit` builds the calibrator and
+   runs the threshold tuner on the recomputed calibration fold
+   (`_fit_calibrator` / `_post_fit`) after `Trainer.fit` returns.
 
 **`_LightningModule`** with an explicit constructor for unit testing:
 
@@ -1865,14 +1883,14 @@ MINOR releases; tuple-unpacking is NOT supported). v1 fields:
 @dataclass(frozen=True, slots=True)
 class AttentionOutput:
     """Returned by TFTClassifier.predict_with_attention."""
-    predictions: np.ndarray                    # (N,) class indices or (N, K) for v1.1 multi-label logits
+    predictions: np.ndarray                    # (N,) class indices (map via estimator.classes_); (N, K) v1.1 multi-label
     probabilities: np.ndarray                  # (N, num_classes) post-softmax/sigmoid
-    logits: np.ndarray                         # (N, num_classes); pre-activation
+    logits: np.ndarray                         # (N, head_out_dim): 1 for binary, num_classes else; pre-activation
     var_selection_weights: np.ndarray          # (N, L, n_vars)
     static_var_selection_weights: np.ndarray   # (N, n_static_vars)
     attention_weights: np.ndarray              # (N, n_heads, L, L)
     padding_mask: np.ndarray                   # (N, L); True = padding (pass-through from preprocessing)
-    entity_id: np.ndarray                      # (N,) for diagnostics
+    entity_id: np.ndarray                      # (N,) internal contiguous entity code, for diagnostics
 
 @dataclass(frozen=True, slots=True)
 class RegressionAttentionOutput:
@@ -1883,7 +1901,7 @@ class RegressionAttentionOutput:
     static_var_selection_weights: np.ndarray   # (N, n_static_vars)
     attention_weights: np.ndarray              # (N, n_heads, L, L)
     padding_mask: np.ndarray                   # (N, L); True = padding
-    entity_id: np.ndarray                      # (N,) for diagnostics
+    entity_id: np.ndarray                      # (N,) internal contiguous entity code, for diagnostics
 ```
 
 Regression intentionally has no `logits` field. The classifier head
@@ -2095,15 +2113,25 @@ specific pruning callback is not imported into seq-sklearn).
 `save(path)` writes a directory at `path/` containing:
 
 - `path/weights.safetensors`: tensor-only archive in the safetensors
-  format. Holds the state dicts (backbone, head, any calibrator
-  tensor state) plus tensorizable fit-state (`classes_`,
-  `n_features_in_`, `n_outputs_`, `quantiles_` as a 1D tensor,
-  `decision_threshold_` as a 0D tensor when present).
+  format. Holds only the backbone and head state dicts. (Phase 6a
+  reconciliation: the fit-state attributes are NOT tensorized, see
+  below.)
 - `path/state.json`: human-readable JSON. Holds the pydantic config
-  dump (`model_dump`), `feature_names_in_` (list of strings), the
-  `tabular_to_sequence_state` (categorical-encoder vocabularies as
-  arrays of strings; scaler statistics as floats), the calibrator's
-  `serialize()` output, and the metadata block.
+  dump (`model_dump`), the `__init__` hyperparameter snapshot (so a
+  loaded estimator's `get_params` / `sklearn.base.clone` work),
+  `feature_names_in_` (list of strings), the
+  `tabular_to_sequence_state` (the transformer's `serialize()` output),
+  the calibrator's `serialize()` output, the metadata block, and the
+  fit-state attributes `classes_` / `n_outputs_` / `quantiles_` /
+  `decision_threshold_` as JSON. Phase 6a reconciliation: the F1.1
+  draft / the earlier bullet put these in `weights.safetensors` as
+  tensors, but `classes_` is a `LabelEncoder` class vector that is
+  frequently non-numeric (string labels) and does not tensorize; a
+  calibrator's and the transformer's fitted state already live in
+  `state.json`, so all non-tensor fit-state is co-located there for one
+  coherent JSON contract. `weights.safetensors` is therefore strictly
+  the neural weights. Covered by the byte-equal save/load round-trip
+  tests.
 
 ```python
 def save(self, path: str | Path) -> None:
@@ -2114,12 +2142,30 @@ def save(self, path: str | Path) -> None:
 
 @classmethod
 def load(cls, path: str | Path) -> "BaseSequenceEstimator":
-    path = Path(path)
-    from safetensors.torch import load_file
-    weights = load_file(str(path / "weights.safetensors"))
-    state = json.loads((path / "state.json").read_text())
-    return cls._reconstruct(weights, state)   # UserWarning on version mismatch
+    weights, state = load_weights_and_state(path)  # UserWarning on version mismatch
+    obj = cls(task_type=state["task_type"])
+    # `loss` is the one adapter __init__ stores verbatim as None (F5
+    # task-aware default injection must see "unspecified"); restore a
+    # default LossParams before set_params so persisted `loss__*`
+    # leaves have an object to route onto instead of failing
+    # set_params on None.
+    if obj.loss is None and any(k.startswith("loss__") for k in state["hyperparams"]):
+        obj.loss = LossParams()
+    obj.set_params(**state["hyperparams"])         # restores the 6 adapters + scalars
+    obj.config_ = cls._config_cls.model_validate(state["config"])
+    obj.transformer_ = TabularToSequence.deserialize(...)
+    obj._restore_family_state(state)               # family hook: classes_ / quantiles_ / threshold
+    backbone, head = obj._build_backbone_head(obj.config_, obj.transformer_)  # family hook
+    # load_state_dict(weights) into backbone/head
+    obj.calibrator_ = obj._build_calibrator_from(state["calibrator"])  # family hook
+    return obj
 ```
+
+There is no `_reconstruct` method; `load` inlines the reconstruction.
+The Phase-7 override surface is the family hooks named above
+(`_restore_family_state`, `_build_backbone_head`,
+`_build_calibrator_from`, plus `_config_kwargs` on the build path), not
+a single `_reconstruct` seam.
 
 `save_weights_and_state` / `load_weights_and_state` in
 `serialization.py` are low-level primitives: they persist and read
@@ -2219,7 +2265,8 @@ def _migrate(weights: WeightDict, state: StateDict) -> tuple[WeightDict, StateDi
     return weights, state
 ```
 
-`_reconstruct` calls `_migrate` before consuming the dicts. The N1
+`load_weights_and_state` calls `_migrate` before returning the dicts,
+so `load` consumes already-migrated state. The N1
 save/load round-trip test exercises the no-op identity path
 (v1 -> v1, `MIGRATIONS` is empty so `_migrate` short-circuits).
 
@@ -2341,8 +2388,13 @@ architecture phase:
    time based on what plays nicely with `accumulate_grad_batches`.
 2. **Variable-selection-weight return shape for
    `predict_with_attention`**: CPU numpy array vs. on-device tensor.
-   Default plan: CPU numpy for callable convenience, on-device on
-   opt-in via a `device=` argument; pin during implementation.
+   **RESOLVED** (Phase 6b): default CPU `np.ndarray` for callable
+   convenience; a `device=` keyword on `predict_with_attention` flips
+   every field to a detached on-device `Tensor`. Implemented on the
+   `TransformerSequenceEstimator.Classifier` / `.Regressor` mixins in
+   `models/transformer/_base.py`; the A15.1 dataclass field type stays
+   `np.ndarray` (the default) with the tensor path as documented BETA
+   runtime behaviour.
 3. **Native ONNX `Attention` op (opset 23)**: PyTorch issue #149662
    tracks landing the native op. Not stable as of torch 2.12. Watch
    list; once it ships, we can drop the math-backend forcing in the
@@ -2769,6 +2821,379 @@ Phase 5 (Gemini-fix re-establishment swarm, round 5):
   `float64` array and `.tolist()` yields Python floats. Removed for
   clarity, not for the stated reason.
 
+Phase 6a (estimator-shell implementation):
+
+- **A17 needs encoder/scaler + TabularToSequence fitted-state
+  serialization (cross-phase, user-approved).** The save/load layer
+  requires the fitted transformer in `state.json`. Added
+  `get_fitted_state` / `set_fitted_state` to `CategoricalEncoder` and
+  the scalers (the `encoders.py` docstring already promised this
+  contract) and `serialize` / `deserialize` to `TabularToSequence`.
+  Deliberate Phase 2 touch reviewed by the 6a swarm; A5 / A17 updated
+  to name `tabular_to_sequence_state` as the transformer's
+  `serialize()` JSON dict. The fit-time `(id, time)` target map is NOT
+  persisted (a model artifact must not carry training labels;
+  `_aligned_target` already NaN-falls-back for unmapped rows, so
+  predict on a reloaded model is unaffected).
+- **A4 "clone each adapter inside `__init__`" reconciled with
+  `sklearn.base.clone`.** The A4 step-3 draft (clone adapters in
+  `__init__`) is incompatible with sklearn: `clone` re-checks param
+  identity and rejects any constructor that "modifies a parameter",
+  and `clone` already deep-clones every nested param before
+  re-construction, so the in-`__init__` clone breaks clone and is
+  redundant. `__init__` now stores params verbatim with the
+  None-default-instance idiom; clone-safety is sklearn's job. A4 step 3
+  is corrected to describe this; the A4 example block is illustrative
+  only and its `clone(...)` lines are superseded by this entry.
+- **F1.1 tag pseudo-code reconciled with the real sklearn 1.6+ API.**
+  The F1.1 draft set `tags.input_tags.dataframe = True`; sklearn 1.6+
+  `InputTags` has no `dataframe` field. The panel-DataFrame contract is
+  expressed with the real fields: `input_tags.two_d_array = False`
+  (not a plain numpy-array estimator) + `input_tags.allow_nan = False`
+  + `target_tags.required = True` + `requires_fit = True` +
+  `non_deterministic` flipped on mixed precision (N5). F1.1's tag block
+  is updated to the real field set.
+- **`_ScalarOutputLoss` loss-factory bridge (Phase 4 `losses.py`
+  touch).** The `(B, 1)` binary / point head (the F1.1 `out_dim=1`
+  contract) and the `(B,)` scalar-target losses
+  (`BCEWithLogitsLoss` / `BinaryFocalLoss` / `MSELoss` / `L1Loss` /
+  `HuberLoss`) need shape + dtype alignment; the factory now wraps
+  those four families in `_ScalarOutputLoss` (flatten both to `(B,)`,
+  cast target to the prediction dtype). Multiclass CE and pinball keep
+  their `(B, K)` head and are unwrapped. The affected Phase 4 loss /
+  trainer tests were updated to assert the wrapper's `.inner`.
+- **`predict` / `predict_quantiles` median consistency.** A quantile
+  regressor's `predict` returns the CALIBRATED median column (the same
+  matrix `predict_quantiles` reports), not the raw median, so the
+  point estimate and the median quantile agree.
+- **Estimator owns the RNG seed thread (A7 / F5 / N1).** `fit` calls
+  `torch.manual_seed(seed)` / `np.random.seed(seed)` before backbone
+  init and the sampler so two same-seed fits in one process are
+  bit-identical; the N4 deterministic-algorithm gate stays the
+  Trainer's job. The `implementation_plan.md` Phase 6a module list is
+  noted as also touching `data/encoders.py`, `data/tabular_to_sequence.py`,
+  and `training/losses.py` for the above (beyond the `models/` files).
+
+Phase 6a (estimator Claude swarm, round 1):
+
+- **`load()` now restores the full `__init__` surface (code-opus/sonnet
+  CRITICAL).** The first cut set only ~7 params, so a loaded
+  estimator's `get_params(deep=True)` / `sklearn.base.clone` raised
+  `AttributeError` (F1 breakage). `_collect_state` now persists a
+  `hyperparams` snapshot (`get_params(deep=True)` minus the adapter
+  objects, JSON-coerced); `load()` reconstructs via `cls(task_type=...)`
+  + `set_params(**hyperparams)` so the six adapters and every scalar
+  are restored. Verified: loaded `get_params`/`clone` work, predictions
+  byte-equal.
+- **`_build_config` Phase-7 seam (arch-opus CRITICAL).** The hardcoded
+  kwarg block could not construct `TFTConfig` (required `tabular_config`
+  + model-shape fields, `extra='forbid'`). Split into a shared kwarg
+  dict + a `_config_kwargs()` family hook (`{}` for base/dummy; the TFT
+  family overrides to add `tabular_config` + model-shape) so the base
+  keeps one `_build_config`.
+- **`window_time_index` unified with a precondition guard (arch-sonnet
+  CRITICAL).** The estimator's private copy omitted the
+  monotone-`entity_id` `ValueError` the Trainer's had, risking a
+  silently-wrong calibration fold for a non-TTS caller. Moved to
+  `data/splits.window_time_index` (single source, with the guard);
+  `Trainer._window_time_index` is a thin delegating alias. Resolves the
+  duplication IMPROVEMENT too.
+- **A17 / F4 fit-state location reconciled (arch-opus CRITICAL).** The
+  spec said `classes_`/`n_outputs_`/`quantiles_`/`decision_threshold_`
+  go in `weights.safetensors`; `classes_` is a `LabelEncoder` vector
+  that is commonly non-numeric (string labels) and does not tensorize.
+  A17 + F4 amended: `weights.safetensors` is strictly backbone/head
+  tensors; all fit-state is JSON in `state.json` alongside the
+  calibrator/transformer state. Covered by the byte-equal round-trip tests.
+- **`tabular_config` no longer double-serialized (arch-sonnet
+  CRITICAL).** `_collect_state` dumps `config` with
+  `exclude={"tabular_config"}` (no-op for `BaseModelConfig`; drops the
+  embedded copy for the Phase-7 `TFTConfig`) so the flat
+  `tabular_config` key is the single authoritative transformer-config
+  dump.
+- **Missing plan-mandated tests added.** `test_short_entity_predict`
+  (below-floor entities -> NaN-filled prediction rows + exactly one
+  aggregated breach log, the estimator predict path), the
+  estimator-level `test_load_version_mismatch_warning`, the N1
+  fit-state-attribute contract test (all F1.1 attrs + shapes/dtypes +
+  `config_` frozen), and the all-six-adapter clone-no-alias test. The
+  stale subprocess-load docstring is corrected.
+- **IMPROVEMENTs resolved.** `feature_schema_fingerprint_` is now
+  re-validated at predict (mismatch -> `DataContractError`, the F4
+  intent); `_build_calibrator_from` reads `self.calibration_strategy`
+  set from the loaded config (single source); the control-flow
+  `assert` in the classifier threshold path is an explicit guard; the
+  Phase-7 process-label comments in `_base.py` are reworded to plain
+  rationale.
+
+Phase 6a (estimator Claude swarm, round 2):
+
+- **Sentinel targets excluded from the recomputed calibration fold
+  (code-opus IMPROVEMENT).** When `min_periods_predict > min_periods`,
+  an entity with `min_periods <= n < min_periods_predict` survives
+  `TabularToSequence.fit` but `transform` injects a sentinel target
+  (`-1` classification / `NaN` regression). `_calibration_fold`
+  returned `batch["target"][cal_idx]` unfiltered, so the calibrator /
+  threshold tuner could fit on sentinel labels. The recomputed-split
+  branch now drops below-floor windows via `_below_floor_mask`. (The
+  explicit-`calibration_set` branch is unaffected: its targets are the
+  caller's real `y_cal`.)
+- **Empty-calibration-fold config guard (arch-opus IMPROVEMENT).**
+  `calibration_strategy != 'none'` or `threshold_tuning=True` with
+  `cal_fraction=0` and no `calibration_set` previously failed deep in
+  the calibrator with a message that never named the cause. `fit` now
+  raises `ConfigError` naming `cal_fraction` at the boundary (F2).
+- **Dead `calibration_strategy` state key removed (arch-sonnet
+  IMPROVEMENT).** It round-trips through `hyperparams` and `load()`
+  restores it via `set_params`; the duplicate top-level key in
+  `_collect_state` was never read and is migration-confusing. Removed.
+- **A17 / A7 doc drift fixed (arch-sonnet IMPROVEMENT).** The A17 `load`
+  skeleton named a non-existent `_reconstruct` seam; rewritten to the
+  inlined constructor + `set_params` + family-hook reconstruction the
+  code actually uses, naming the Phase-7 override surface. A7 step 7
+  incorrectly attributed calibration to the Trainer; corrected to state
+  the estimator owns it after `Trainer.fit` returns.
+- **qa / weak-assertion test gaps closed.** Regressor below-floor
+  NaN-fill now has a behavioral test (`predict` + `predict_quantiles`,
+  parallel to the classifier one); classifier `predict_proba` pre-fit
+  `NotFittedError` is asserted at the shell level; `decision_threshold_`
+  ABSENCE after `load` is asserted (binary-no-tuning and multiclass);
+  the vacuous `Trainer._window_time_index is not None` assertion now
+  checks delegation by output equality.
+- **Style.** The recurring "tests prove correctness" reviewer-vouching
+  prose and two rhetorical capitalized `AND`s in the ledger are
+  reworded.
+
+Phase 6a (estimator Claude swarm, round 3):
+
+- **Mutation-sensitive test for the Round-2 `keep` sentinel filter
+  (code-opus / qa-sonnet / qa-opus CRITICAL).** The Round-2 fix had
+  100% line+branch but no test that would fail if `keep = cal_idx[...]`
+  were reverted (every prior test reaching it used
+  `min_periods_predict=1`, so the mask was all-False). Added
+  `test_calibration_fold_drops_below_floor_sentinel_rows` and
+  `test_calibration_fold_threshold_tuner_path_no_sentinel`: a panel
+  where a below-floor entity provably lands in the recomputed
+  `cal_idx`, with explicit preconditions (`below[cal_idx].any()` and
+  the unfiltered fold carries `-1`) so reverting the filter fails the
+  test. Both the calibrator and the threshold-tuner consumers of
+  `_calibration_fold` are exercised, and the estimator-side fold
+  alignment (`len == (~below)[cal_idx].sum()`) is asserted.
+- **Empty post-filter fold raises a typed `ConfigError`
+  (code-sonnet IMPROVEMENT).** When `keep` empties (every cal-fold
+  entity below `min_periods_predict`) the calibrator previously raised
+  a deep, unnamed `ValueError`. `_calibration_fold` now raises a
+  `ConfigError` naming `min_periods_predict` / `cal_fraction`.
+  `test_calibration_fold_all_below_floor_raises_configerror` covers it.
+- **Empty-fold guard's calibrator operand tested (qa-sonnet / qa-opus
+  IMPROVEMENT).** `test_calibrator_strategy_with_cal_fraction_zero_raises`
+  isolates the `_make_calibrator() is not None` arm of `needs_fold`
+  (the prior test only triggered the `threshold_tuning` arm).
+
+Phase 6b (family-base implementation):
+
+- **Phase-6a `_forward_backbone` seam (cross-phase, behaviour-preserving).**
+  `predict_with_attention` needs the full `BackboneOutput` (the
+  introspection tensors), not just `representation`, from the SAME
+  forward pass `_predict_raw` uses (a second pass could disagree).
+  `_base.py` extracts `_forward_backbone(X) -> (output, head, batch,
+  below)`; `_predict_raw` now delegates to it. `_classifier.py` splits
+  `_index_from_proba` (shared by `predict` and the mixin, whose A15.1
+  `predictions` field is class indices); `_regressor.py` splits
+  `_calibrate_raw` (shared by `_calibrated_matrix` and the mixin so the
+  attention path reuses the identical calibrate-then-NaN-fill on its
+  single pass). All three are pure refactors: the full Phase-6a +
+  integration suite stays green unchanged.
+- **`predict_with_attention.predictions` is class indices, not labels
+  (A15.1 literal).** A15.1 annotates the classifier `predictions`
+  field `# (N,) class indices`. The mixin returns the integer index
+  vector (`_index_from_proba`), NOT the `classes_`-mapped labels
+  `predict` returns; callers map via `est.classes_`. This keeps the
+  `device=` path tensorisable (string labels do not tensorise) and
+  follows the A15.1 "class indices" annotation (the v1.1 multi-label
+  clause in the A15.1 source comment is deferred from the v1 code
+  comment, not a contradiction). The family-base test asserts
+  `classes_[predictions] == predict(X)` for consistency.
+- **A20 item 2 RESOLVED: `device=` keyword.** `predict_with_attention`
+  defaults to CPU `np.ndarray`; a `device=` keyword flips every field
+  to a detached on-device `Tensor`. Pinned here per A20 item 2's
+  "pin during implementation". The A15.1 dataclass field type stays
+  `np.ndarray` (the default and common case); the `device` path's
+  tensors are the documented BETA runtime behaviour.
+- **Introspection tensors are NOT NaN-filled for below-floor entities.**
+  The F NaN-in-output contract scopes NaN to the prediction surface
+  (`probabilities` / `logits` / regression `predictions`), which the
+  mixin NaN-fills exactly as the base predict path. The attention /
+  variable-selection tensors are diagnostics, not predictions, and
+  stay finite so a caller can still inspect what the model attended to
+  for a short entity.
+
+Phase 6b (family-base Claude swarm, round 1):
+
+- **Classifier mixin GPU crash (code-sonnet CRITICAL).** The classifier
+  `predict_with_attention` passed the raw `head(...)` output (on-device
+  for a GPU-trained model) to `_proba_from_raw`, which calls `.numpy()`
+  internally and raises on a CUDA tensor. Now `.detach().cpu()` first,
+  mirroring the base `_predict_raw` contract and the Regressor mixin.
+  The `_force_cpu` test harness masked this; a CPU/GPU parity gap.
+- **Mutation-insensitive / uncovered seam paths (qa-sonnet /
+  qa-opus CRITICAL).** The family-base "consistency" assertions
+  (`out.probabilities == predict_proba(X)`) were vacuous: both sides
+  now delegate to the same seam, so a shared bug passes. Added
+  mutation-sensitive tests: classifier (calibration_strategy=
+  "temperature") and regressor (calibrated) `predict_with_attention`
+  vs the base path AND an independent fixed-representation oracle
+  (monkeypatched backbone) so a shared-seam regression fails; the
+  binary `threshold_tuning` index branch through `predict_with_attention`;
+  the regressor below-floor NaN-fill (was classifier-only); and a
+  `device=` numpy-vs-tensor value-equality check (was isinstance-only).
+- **`AttentionOutput.logits` shape comment (code-opus / arch IMPROVEMENT).**
+  The field comment said `(N, num_classes)`; the binary head emits
+  `(N, 1)`. Corrected to `(N, head_out_dim): 1 for binary, num_classes
+  else`. `probabilities` is `(N, num_classes)` and was already correct.
+- **`entity_id` is the internal code (arch IMPROVEMENT).** The field
+  carries the contiguous LabelEncoder code, not the original id. The
+  dataclass comment now says so; decoding to the user-facing id is
+  deferred to Phase 7 (it needs the transformer's id inverse, which
+  `TFTClassifier` wires up).
+- **Ledger `verbatim` claim corrected (arch IMPROVEMENT).** The
+  predictions bullet no longer claims the code comment matches A15.1
+  "verbatim" (the v1.1 multi-label clause is deferred from the v1 code
+  comment); reworded to state the deferral explicitly.
+
+Phase 6b (family-base Claude swarm, round 2):
+
+- **Regressor independent-oracle (qa-opus CRITICAL).** Round 1 closed
+  the shared-seam trap for the classifier only; the regressor half of
+  the same `_calibrate_raw` seam still had no oracle (a `mat + 1.0`
+  mutation survived the whole suite because every regressor
+  `predict_with_attention` assertion compared against `predict` /
+  `predict_quantiles`, which delegate to the same seam). Added
+  `test_regressor_predict_with_attention_independent_oracle`: point
+  mode, no calibrator, monkeypatched fixed representation, predictions
+  checked against an independent `head(rep)` recomputation, with a
+  different representation required to move the output.
+- **A15.1 source snippet synced (arch-opus / arch-sonnet IMPROVEMENT).**
+  The Round-1 fix corrected the `inference/attention.py` field comments
+  but left the authoritative A15.1 doc snippet stale. Synced
+  `logits` to `(N, head_out_dim): 1 for binary, num_classes else`,
+  both `entity_id` lines to "internal contiguous entity code", and the
+  classifier `predictions` line to name `estimator.classes_`. A15.1 is
+  the contract a Phase-7 author reads first; it now leads the code.
+- **A6.1 snippet validation bounds (arch NITPICK).** The
+  `RecurrentSequenceEstimatorConfig` snippet now shows the shipped
+  `Field(ge=0.0, lt=1.0)` on `recurrent_dropout` and
+  `Field(default=None, ge=1)` on `bptt_window` so the validation
+  contract is visible at the architecture layer.
+
+Phase 6b (family-base Claude swarm, round 3):
+
+- **Classifier threshold-branch independent oracle (qa-sonnet /
+  qa-opus CRITICAL).** `_index_from_proba`'s `proba[:,1] >=
+  decision_threshold_` branch was the last classifier shared-seam
+  trap: `predict` and `predict_with_attention` both route through it,
+  so a `>=` -> `<` mutation inverted both and the consistency
+  assertion stayed green. Added
+  `test_classifier_threshold_branch_independent_oracle`: a fitted
+  `threshold_tuning` classifier, fixed representation, the index
+  recomputed independently with `>=` and asserted against production
+  for two sigmoid-extreme representations. Verified the test fails
+  under the `>=` -> `<` mutation and passes on revert.
+- **Calibrated regressor independent oracle (qa-sonnet CRITICAL /
+  code-opus IMPROVEMENT).** The `calibrator_.transform` arm of
+  `_calibrate_raw` (and the quantile-mode regressor path) had no
+  oracle independent of `predict_quantiles`. Added
+  `test_calibrated_quantile_regressor_independent_oracle`:
+  `isotonic_quantile` calibration, fixed representation,
+  `calibrator_.transform(head(rep))` recomputed independently and
+  matched against `predict_with_attention`, with a different
+  representation required to move the calibrated output. This also
+  closes the code-opus quantile-mode-oracle IMPROVEMENT.
+- **A15.1 snippet wording sync (arch-sonnet IMPROVEMENT).** The
+  pre-existing `probabilities` / classifier `padding_mask` comment
+  divergences between the A15.1 snippet and `inference/attention.py`
+  are reconciled (the code now carries the doc's
+  `post-softmax/sigmoid` wording and the `(pass-through from
+  preprocessing)` provenance clause).
+- **Classifier below-floor predictions parity (qa NITPICK).**
+  `test_below_floor_nan_fill_matches_base` now also asserts
+  `classes_[predictions] == predict(x_pred)` for the below-floor
+  rows, pinning the shared `_index_from_proba` A2 (NaN -> index 0)
+  behaviour on the attention path.
+
+Gemini final-pass (Phase 1-6 integration, post-consensus):
+
+- **`load()` crash when an explicit `loss` adapter was saved
+  (Gemini CRITICAL, verified).** `__init__` stores `self.loss`
+  verbatim as `None` (the one adapter not defaulted to an instance,
+  because F5 task-aware loss-default injection must see "unspecified").
+  When a real `loss=LossParams(...)` was given at save, `_hyperparams`
+  persisted its `loss__*` leaves but dropped the bare `loss` object;
+  `load()` did `cls(task_type=...)` (loss=None) then
+  `set_params(loss__strategy=...)`, which sklearn routes to
+  `None.set_params` -> `AttributeError`. Latent: every Phase-6 test
+  uses the loss=None default, so the green suite never exercised it.
+  Fixed in `load()`: instantiate a default `LossParams` before
+  `set_params` when `obj.loss is None` and a `loss__` key is present.
+- **Trainer trained on below-floor sentinel targets (Gemini CRITICAL,
+  verified; cross-phase Phase-4 touch).** `TabularToSequence.transform`
+  emits sentinel targets (`-1` classification / `NaN` regression) for
+  entities with `min_periods <= n < min_periods_predict`. The Phase-6b
+  fix dropped these from the estimator's recomputed calibration fold,
+  but `Trainer.fit` still passed the unfiltered `train_idx` / `val_idx`
+  to `_class_weights` (`torch.bincount` on `-1` raises) and the loss
+  (NaN regression target trips the F9 abort). The Phase-6a ledger had
+  noted this exposure existed in the frozen Phase-4 Trainer but left it
+  unaddressed; the integration pass correctly re-raised it. Fixed (a
+  deliberate frozen-Phase-4 touch): `Trainer._below_floor_mask` drops
+  below-floor windows from `train_idx` / `val_idx` before class-weights
+  / sampler / loaders. (The duplicated mask logic was subsequently
+  hoisted to a shared `data/splits` helper, see the confirming-swarm
+  block below.)
+- **`optuna_trial` typed `object` contradicting A16 (Gemini
+  IMPROVEMENT, verified).** `optuna` is a hard dependency (A18,
+  pyproject.toml), so annotating `optuna_trial: object | None` and
+  carrying a `# type: ignore[arg-type]` on the `Trainer.fit`
+  delegation served no purpose and broke strict typing against A16's
+  `optuna.trial.BaseTrial | None`. Fixed: `if TYPE_CHECKING: import
+  optuna`, correct annotation, `# type: ignore` removed.
+- **Opaque `state["hyperparams"]` cast (Gemini NITPICK).** Left as-is:
+  the F4 schema invariants enforce structural presence and the
+  cast-narrowing matches the established `load()` convention; Gemini
+  itself offered "or leave as-is" for this reason.
+
+Post-Gemini confirming swarm (Phase 1-6 integration):
+
+- **`below_floor_mask` de-duplicated into `data/splits.py` (arch-opus /
+  code-opus / qa-opus IMPROVEMENT).** The Trainer and estimator each
+  carried a copy of the `count < min_periods_predict` rule, the exact
+  drift hazard the shared `window_time_index` helper was factored to
+  prevent. Hoisted to `seq_sklearn.data.splits.below_floor_mask`;
+  `Trainer._below_floor_mask` and `BaseSequenceEstimator._below_floor_mask`
+  are now thin adapters delegating to it (single source, cannot drift).
+  Direct `splits` unit tests added.
+- **Trainer empty-fold guard (code-opus / arch-opus IMPROVEMENT).** An
+  all-below-floor train / val fold was silently handed to Lightning as
+  an empty loader (EarlyStopping / checkpoint degrade on a never-logged
+  `val_loss`). `Trainer.fit` now raises `ConfigError` after the filter
+  when `train_idx` or `val_idx` is empty, symmetric with the estimator's
+  empty-calibration-fold guard. `test_fit_all_below_floor_raises_configerror`
+  covers it.
+- **Classifier `bincount(-1)` arm tested (qa-sonnet / qa-opus
+  IMPROVEMENT).** The C2 filter protects both the regression NaN->F9
+  arm AND the classifier multiclass + class_weighted
+  `torch.bincount(-1)` arm, but only the regressor arm had a regression
+  test. Added `test_fit_filters_below_floor_classifier_class_weighted`
+  (multiclass + class_weighted + below-floor entities).
+- **C1 multi-leaf round-trip (qa-sonnet / qa-opus IMPROVEMENT).**
+  `test_save_load_with_explicit_loss_adapter_round_trips` now saves a
+  `LossParams` with non-default `label_smoothing` / `focal_gamma` and
+  asserts every leaf (not just `strategy`) survives load and clone.
+- **A7 / A17 doc sync (arch-sonnet IMPROVEMENT).** A7 gains the
+  below-floor filter step (2a); the A17 `load()` pseudocode shows the
+  `LossParams` pre-injection so a future family implementor reading the
+  canonical reference does not reproduce the C1 bug.
+
 ## Deferred
 
 Round 1 (design-review swarm):
@@ -3185,3 +3610,97 @@ Phase 5 (Gemini cross-family final-pass):
   (`test_isotonic_*_roundtrip`) pass and the Phase 5 qa swarm
   experimentally measured max-abs-diff `0.0` across the round trip.
   No code change.
+
+Phase 6a (estimator Claude swarm, round 1):
+
+- **Random-split calibration-fold seam not estimator-tested
+  (qa-opus/sonnet IMPROVEMENT).** Deferred: no Phase 6a deliverable
+  test names a random-split calibration test, and two architecture
+  reviewers verified the logic is deterministically correct,
+  `splits._random_split` uses `np.arange(n)` with no RNG, so the
+  estimator's `compute_three_way_split` recomputation yields the exact
+  fold the Trainer held out for both `time_ordered` and `random`. The
+  default-path (time_ordered) calibration round-trip is covered;
+  adding a random-split estimator test is a non-core robustness
+  addition, not a correctness gap.
+- **Double / triple panel windowing (arch IMPROVEMENT).** Deferred:
+  `Trainer.fit` transforms `X`, the estimator transforms again for the
+  calibration fold and again per `predict`. Caching the fold between
+  the Trainer and the estimator requires the frozen Phase-4 Trainer to
+  expose its held-out batch + `cal_idx` (a Phase-4 API change outside
+  the Phase 6a module list); v1 panels are small and this is a
+  performance, not correctness, concern. Revisit when a Trainer-seam
+  refactor is in scope.
+
+Phase 6a (estimator Claude swarm, round 2):
+
+- **`_calibration_fold` recomputed twice when both a calibrator and
+  `threshold_tuning` are set (arch-opus IMPROVEMENT-2).** Deferred:
+  `_fit_calibrator` and the classifier `_post_fit` each call
+  `_calibration_fold` (a transform + forward over the panel). Same
+  rationale as the double/triple-windowing deferral above, a small-panel
+  perf cost with no correctness impact; threading the computed
+  `(raw, targets)` through both call sites is the same Trainer-seam
+  refactor and is revisited together.
+- **Encoder-vocab persistence unverified at the integration boundary
+  (qa-opus IMPROVEMENT).** Deferred: every estimator e2e/subprocess
+  panel is all-numeric, so the byte-equal reload proves persisted
+  scaler-stats but not categorical encoder vocab. The TTS
+  encoder serialize/deserialize is 100% line+branch covered at the
+  unit level (`tests/unit/data`); a categorical integration panel is a
+  non-core robustness addition, not a correctness gap.
+- **`predict` returns class 0 for below-floor binary entities
+  (code-sonnet I1).** Deferred: not a defect. requirements.md scopes
+  the NaN-in-output contract to `predict_proba` / `predict_quantiles`
+  (a label array cannot carry NaN). `predict` calls `predict_proba`
+  internally, so the aggregated `min_periods_predict_breach` WARNING
+  still fires for `predict` callers via `transform`; the signal is not
+  lost.
+- **Verbose clone-wiring comment in `_base.py` (style-opus
+  IMPROVEMENT-2).** Deferred: the comment documents the non-obvious
+  sklearn-contract reason the A4-draft clone-in-`__init__` was dropped
+  (a regression guard); trimming it risks losing the rationale.
+  style-opus rated it defer-acceptable.
+
+Phase 6a (estimator Claude swarm, round 3):
+
+- **Trainer-vs-estimator cal-fold cross-check under sentinel-drop
+  (qa-opus I2).** Deferred: the new mutation-sensitive test asserts the
+  estimator-side invariant (the recomputed fold is exactly
+  `cal_idx` minus below-floor windows). Cross-checking that this equals
+  the Trainer's actual held-out cal rows requires the frozen Phase-4
+  Trainer to expose its held-out batch + `cal_idx`, the same Phase-4
+  API change deferred for the double/triple-windowing item. The split
+  is a pure deterministic function of identical inputs (verified by two
+  architecture reviewers across rounds 1-3), so the estimator-side
+  assertion is sufficient for v1; revisit with the Trainer-seam
+  refactor.
+
+Phase 6b (family-base Claude swarm, round 1):
+
+- **`entity_id` decode to original id (arch IMPROVEMENT).** Deferred to
+  Phase 7: the diagnostics field carries the internal contiguous code;
+  decoding to the user-facing id needs the transformer's id inverse,
+  which `TFTClassifier` / `TFTRegressor` wire up in Phase 7. The v1
+  contract (documented in the dataclass comment and A15.1) is the
+  internal code; no v1 requirement asks for the decoded id here.
+- **`_predict_raw` head no-grad-scope mutation test (qa-opus I3).**
+  Deferred: the head runs under `torch.no_grad()` and the returned
+  tensor is immediately `.detach()`-ed, so the grad scope is
+  immaterial to every observable output (predictions, save/load,
+  determinism are all value-level and already pinned). A test that
+  fails only on the grad graph would assert an internal detail with no
+  user-visible contract; low value for the maintenance cost.
+
+Post-Gemini confirming swarm (Phase 1-6 integration):
+
+- **Factor the C1 loss-restore into a base classmethod (arch-opus
+  IMPROVEMENT-3).** Deferred to Phase 7: the `if obj.loss is None ...`
+  restore is inline in `load()`. A17 designates `_restore_family_state`
+  / `_build_backbone_head` / `_build_calibrator_from` as the family
+  override surface, NOT `load()` itself, and no v1 family overrides
+  `load()`. Extracting a `_restore_default_loss_adapter` hook is
+  speculative until a Phase-7 family actually overrides `load`; revisit
+  then so the abstraction is shaped by a real second caller rather than
+  guessed. The A17 pseudocode now documents the step so a Phase-7
+  author cannot miss it.

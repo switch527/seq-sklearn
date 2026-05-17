@@ -17,6 +17,7 @@ from seq_sklearn.training.losses import (
     BinaryFocalLoss,
     MulticlassFocalLoss,
     PinballLoss,
+    _ScalarOutputLoss,
     build_loss,
 )
 
@@ -39,6 +40,16 @@ def _build(task_type: str, loss_strategy: str, **kw: object) -> nn.Module:
     return build_loss(task_type, loss_strategy, **defaults)  # type: ignore[arg-type]
 
 
+def _unwrap(loss: nn.Module) -> nn.Module:
+    """The inner loss; binary / point losses are wrapped by the factory.
+
+    ``build_loss`` wraps scalar-output losses in ``_ScalarOutputLoss``
+    (the (B, 1) head -> (B,) loss bridge added in Phase 6a); the F5
+    concrete-class contract is on the inner module.
+    """
+    return loss.inner if isinstance(loss, _ScalarOutputLoss) else loss
+
+
 @pytest.mark.parametrize(
     ("task_type", "loss_strategy", "expected"),
     [
@@ -56,7 +67,7 @@ def test_dispatch_to_concrete_class(
 ) -> None:
     """Each legal cell builds the F5-mandated concrete class."""
     loss = _build(task_type, loss_strategy)
-    assert isinstance(loss, expected)
+    assert isinstance(_unwrap(loss), expected)
 
 
 def test_pinball_dispatch_with_quantiles() -> None:
@@ -74,7 +85,7 @@ def test_pinball_accepts_2d_target_without_unsqueeze() -> None:
 
 def test_binary_class_weighted_sets_pos_weight() -> None:
     w = torch.tensor(3.0)
-    loss = _build("binary", "cross_entropy", class_weights=w)
+    loss = _unwrap(_build("binary", "cross_entropy", class_weights=w))
     assert isinstance(loss, nn.BCEWithLogitsLoss)
     assert loss.pos_weight is not None
     assert torch.equal(loss.pos_weight, w)

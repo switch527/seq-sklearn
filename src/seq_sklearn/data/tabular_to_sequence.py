@@ -11,7 +11,7 @@ Trainer can reconstruct ``window_time_index`` as ``np.arange(n)``.
 
 import hashlib
 import logging
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -219,6 +219,81 @@ class TabularToSequence:
     def _require_fitted(self) -> None:
         if not self._fitted:
             raise NotFittedError("TabularToSequence must be fitted before transform")
+
+    def serialize(self) -> dict[str, object]:
+        """Return the fitted transformer state as a JSON-primitive dict (A17).
+
+        Captures exactly what :meth:`transform` consumes: the categorical
+        encoder vocabularies, the two scalers' fitted statistics, the
+        resolved embedding dims / cardinalities, the hashed-column set,
+        and the schema fingerprint. The fit-time ``(id, time)`` target
+        map is deliberately NOT persisted: it is a training artifact
+        (:meth:`_aligned_target` falls back to NaN for unmapped rows, so
+        a reloaded estimator predicting on fresh data is unaffected) and
+        a model artifact must not carry training labels.
+
+        A scaler is serialized only when its feature group is present
+        (the exact gate :meth:`fit` uses to call ``scaler.fit``); an
+        absent group leaves the scaler unfitted on both fit and reload.
+        """
+        self._require_fitted()
+        cfg = self.config
+        assert self.categorical_encoder_ is not None
+        assert self.real_scaler_ is not None
+        assert self.static_real_scaler_ is not None
+        return {
+            "categorical_encoder": self.categorical_encoder_.get_fitted_state(),
+            "real_scaler": (
+                self.real_scaler_.get_fitted_state() if cfg.time_varying_real_cols else None
+            ),
+            "static_real_scaler": (
+                self.static_real_scaler_.get_fitted_state() if cfg.static_real_cols else None
+            ),
+            "embedding_dims": dict(self.embedding_dims_),
+            "cardinalities": dict(self.cardinalities_),
+            "hashed_columns": sorted(self.hashed_columns_),
+            "feature_schema_fingerprint": self.feature_schema_fingerprint_,
+        }
+
+    @classmethod
+    def deserialize(
+        cls,
+        blob: dict[str, object],
+        config: TabularToSequenceConfig,
+        task_type: TaskType,
+    ) -> "TabularToSequence":
+        """Rebuild a fitted transformer from :meth:`serialize` output.
+
+        ``config`` / ``task_type`` are owned by the estimator's
+        ``state.json`` (not the transformer blob) and passed back in.
+        Scalers are reconstructed via :func:`make_scaler` with the same
+        strategy ``fit`` used, then restored from fitted state when their
+        feature group was present.
+        """
+        obj = cls(config, task_type)
+        encoder = CategoricalEncoder()
+        encoder.set_fitted_state(cast(dict[str, object], blob["categorical_encoder"]))
+        obj.categorical_encoder_ = encoder
+
+        real_scaler = make_scaler(config.scaling_real)
+        real_state = blob["real_scaler"]
+        if real_state is not None:
+            real_scaler.set_fitted_state(cast(dict[str, object], real_state))
+        obj.real_scaler_ = real_scaler
+
+        static_scaler = make_scaler(obj._resolve_static_real_strategy())
+        static_state = blob["static_real_scaler"]
+        if static_state is not None:
+            static_scaler.set_fitted_state(cast(dict[str, object], static_state))
+        obj.static_real_scaler_ = static_scaler
+
+        obj.embedding_dims_ = dict(cast(dict[str, int], blob["embedding_dims"]))
+        obj.cardinalities_ = dict(cast(dict[str, int], blob["cardinalities"]))
+        obj.hashed_columns_ = set(cast(list[str], blob["hashed_columns"]))
+        fingerprint = blob["feature_schema_fingerprint"]
+        obj.feature_schema_fingerprint_ = None if fingerprint is None else str(fingerprint)
+        obj._fitted = True
+        return obj
 
     def transform(self, X: pd.DataFrame) -> dict[str, torch.Tensor]:  # noqa: N803
         """Window the panel into the batched tensor dict (A5 transform steps).
