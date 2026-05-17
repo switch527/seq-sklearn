@@ -3804,3 +3804,81 @@ Phase 7 (TFT concrete Claude swarm, round 1):
   the single call site; extracting a hook is premature until a v2/v3
   family overrides `load`. The A17 pseudocode documents both steps so a
   future author cannot miss them.
+
+Phase 7 (CPU/CUDA parity boundary check, post-consensus):
+
+- **First integrated CPU/CUDA validation of the Phases 1-7 stack.**
+  After the 4-round Claude swarm consensus, the authorized GPU parity
+  suite ran on an NVIDIA RTX PRO 6000 Blackwell (CUDA available, GPU
+  idle at run start). `test_tft_classifier_gpu_cpu_predict_proba_parity`
+  (the full `TabularToSequence -> Trainer -> calibrator -> TFTClassifier`
+  pipeline trained and predicted on CUDA, asserted equal to the CPU run
+  within `allclose` tolerance) and
+  `test_calibrators_accept_cuda_input_and_return_cpu` both PASSED
+  (2 passed, 10 deselected, 9.68s, exit 0). This is the first time the
+  whole stack has been exercised end to end on CUDA, not just CPU: it
+  confirms the v1 CPU+CUDA equal-support requirement holds through the
+  first concrete model. Metal/ROCm remain out of v1 scope. Two benign
+  warnings (a Lightning `_pytree` deprecation in the dependency, and a
+  non-empty `checkpoints/` dir from a prior run) are not code findings.
+
+Phase 7 (Gemini cross-family final-pass, post-consensus):
+
+The scarce Gemini code final-pass ran after the 4-round Claude swarm
+consensus (file-access preflight passed: 6 targets readable). Gemini
+emitted CRITICAL: 1, IMPROVEMENT: 0, NITPICK: 1. Both path:line claims
+were verified against the source. Claude perspective recorded per the
+gemini-final-pass protocol (agreed / disagreed-with-reason / missed /
+hallucinated).
+
+Addressed:
+
+- **Gemini NITPICK `_base.py:515` (cited :530, line drift): JSON
+  round-trip widens tuple params to lists through
+  `set_params(**hyperparams)`.** VERIFIED, accurate in substance.
+  `load()` feeds the `model_dump(mode="json")` hyperparams (JSON arrays
+  deserialized as `list`) straight into `set_params`, so `reloaded`
+  carries `list` for `quantiles` and the `tabular_config` tuple fields.
+  Pydantic re-coerces these in `_build_config()`, so `reloaded.config_`
+  is byte-symmetric with the original (the qa swarm pinned
+  `reloaded.config_ == est.config_` and the quantile round-trip across
+  all 4 rounds: behavior is correct). The only residue is that
+  `sklearn.base.clone(reloaded)` would propagate `list`. Documented here
+  rather than fixed: adding "known tuple field" coercion to the generic
+  `load()` is exactly the speculative special-casing the project rules
+  forbid, it has zero behavioral effect, and the verbatim-param sklearn
+  contract is already satisfied (clone produces a functionally identical
+  estimator; `config_` is the authoritative typed surface).
+
+Deferred:
+
+- **Gemini CRITICAL `_base.py:118`/`:158`: `BaseSequenceEstimator`
+  (layer-1 shell) is typed against the concrete `TFTAdvancedParams`
+  adapter.** VERIFIED-but-DISAGREED, downgraded to Deferred. (1) Out of
+  Phase 7 diff scope: this is Phase 6a code (commit `93ded4e`), not in
+  `main..HEAD`; Gemini ran shell-blind ("Shell access unavailable. CI
+  gates assumed") and could not scope to the diff. (2) Not a requirement
+  violation: Gemini cites `requirements.md:195-207` but `:203-207`
+  states "v1's only concrete model is TFT" and "v3 adds the recurrent
+  abstraction when its first model ships", the requirements deliberately
+  scope multi-family genericization to future versions, refuting the
+  premise that v1 must support PatchTST without touching the shell.
+  (3) Zero behavioral coupling: `TFTAdvancedParams` is structurally
+  empty in v1 (only the generic `extra` passthrough bag); this is a
+  type-annotation name, not a behavioral dependency. (4) Same documented
+  "premature abstraction until the second family/caller exists"
+  principle already applied in the Deferred ledger to
+  `_restore_default_loss_adapter` and the inline `load()` hook; the
+  mandatory keyword-only `*` adapter marker makes widening the shell
+  param type a MINOR-additive change when family 2 ships. (5) The
+  4-round, 8-agent dual-model swarm (two opus architecture reviewers)
+  read `_base.py` in full every round and did not raise this: the
+  consensus is intentional, not an oversight. Revisit when the second
+  model family lands and a generic advanced-params base type has a real
+  second caller to shape it.
+
+Consensus status: Gemini surfaced no VALID new Phase 7 CRITICAL (the one
+raised is out-of-scope, requirement-refuted, behaviorally inert, and of
+the already-deferred class). The 4-round Claude consensus stands; no
+fifth Claude round is warranted for a downgraded forward-looking note.
+The disagreement is surfaced to the user for override.
