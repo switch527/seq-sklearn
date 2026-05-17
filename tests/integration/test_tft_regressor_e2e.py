@@ -110,6 +110,7 @@ def test_tft_quantile_regressor_predict_quantiles(
     assert list(est.quantiles_) == [0.1, 0.5, 0.9]
     full = est.predict_quantiles(x)
     assert full.shape == (len(x), 3)
+    assert np.isfinite(full).all()
     subset = est.predict_quantiles(x, quantiles=[0.9, 0.1])
     assert subset.shape == (len(x), 2)
     assert np.array_equal(subset[:, 0], full[:, 2])

@@ -165,8 +165,32 @@ def test_tft_multiclass_predict_proba_simplex(monkeypatch: pytest.MonkeyPatch) -
     est = _estimator(gen, task_type="multiclass", hidden_size=8, max_epochs=1).fit(x, y)
     proba = est.predict_proba(x)
     assert proba.shape == (len(x), 3)
+    assert np.isfinite(proba).all()
     assert np.allclose(proba.sum(axis=1), 1.0)
     assert set(np.unique(est.predict(x))).issubset(set(np.unique(y)))
+
+
+def test_tft_classifier_mean_pool_readout_roundtrip(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    # prediction_readout="mean_pool" must flow estimator-side through
+    # _config_kwargs -> TFTConfig -> _build_tft_backbone to the backbone
+    # readout. Backbone unit tests cover the readout math; this pins the
+    # estimator wiring (a passthrough break would silently fall back to
+    # last_valid and the backbone test would still pass).
+    _force_cpu(monkeypatch)
+    gen, x, y = _panel()
+    est = _estimator(gen, prediction_readout="mean_pool", hidden_size=8, max_epochs=1).fit(x, y)
+    assert est.config_.prediction_readout == "mean_pool"
+    proba = est.predict_proba(x)
+    assert proba.shape == (len(x), 2)
+    assert np.isfinite(proba).all()
+    assert np.allclose(proba.sum(axis=1), 1.0)
+    before = est.predict_proba(x)
+    est.save(tmp_path)  # type: ignore[arg-type]
+    reloaded = TFTClassifier.load(tmp_path)  # type: ignore[arg-type]
+    assert np.array_equal(reloaded.predict_proba(x), before)
+    assert reloaded.config_.prediction_readout == "mean_pool"
 
 
 def test_tft_classifier_no_categorical_columns(

@@ -3252,6 +3252,22 @@ Phase 7 (TFT concrete Claude swarm, round 1):
   the real backbone, and the empty-categorical-side `_static_pad` /
   `_tv_pad` path wired through the estimator.
 
+Phase 7 (TFT concrete Claude swarm, round 2):
+
+- **`prediction_readout="mean_pool"` estimator-wiring e2e (qa-sonnet /
+  qa-opus IMPROVEMENT).** Round 1 deferred this as a config
+  passthrough; two qa agents correctly distinguished that storing the
+  value verbatim is not the same as it flowing through
+  `_config_kwargs -> TFTConfig -> _build_tft_backbone` to the backbone
+  readout (a passthrough break would silently fall back to
+  `last_valid` while the backbone unit test still passes). Resolved,
+  not deferred: added `test_tft_classifier_mean_pool_readout_roundtrip`
+  (asserts `config_.prediction_readout == "mean_pool"` and a byte-equal
+  save/load). Supersedes the round-1 mean_pool Deferred entry.
+- **Silent-NaN guards (qa NITPICK).** Added `np.isfinite(...)` to the
+  multiclass `predict_proba` and the quantile `predict_quantiles`
+  assertions so a NaN-producing path cannot satisfy shape + sum-to-1.
+
 ## Deferred
 
 Round 1 (design-review swarm):
@@ -3765,14 +3781,21 @@ Post-Gemini confirming swarm (Phase 1-6 integration):
 
 Phase 7 (TFT concrete Claude swarm, round 1):
 
-- **`prediction_readout="mean_pool"` TFT e2e (qa NITPICK).** Deferred:
-  `mean_pool` is covered at the backbone level (`test_backbone.py`) and
-  in `test_tabular_to_backbone.py`; the estimator only passes the
-  string through to `TFTConfig`, and `test_classifier_init` /
-  `test_regressor_init` already pin that it is stored and reaches the
-  config. A full-training e2e for a config passthrough adds ~1-2 min
-  per gate pass for near-zero marginal signal; revisit only if a
-  readout-specific estimator code path appears.
+- **`prediction_readout="mean_pool"` TFT e2e — SUPERSEDED.** Round 1
+  deferred this; Round 2 resolved it (see the round-2 Addressed block:
+  `test_tft_classifier_mean_pool_readout_roundtrip`). The round-1
+  deferral reason (config passthrough, low signal) was wrong: it is the
+  estimator's `_config_kwargs` wiring, not a pure passthrough.
+- **Regressor empty-categorical e2e (qa-opus IMPROVEMENT, round 2).**
+  Deferred: the empty-categorical cardinality wiring lives in the
+  SHARED `_TFTEstimatorMixin._build_tft_backbone`, already pinned end
+  to end by `test_tft_classifier_no_categorical_columns`. `TFTRegressor`
+  differs from `TFTClassifier` only in the head + family base (not the
+  backbone cardinality path), and both regressor modes (point +
+  quantile) already round-trip via the e2e. A regressor-side empty-cat
+  e2e would re-exercise identical shared mixin code for a different
+  head; near-zero marginal signal for the ~1-2 min/pass cost. Revisit
+  if a family-specific empty-side branch ever appears.
 - **`_restore_default_loss_adapter` base classmethod (arch-opus
   IMPROVEMENT-3, re-evaluated in Phase 7).** Still deferred: Phase 7
   composes a mixin but does NOT override `load()`, so there is still no
