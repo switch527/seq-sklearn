@@ -212,3 +212,145 @@ def test_quantile_regressor_predict_with_attention(
     assert out.predictions.shape == (96, 3)
     assert out.quantiles_used == (0.1, 0.5, 0.9)
     assert np.allclose(out.predictions, est.predict_quantiles(x), equal_nan=True)
+
+
+def test_predict_with_attention_independent_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Kills the shared-seam trap: the `out.probabilities == predict_proba`
+    # assertions are vacuous because both delegate to `_forward_backbone`.
+    # Pin a KNOWN fixed representation into the fitted backbone and check
+    # the output against an independent recomputation through the real
+    # head, and that a different representation yields a different result.
+    _force_cpu(monkeypatch)
+    x, y = _panel()
+    est = _clf().fit(x, y)
+    backbone = est._module.backbone
+    head = est._module.head
+    orig = backbone.forward
+
+    def _fixed(value: float):
+        def _fwd(batch: dict[str, torch.Tensor]):  # type: ignore[no-untyped-def]
+            o = orig(batch)
+            o.representation = torch.full_like(o.representation, value)
+            return o
+
+        return _fwd
+
+    monkeypatch.setattr(backbone, "forward", _fixed(1.0))
+    out1 = est.predict_with_attention(x)
+    with torch.no_grad():
+        rep = torch.full_like(torch.zeros(1, head.proj.in_features), 1.0)  # (1, hidden)
+        exp_logit = float(head(rep).reshape(-1)[0])
+    exp_p1 = 1.0 / (1.0 + np.exp(-exp_logit))
+    # constant representation -> identical probability on every row
+    assert np.allclose(out1.probabilities[:, 1], exp_p1, atol=1e-5)
+    assert np.allclose(out1.logits.reshape(-1), exp_logit, atol=1e-5)
+
+    monkeypatch.setattr(backbone, "forward", _fixed(-1.0))
+    out2 = est.predict_with_attention(x)
+    # a different representation must move the output (catches a mutant
+    # that ignores / zeroes the backbone representation)
+    assert not np.allclose(out1.probabilities, out2.probabilities)
+
+
+def test_classifier_calibrated_predict_with_attention_matches_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _force_cpu(monkeypatch)
+    x, y = _panel()
+    est = _DummyTransformerClassifier(
+        task_type="binary",
+        tabular_config=_tab(),
+        calibration_strategy="temperature",
+        cal_fraction=0.2,
+        **{k: v for k, v in _COMMON.items() if k != "cal_fraction"},
+    ).fit(x, y)
+    assert est.calibrator_ is not None  # calibrated branch is real
+    out = est.predict_with_attention(x)
+    assert np.allclose(out.probabilities, est.predict_proba(x), equal_nan=True)
+    mapped = np.asarray(est.classes_)[out.predictions]
+    assert np.array_equal(mapped, est.predict(x))
+
+
+def test_regressor_calibrated_predict_with_attention_matches_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _force_cpu(monkeypatch)
+    x, _ = _panel()
+    y = np.arange(96, dtype=float)
+    est = _DummyTransformerRegressor(
+        task_type="regression_quantile",
+        tabular_config=_tab(),
+        quantiles=(0.1, 0.5, 0.9),
+        calibration_strategy="isotonic_quantile",
+        cal_fraction=0.2,
+        **{k: v for k, v in _COMMON.items() if k != "cal_fraction"},
+    ).fit(x, y)
+    assert est.calibrator_ is not None
+    out = est.predict_with_attention(x)
+    assert np.allclose(out.predictions, est.predict_quantiles(x), equal_nan=True)
+
+
+def test_binary_threshold_tuned_predict_with_attention_indices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _force_cpu(monkeypatch)
+    x, y = _panel()
+    est = _DummyTransformerClassifier(
+        task_type="binary",
+        tabular_config=_tab(),
+        calibration_strategy="platt",
+        threshold_tuning=True,
+        cal_fraction=0.2,
+        **{k: v for k, v in _COMMON.items() if k != "cal_fraction"},
+    ).fit(x, y)
+    assert isinstance(est.decision_threshold_, float)
+    out = est.predict_with_attention(x)
+    # the _index_from_proba threshold branch must agree with base predict
+    mapped = np.asarray(est.classes_)[out.predictions]
+    assert np.array_equal(mapped, est.predict(x))
+
+
+def test_regressor_below_floor_nan_fill_matches_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _force_cpu(monkeypatch)
+    x_fit, _ = _panel()
+    y_fit = np.arange(96, dtype=float)
+    est = _DummyTransformerRegressor(
+        task_type="regression_quantile",
+        tabular_config=TabularConfigParams(
+            time_varying_real_cols=("a", "b"),
+            lookback=3,
+            min_periods=1,
+            min_periods_predict=3,
+        ),
+        quantiles=(0.1, 0.5, 0.9),
+        **_COMMON,
+    ).fit(x_fit, y_fit)
+    x_pred, _ = _panel(n_entities=4, rows=2)  # all 2-row -> below floor
+    out = est.predict_with_attention(x_pred)
+    assert np.isnan(out.predictions).all()
+    assert np.isfinite(out.attention_weights).all()
+
+
+def test_device_output_values_equal_numpy(monkeypatch: pytest.MonkeyPatch) -> None:
+    _force_cpu(monkeypatch)
+    x, y = _panel()
+    est = _clf().fit(x, y)
+    npy = est.predict_with_attention(x)
+    dev = est.predict_with_attention(x, device="cpu")
+    for name in (
+        "probabilities",
+        "logits",
+        "predictions",
+        "var_selection_weights",
+        "static_var_selection_weights",
+        "attention_weights",
+        "padding_mask",
+        "entity_id",
+    ):
+        a = np.asarray(getattr(npy, name))
+        b = getattr(dev, name).numpy()
+        assert np.allclose(a, b, equal_nan=True), name

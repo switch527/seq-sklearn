@@ -73,11 +73,15 @@ class TransformerSequenceEstimator:
             output, head, batch, below = est._forward_backbone(X)
             tout = cast("TransformerBackboneOutput", output)
             with torch.no_grad():
-                logits_t = head(output.representation)
+                # .detach().cpu() before _proba_from_raw: it calls
+                # .numpy() internally, which raises on a CUDA tensor
+                # (GPU-trained model). Mirrors the base _predict_raw
+                # contract and the Regressor mixin below.
+                logits_t = head(output.representation).detach().cpu()
             proba = est._proba_from_raw(logits_t)
             proba[below] = np.nan
             idx = est._index_from_proba(proba)
-            logits = logits_t.detach().cpu().numpy()
+            logits = logits_t.numpy()  # already detached + on CPU
             logits[below] = np.nan
             return AttentionOutput(
                 predictions=_emit_arr(idx, device),

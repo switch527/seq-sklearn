@@ -2993,7 +2993,9 @@ Phase 6b (family-base implementation):
   vector (`_index_from_proba`), NOT the `classes_`-mapped labels
   `predict` returns; callers map via `est.classes_`. This keeps the
   `device=` path tensorisable (string labels do not tensorise) and
-  matches the A15.1 comment verbatim. The family-base test asserts
+  follows the A15.1 "class indices" annotation (the v1.1 multi-label
+  clause in the A15.1 source comment is deferred from the v1 code
+  comment, not a contradiction). The family-base test asserts
   `classes_[predictions] == predict(X)` for consistency.
 - **A20 item 2 RESOLVED: `device=` keyword.** `predict_with_attention`
   defaults to CPU `np.ndarray`; a `device=` keyword flips every field
@@ -3008,6 +3010,39 @@ Phase 6b (family-base implementation):
   variable-selection tensors are diagnostics, not predictions, and
   stay finite so a caller can still inspect what the model attended to
   for a short entity.
+
+Phase 6b (family-base Claude swarm, round 1):
+
+- **Classifier mixin GPU crash (code-sonnet CRITICAL).** The classifier
+  `predict_with_attention` passed the raw `head(...)` output (on-device
+  for a GPU-trained model) to `_proba_from_raw`, which calls `.numpy()`
+  internally and raises on a CUDA tensor. Now `.detach().cpu()` first,
+  mirroring the base `_predict_raw` contract and the Regressor mixin.
+  The `_force_cpu` test harness masked this; a CPU/GPU parity gap.
+- **Mutation-insensitive / uncovered seam paths (qa-sonnet /
+  qa-opus CRITICAL).** The family-base "consistency" assertions
+  (`out.probabilities == predict_proba(X)`) were vacuous: both sides
+  now delegate to the same seam, so a shared bug passes. Added
+  mutation-sensitive tests: classifier (calibration_strategy=
+  "temperature") and regressor (calibrated) `predict_with_attention`
+  vs the base path AND an independent fixed-representation oracle
+  (monkeypatched backbone) so a shared-seam regression fails; the
+  binary `threshold_tuning` index branch through `predict_with_attention`;
+  the regressor below-floor NaN-fill (was classifier-only); and a
+  `device=` numpy-vs-tensor value-equality check (was isinstance-only).
+- **`AttentionOutput.logits` shape comment (code-opus / arch IMPROVEMENT).**
+  The field comment said `(N, num_classes)`; the binary head emits
+  `(N, 1)`. Corrected to `(N, head_out_dim): 1 for binary, num_classes
+  else`. `probabilities` is `(N, num_classes)` and was already correct.
+- **`entity_id` is the internal code (arch IMPROVEMENT).** The field
+  carries the contiguous LabelEncoder code, not the original id. The
+  dataclass comment now says so; decoding to the user-facing id is
+  deferred to Phase 7 (it needs the transformer's id inverse, which
+  `TFTClassifier` wires up).
+- **Ledger `verbatim` claim corrected (arch IMPROVEMENT).** The
+  predictions bullet no longer claims the code comment matches A15.1
+  "verbatim" (the v1.1 multi-label clause is deferred from the v1 code
+  comment); reworded to state the deferral explicitly.
 
 ## Deferred
 
@@ -3490,3 +3525,19 @@ Phase 6a (estimator Claude swarm, round 3):
   architecture reviewers across rounds 1-3), so the estimator-side
   assertion is sufficient for v1; revisit with the Trainer-seam
   refactor.
+
+Phase 6b (family-base Claude swarm, round 1):
+
+- **`entity_id` decode to original id (arch IMPROVEMENT).** Deferred to
+  Phase 7: the diagnostics field carries the internal contiguous code;
+  decoding to the user-facing id needs the transformer's id inverse,
+  which `TFTClassifier` / `TFTRegressor` wire up in Phase 7. The v1
+  contract (documented in the dataclass comment and A15.1) is the
+  internal code; no v1 requirement asks for the decoded id here.
+- **`_predict_raw` head no-grad-scope mutation test (qa-opus I3).**
+  Deferred: the head runs under `torch.no_grad()` and the returned
+  tensor is immediately `.detach()`-ed, so the grad scope is
+  immaterial to every observable output (predictions, save/load,
+  determinism are all value-level and already pinned). A test that
+  fails only on the grad graph would assert an internal detail with no
+  user-visible contract; low value for the maintenance cost.

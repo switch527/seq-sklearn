@@ -21,14 +21,14 @@ __all__ = ["AttentionOutput", "RegressionAttentionOutput"]
 class AttentionOutput:
     """Returned by ``TFTClassifier.predict_with_attention`` (A15.1)."""
 
-    predictions: np.ndarray  # (N,) class indices
+    predictions: np.ndarray  # (N,) class indices (map via estimator.classes_)
     probabilities: np.ndarray  # (N, num_classes); post sigmoid / softmax
-    logits: np.ndarray  # (N, num_classes); pre-activation
+    logits: np.ndarray  # (N, head_out_dim): 1 for binary, num_classes else; pre-activation
     var_selection_weights: np.ndarray  # (N, L, n_vars)
     static_var_selection_weights: np.ndarray  # (N, n_static_vars)
     attention_weights: np.ndarray  # (N, n_heads, L, L)
     padding_mask: np.ndarray  # (N, L); True = padding
-    entity_id: np.ndarray  # (N,) for diagnostics
+    entity_id: np.ndarray  # (N,) internal contiguous entity code, for diagnostics
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,4 +41,4 @@ class RegressionAttentionOutput:
     static_var_selection_weights: np.ndarray  # (N, n_static_vars)
     attention_weights: np.ndarray  # (N, n_heads, L, L)
     padding_mask: np.ndarray  # (N, L); True = padding
-    entity_id: np.ndarray  # (N,) for diagnostics
+    entity_id: np.ndarray  # (N,) internal contiguous entity code, for diagnostics
