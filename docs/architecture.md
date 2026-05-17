@@ -3069,6 +3069,41 @@ Phase 6b (family-base Claude swarm, round 2):
   `Field(default=None, ge=1)` on `bptt_window` so the validation
   contract is visible at the architecture layer.
 
+Phase 6b (family-base Claude swarm, round 3):
+
+- **Classifier threshold-branch independent oracle (qa-sonnet /
+  qa-opus CRITICAL).** `_index_from_proba`'s `proba[:,1] >=
+  decision_threshold_` branch was the last classifier shared-seam
+  trap: `predict` and `predict_with_attention` both route through it,
+  so a `>=` -> `<` mutation inverted both and the consistency
+  assertion stayed green. Added
+  `test_classifier_threshold_branch_independent_oracle`: a fitted
+  `threshold_tuning` classifier, fixed representation, the index
+  recomputed independently with `>=` and asserted against production
+  for two sigmoid-extreme representations. Verified the test fails
+  under the `>=` -> `<` mutation and passes on revert.
+- **Calibrated regressor independent oracle (qa-sonnet CRITICAL /
+  code-opus IMPROVEMENT).** The `calibrator_.transform` arm of
+  `_calibrate_raw` (and the quantile-mode regressor path) had no
+  oracle independent of `predict_quantiles`. Added
+  `test_calibrated_quantile_regressor_independent_oracle`:
+  `isotonic_quantile` calibration, fixed representation,
+  `calibrator_.transform(head(rep))` recomputed independently and
+  matched against `predict_with_attention`, with a different
+  representation required to move the calibrated output. This also
+  closes the code-opus quantile-mode-oracle IMPROVEMENT.
+- **A15.1 snippet wording sync (arch-sonnet IMPROVEMENT).** The
+  pre-existing `probabilities` / classifier `padding_mask` comment
+  divergences between the A15.1 snippet and `inference/attention.py`
+  are reconciled (the code now carries the doc's
+  `post-softmax/sigmoid` wording and the `(pass-through from
+  preprocessing)` provenance clause).
+- **Classifier below-floor predictions parity (qa NITPICK).**
+  `test_below_floor_nan_fill_matches_base` now also asserts
+  `classes_[predictions] == predict(x_pred)` for the below-floor
+  rows, pinning the shared `_index_from_proba` A2 (NaN -> index 0)
+  behaviour on the attention path.
+
 ## Deferred
 
 Round 1 (design-review swarm):

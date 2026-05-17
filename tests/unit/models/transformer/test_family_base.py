@@ -148,6 +148,9 @@ def test_below_floor_nan_fill_matches_base(monkeypatch: pytest.MonkeyPatch) -> N
     out = est.predict_with_attention(x_pred)
     assert np.isnan(out.probabilities).all()
     assert np.isnan(out.logits).all()
+    # below-floor predictions still map identically to base predict
+    # (NaN proba -> index 0 in the shared _index_from_proba, A2)
+    assert np.array_equal(np.asarray(est.classes_)[out.predictions], est.predict(x_pred))
     # introspection tensors stay finite (diagnostics, not predictions)
     assert np.isfinite(out.attention_weights).all()
 
@@ -288,6 +291,98 @@ def test_regressor_predict_with_attention_independent_oracle(
     assert np.allclose(out1.predictions, exp, atol=1e-5)
 
     monkeypatch.setattr(backbone, "forward", _fixed(-1.0))
+    out2 = est.predict_with_attention(x)
+    assert not np.allclose(out1.predictions, out2.predictions)
+
+
+def _patch_fixed_representation(monkeypatch: pytest.MonkeyPatch, est: object, value: float):
+    backbone = est._module.backbone  # type: ignore[attr-defined]
+    orig = backbone.forward
+
+    def _fwd(batch: dict[str, torch.Tensor]):  # type: ignore[no-untyped-def]
+        o = orig(batch)
+        o.representation = torch.full_like(o.representation, value)
+        return o
+
+    monkeypatch.setattr(backbone, "forward", _fwd)
+
+
+def test_classifier_threshold_branch_independent_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The _index_from_proba threshold branch (proba[:,1] >=
+    # decision_threshold_) is its own shared-seam trap: both
+    # predict_with_attention and predict route through it, so a >= -> <
+    # mutation inverts both and the consistency assertion stays green.
+    # Pin a fixed representation, compute the threshold decision
+    # independently, and require a threshold-straddling representation
+    # to flip the indices.
+    _force_cpu(monkeypatch)
+    x, y = _panel()
+    est = _DummyTransformerClassifier(
+        task_type="binary",
+        tabular_config=_tab(),
+        threshold_tuning=True,  # calibration_strategy stays "none"
+        cal_fraction=0.2,
+        **{k: v for k, v in _COMMON.items() if k != "cal_fraction"},
+    ).fit(x, y)
+    thr = est.decision_threshold_
+    assert isinstance(thr, float)
+    head = est._module.head
+
+    def _expected_idx(value: float) -> int:
+        with torch.no_grad():
+            rep = torch.full_like(torch.zeros(1, head.proj.in_features), value)
+            logit = float(head(rep).reshape(-1)[0])
+        p1 = 1.0 / (1.0 + np.exp(-logit))
+        return int(p1 >= thr)  # independent `>=`; a `<` mutant diverges
+
+    # Two representations on opposite sigmoid extremes. The independent
+    # `>=` recomputation must match production for BOTH; a `>=` -> `<`
+    # mutation in _index_from_proba would invert production only and
+    # fail at least one (p1 is continuous, never exactly == thr here).
+    for value in (10.0, -10.0):
+        _patch_fixed_representation(monkeypatch, est, value)
+        out = est.predict_with_attention(x)
+        assert np.all(out.predictions == _expected_idx(value))
+
+
+def test_calibrated_quantile_regressor_independent_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The calibrated arm of _calibrate_raw (calibrator_.transform) is the
+    # last un-oracled regressor seam: skipping the transform survives a
+    # predict-vs-attention consistency check. Recompute
+    # calibrator_.transform(head(rep)) independently and require a
+    # different representation to move the calibrated output.
+    _force_cpu(monkeypatch)
+    x, _ = _panel()
+    y = np.arange(96, dtype=float)
+    est = _DummyTransformerRegressor(
+        task_type="regression_quantile",
+        tabular_config=_tab(),
+        quantiles=(0.1, 0.5, 0.9),
+        calibration_strategy="isotonic_quantile",
+        cal_fraction=0.2,
+        **{k: v for k, v in _COMMON.items() if k != "cal_fraction"},
+    ).fit(x, y)
+    cal = est.calibrator_
+    assert cal is not None
+    head = est._module.head
+
+    def _expected(value: float) -> np.ndarray:
+        with torch.no_grad():
+            rep = torch.full_like(torch.zeros(1, head.proj.in_features), value)
+            raw_row = head(rep).reshape(1, -1)
+            return cal.transform(raw_row).numpy()[0]
+
+    _patch_fixed_representation(monkeypatch, est, 1.0)
+    out1 = est.predict_with_attention(x)
+    exp1 = _expected(1.0)
+    assert out1.predictions.shape == (96, 3)
+    assert np.allclose(out1.predictions, exp1, atol=1e-5)
+
+    _patch_fixed_representation(monkeypatch, est, -1.0)
     out2 = est.predict_with_attention(x)
     assert not np.allclose(out1.predictions, out2.predictions)
 
