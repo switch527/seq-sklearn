@@ -254,6 +254,44 @@ def test_predict_with_attention_independent_oracle(
     assert not np.allclose(out1.probabilities, out2.probabilities)
 
 
+def test_regressor_predict_with_attention_independent_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regressor twin of the classifier oracle: the regressor half of the
+    # _calibrate_raw seam also needs an oracle independent of
+    # predict/predict_quantiles (both delegate to the same seam). Point
+    # mode, no calibrator, so predictions == head(representation).
+    _force_cpu(monkeypatch)
+    x, _ = _panel()
+    y = np.arange(96, dtype=float)
+    est = _DummyTransformerRegressor(
+        task_type="regression_point", tabular_config=_tab(), **_COMMON
+    ).fit(x, y)
+    assert est.calibrator_ is None
+    backbone = est._module.backbone
+    head = est._module.head
+    orig = backbone.forward
+
+    def _fixed(value: float):
+        def _fwd(batch: dict[str, torch.Tensor]):  # type: ignore[no-untyped-def]
+            o = orig(batch)
+            o.representation = torch.full_like(o.representation, value)
+            return o
+
+        return _fwd
+
+    monkeypatch.setattr(backbone, "forward", _fixed(1.0))
+    out1 = est.predict_with_attention(x)
+    with torch.no_grad():
+        rep = torch.full_like(torch.zeros(1, head.proj.in_features), 1.0)
+        exp = float(head(rep).reshape(-1)[0])
+    assert np.allclose(out1.predictions, exp, atol=1e-5)
+
+    monkeypatch.setattr(backbone, "forward", _fixed(-1.0))
+    out2 = est.predict_with_attention(x)
+    assert not np.allclose(out1.predictions, out2.predictions)
+
+
 def test_classifier_calibrated_predict_with_attention_matches_base(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

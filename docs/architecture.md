@@ -960,11 +960,11 @@ class RecurrentSequenceEstimator(BaseSequenceEstimator, ABC):
 # src/seq_sklearn/config/recurrent.py
 class RecurrentSequenceEstimatorConfig(BaseModelConfig):
     bidirectional: bool = False
-    recurrent_dropout: float = 0.1
+    recurrent_dropout: float = Field(default=0.1, ge=0.0, lt=1.0)
     recurrent_dropout_kind: Literal["weight_drop", "variational", "bernoulli"] = "weight_drop"
     hidden_init_strategy: Literal["zero", "learned", "per_entity"] = "zero"
     readout: Literal["last_valid", "mean_pool", "attention"] = "last_valid"
-    bptt_window: int | None = None
+    bptt_window: int | None = Field(default=None, ge=1)
 ```
 
 The v1 test instantiates a no-op concrete subclass (defined inline in
@@ -1873,14 +1873,14 @@ MINOR releases; tuple-unpacking is NOT supported). v1 fields:
 @dataclass(frozen=True, slots=True)
 class AttentionOutput:
     """Returned by TFTClassifier.predict_with_attention."""
-    predictions: np.ndarray                    # (N,) class indices or (N, K) for v1.1 multi-label logits
+    predictions: np.ndarray                    # (N,) class indices (map via estimator.classes_); (N, K) v1.1 multi-label
     probabilities: np.ndarray                  # (N, num_classes) post-softmax/sigmoid
-    logits: np.ndarray                         # (N, num_classes); pre-activation
+    logits: np.ndarray                         # (N, head_out_dim): 1 for binary, num_classes else; pre-activation
     var_selection_weights: np.ndarray          # (N, L, n_vars)
     static_var_selection_weights: np.ndarray   # (N, n_static_vars)
     attention_weights: np.ndarray              # (N, n_heads, L, L)
     padding_mask: np.ndarray                   # (N, L); True = padding (pass-through from preprocessing)
-    entity_id: np.ndarray                      # (N,) for diagnostics
+    entity_id: np.ndarray                      # (N,) internal contiguous entity code, for diagnostics
 
 @dataclass(frozen=True, slots=True)
 class RegressionAttentionOutput:
@@ -1891,7 +1891,7 @@ class RegressionAttentionOutput:
     static_var_selection_weights: np.ndarray   # (N, n_static_vars)
     attention_weights: np.ndarray              # (N, n_heads, L, L)
     padding_mask: np.ndarray                   # (N, L); True = padding
-    entity_id: np.ndarray                      # (N,) for diagnostics
+    entity_id: np.ndarray                      # (N,) internal contiguous entity code, for diagnostics
 ```
 
 Regression intentionally has no `logits` field. The classifier head
@@ -3043,6 +3043,31 @@ Phase 6b (family-base Claude swarm, round 1):
   predictions bullet no longer claims the code comment matches A15.1
   "verbatim" (the v1.1 multi-label clause is deferred from the v1 code
   comment); reworded to state the deferral explicitly.
+
+Phase 6b (family-base Claude swarm, round 2):
+
+- **Regressor independent-oracle (qa-opus CRITICAL).** Round 1 closed
+  the shared-seam trap for the classifier only; the regressor half of
+  the same `_calibrate_raw` seam still had no oracle (a `mat + 1.0`
+  mutation survived the whole suite because every regressor
+  `predict_with_attention` assertion compared against `predict` /
+  `predict_quantiles`, which delegate to the same seam). Added
+  `test_regressor_predict_with_attention_independent_oracle`: point
+  mode, no calibrator, monkeypatched fixed representation, predictions
+  checked against an independent `head(rep)` recomputation, with a
+  different representation required to move the output.
+- **A15.1 source snippet synced (arch-opus / arch-sonnet IMPROVEMENT).**
+  The Round-1 fix corrected the `inference/attention.py` field comments
+  but left the authoritative A15.1 doc snippet stale. Synced
+  `logits` to `(N, head_out_dim): 1 for binary, num_classes else`,
+  both `entity_id` lines to "internal contiguous entity code", and the
+  classifier `predictions` line to name `estimator.classes_`. A15.1 is
+  the contract a Phase-7 author reads first; it now leads the code.
+- **A6.1 snippet validation bounds (arch NITPICK).** The
+  `RecurrentSequenceEstimatorConfig` snippet now shows the shipped
+  `Field(ge=0.0, lt=1.0)` on `recurrent_dropout` and
+  `Field(default=None, ge=1)` on `bptt_window` so the validation
+  contract is visible at the architecture layer.
 
 ## Deferred
 
