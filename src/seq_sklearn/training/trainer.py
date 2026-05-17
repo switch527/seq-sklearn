@@ -323,6 +323,21 @@ class Trainer:
             optuna_trial=optuna_trial,
         )
 
+    def _below_floor_mask(self, entity_ids: np.ndarray) -> np.ndarray:
+        """Per-window mask of entities below ``min_periods_predict``.
+
+        ``transform`` emits one window per entity row, so an entity's
+        window count is its row count; a count below
+        ``min_periods_predict`` means ``transform`` injected a sentinel
+        target. Mirrors :meth:`BaseSequenceEstimator._below_floor_mask`
+        so the frozen-Phase-4 Trainer drops the same windows the
+        estimator's recomputed calibration fold already excludes.
+        """
+        floor = self.transformer.config.min_periods_predict
+        codes, counts = np.unique(entity_ids, return_counts=True)
+        below = set(codes[counts < floor].tolist())
+        return np.array([e in below for e in entity_ids], dtype=bool)
+
     def fit(
         self,
         x_panel: object,
@@ -354,6 +369,17 @@ class Trainer:
             val_split_strategy=self.config.val_split_strategy,
             calibration_set_provided=calibration_set_provided,
         )
+
+        # Entities with fewer windows than min_periods_predict carry
+        # sentinel targets (-1 classification / NaN regression) from
+        # TabularToSequence.transform. They must not enter the train /
+        # val folds: torch.bincount on -1 raises in _class_weights, and
+        # NaN regression targets trip the F9 non-finite-loss abort. The
+        # estimator already drops them from the recomputed cal fold;
+        # filter them here so the Trainer never fits on a sentinel.
+        below = self._below_floor_mask(entity_ids)
+        train_idx = train_idx[~below[train_idx]]
+        val_idx = val_idx[~below[val_idx]]
 
         class_weights = self._class_weights(train_idx, batch["target"])
 

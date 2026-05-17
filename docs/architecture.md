@@ -3104,6 +3104,46 @@ Phase 6b (family-base Claude swarm, round 3):
   rows, pinning the shared `_index_from_proba` A2 (NaN -> index 0)
   behaviour on the attention path.
 
+Gemini final-pass (Phase 1-6 integration, post-consensus):
+
+- **`load()` crash when an explicit `loss` adapter was saved
+  (Gemini CRITICAL, verified).** `__init__` stores `self.loss`
+  verbatim as `None` (the one adapter not defaulted to an instance,
+  because F5 task-aware loss-default injection must see "unspecified").
+  When a real `loss=LossParams(...)` was given at save, `_hyperparams`
+  persisted its `loss__*` leaves but dropped the bare `loss` object;
+  `load()` did `cls(task_type=...)` (loss=None) then
+  `set_params(loss__strategy=...)`, which sklearn routes to
+  `None.set_params` -> `AttributeError`. Latent: every Phase-6 test
+  uses the loss=None default, so the green suite never exercised it.
+  Fixed in `load()`: instantiate a default `LossParams` before
+  `set_params` when `obj.loss is None` and a `loss__` key is present.
+- **Trainer trained on below-floor sentinel targets (Gemini CRITICAL,
+  verified; cross-phase Phase-4 touch).** `TabularToSequence.transform`
+  emits sentinel targets (`-1` classification / `NaN` regression) for
+  entities with `min_periods <= n < min_periods_predict`. The Phase-6b
+  fix dropped these from the estimator's recomputed calibration fold,
+  but `Trainer.fit` still passed the unfiltered `train_idx` / `val_idx`
+  to `_class_weights` (`torch.bincount` on `-1` raises) and the loss
+  (NaN regression target trips the F9 abort). The Phase-6a ledger had
+  noted this exposure existed in the frozen Phase-4 Trainer but left it
+  unaddressed; the integration pass correctly re-raised it. Fixed:
+  `Trainer._below_floor_mask` (mirrors the estimator's) drops below-floor
+  windows from `train_idx` / `val_idx` before class-weights / sampler /
+  loaders. Deliberate frozen-Phase-4 touch, reviewed by the post-Gemini
+  confirming swarm.
+- **`optuna_trial` typed `object` contradicting A16 (Gemini
+  IMPROVEMENT, verified).** `optuna` is a hard dependency (A18,
+  pyproject.toml), so annotating `optuna_trial: object | None` and
+  carrying a `# type: ignore[arg-type]` on the `Trainer.fit`
+  delegation served no purpose and broke strict typing against A16's
+  `optuna.trial.BaseTrial | None`. Fixed: `if TYPE_CHECKING: import
+  optuna`, correct annotation, `# type: ignore` removed.
+- **Opaque `state["hyperparams"]` cast (Gemini NITPICK).** Left as-is:
+  the F4 schema invariants enforce structural presence and the
+  cast-narrowing matches the established `load()` convention; Gemini
+  itself offered "or leave as-is" for this reason.
+
 ## Deferred
 
 Round 1 (design-review swarm):

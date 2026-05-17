@@ -46,8 +46,15 @@ class _StubTransformer:
     per-entity time axis and ``_DummyBackbone`` has a ``features`` key.
     """
 
+    class _Config:
+        # Trainer._below_floor_mask reads transformer.config
+        # .min_periods_predict; 1 means no entity is below floor here,
+        # so the split/fold behaviour these tests assert is unchanged.
+        min_periods_predict = 1
+
     def __init__(self, n_per_entity: int = 4) -> None:
         self._n = n_per_entity
+        self.config = _StubTransformer._Config()
 
     def transform(self, x_panel: object) -> dict[str, Tensor]:
         del x_panel

@@ -11,9 +11,10 @@ integrated save / load path.
 import numpy as np
 import pandas as pd
 import pytest
+import sklearn.base
 import torch
 
-from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
+from seq_sklearn.config._adapters import LossParams, SchedulerParams, TabularConfigParams
 from tests._test_models._dummy_estimator import _DummySequenceClassifier
 
 
@@ -210,3 +211,24 @@ def test_explicit_calibration_set_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert est.calibrator_ is not None
     proba = est.predict_proba(x)
     assert np.allclose(proba.sum(axis=1), 1.0)
+
+
+def test_save_load_with_explicit_loss_adapter_round_trips(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    # Gemini integration CRITICAL: __init__ stores `loss` verbatim as
+    # None (the one adapter not defaulted), so when an explicit loss
+    # adapter is saved, _hyperparams persists `loss__*` leaves but drops
+    # the bare object; load()'s set_params then routed `loss__strategy`
+    # to None.set_params -> AttributeError. Every other test uses the
+    # loss=None default, so this shipped untested. The reloaded
+    # estimator must predict byte-equal AND clone.
+    _force_cpu(monkeypatch)
+    x, y = _binary_panel()
+    est = _estimator(loss=LossParams(strategy="cross_entropy")).fit(x, y)
+    before = est.predict_proba(x)
+    est.save(tmp_path)  # type: ignore[arg-type]
+    reloaded = _DummySequenceClassifier.load(tmp_path)  # type: ignore[arg-type]
+    assert np.array_equal(reloaded.predict_proba(x), before)
+    assert reloaded.get_params(deep=True)["loss__strategy"] == "cross_entropy"
+    sklearn.base.clone(reloaded)  # must not raise

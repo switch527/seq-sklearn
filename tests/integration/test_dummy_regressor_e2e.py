@@ -117,3 +117,44 @@ def test_quantile_regressor_isotonic_quantile_predict_quantiles(
     reloaded = _DummySequenceRegressor.load(tmp_path)  # type: ignore[arg-type]
     assert list(reloaded.quantiles_) == [0.1, 0.5, 0.9]
     assert np.array_equal(reloaded.predict_quantiles(x), full)
+
+
+def _mixed_panel() -> tuple[pd.DataFrame, np.ndarray]:
+    """16 above-floor (6-row) + 4 below-floor (2-row) entities."""
+    rng = np.random.default_rng(7)
+    rows: list[dict[str, object]] = []
+    y: list[float] = []
+    spec = [(e, 6) for e in range(16)] + [(100 + e, 2) for e in range(4)]
+    for eid, n in spec:
+        for t in range(n):
+            v = rng.normal()
+            rows.append(
+                {"id": eid, "time": pd.Timestamp("2021-01-01") + pd.offsets.Day(t), "tr": v}
+            )
+            y.append(float(v))
+    return pd.DataFrame(rows), np.asarray(y, dtype=float)
+
+
+def test_fit_filters_below_floor_training_entities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Gemini integration CRITICAL: entities with
+    # min_periods <= n < min_periods_predict carry NaN regression
+    # targets from transform. Before the Trainer._below_floor_mask
+    # filter they entered train_idx and tripped the F9 non-finite-loss
+    # abort. Fit must now succeed (sentinels filtered) and predict.
+    _force_cpu(monkeypatch)
+    x, y = _mixed_panel()
+    est = _reg(
+        "regression_point",
+        tabular_config=TabularConfigParams(
+            time_varying_real_cols=("tr",),
+            lookback=3,
+            min_periods=1,
+            min_periods_predict=3,
+        ),
+    ).fit(x, y)  # must not raise TrainingError
+    preds = est.predict(x)
+    assert preds.shape == (len(x),)
+    # below-floor rows are NaN-filled at predict; above-floor finite
+    assert np.isfinite(preds).any()

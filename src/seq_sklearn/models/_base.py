@@ -18,7 +18,7 @@ import platform
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 import numpy as np
 import pandas as pd
@@ -51,6 +51,9 @@ from seq_sklearn.serialization import (
 )
 from seq_sklearn.training._lightning_module import _LightningModule
 from seq_sklearn.training.trainer import Trainer
+
+if TYPE_CHECKING:
+    import optuna
 
 __all__ = ["BaseSequenceEstimator"]
 
@@ -248,7 +251,7 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         y: object,
         *,
         calibration_set: tuple[pd.DataFrame, object] | None = None,
-        optuna_trial: object | None = None,
+        optuna_trial: "optuna.trial.BaseTrial | None" = None,
     ) -> "BaseSequenceEstimator":
         """Fit the transformer, model, and optional calibrator (F1 / A7 / A9).
 
@@ -304,7 +307,7 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         module = trainer.fit(
             X,
             calibration_set_provided=calibration_set is not None,
-            optuna_trial=optuna_trial,  # type: ignore[arg-type]
+            optuna_trial=optuna_trial,
         )
         module.eval()
 
@@ -485,6 +488,16 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         # get_params(deep=True) / sklearn.base.clone then work (F1).
         hyperparams = cast("dict[str, object]", state["hyperparams"])
         obj = cls(task_type=cast("str", state["task_type"]))
+        # `loss` is the one adapter __init__ stores verbatim as None
+        # (F5 task-aware default injection needs to know the user did
+        # not specify it). Every other adapter defaults to a real
+        # instance, so set_params can route their `prefix__leaf` keys.
+        # If a loss adapter WAS specified at save, _hyperparams persisted
+        # its `loss__*` leaves but dropped the bare `loss` object;
+        # set_params would then route `loss__strategy` to None. Restore a
+        # default LossParams first so the leaves rebuild onto it.
+        if obj.loss is None and any(k.startswith("loss__") for k in hyperparams):
+            obj.loss = LossParams()
         obj.set_params(**hyperparams)
         obj.config_ = config
         obj.feature_names_in_ = np.asarray(state["feature_names_in_"], dtype=object)
