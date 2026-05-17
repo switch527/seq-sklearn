@@ -86,6 +86,7 @@ src/seq_sklearn/
         __init__.py
         backbone.py                 TFTBackbone (nn.Module)
         blocks.py                   VSN, GRN, GLU, AddNorm
+        _estimator.py               _TFTEstimatorMixin (shared A4 __init__ / _config_kwargs / _build_tft_backbone)
         classifier.py               TFTClassifier
         regressor.py                TFTRegressor
     recurrent/
@@ -179,9 +180,17 @@ class TransformerSequenceEstimator:
 ```
 
 Concrete model files inherit from the family mixin AND the
-`BaseSequence*` class. Example:
-`class TFTClassifier(TransformerSequenceEstimator.Classifier, BaseSequenceClassifier): ...`
-The mixin overrides template methods the base class calls.
+`BaseSequence*` class. The TFT family additionally leads the MRO with
+`_TFTEstimatorMixin` (in `models/transformer/tft/_estimator.py`), which
+owns the shared A4-adapter `__init__`, `_config_cls=TFTConfig`,
+`_config_kwargs`, and `_build_tft_backbone` so the ~30-param
+constructor is not duplicated across the classifier and regressor (the
+same single-source discipline as `data.splits.window_time_index`).
+Example:
+`class TFTClassifier(_TFTEstimatorMixin, TransformerSequenceEstimator.Classifier, BaseSequenceClassifier): ...`
+The mixin overrides template methods the base class calls;
+`super().__init__` resolves cooperatively through the composed MRO to
+`BaseSequenceEstimator.__init__`.
 
 The `TFTBackbone` is a pure `nn.Module` owned by the estimator. The
 estimator holds:
@@ -327,7 +336,14 @@ estimator. The canonical pattern derived for seq-sklearn:
    # sub-configs specified later in this A4 section and carried
    # verbatim in src/seq_sklearn/config/.
 
-   class TFTClassifier(ClassifierMixin, BaseEstimator):
+   # The real class composes the shared TFT mixin + the Phase-6b
+   # transformer mixin + the Phase-6a family shell; the __init__ body
+   # below lives on _TFTEstimatorMixin (see A2 / models/transformer/tft).
+   class TFTClassifier(
+       _TFTEstimatorMixin,
+       TransformerSequenceEstimator.Classifier,
+       BaseSequenceClassifier,
+   ):
        def __init__(
            self,
            *,                              # mandatory keyword-only
@@ -2152,7 +2168,16 @@ def load(cls, path: str | Path) -> "BaseSequenceEstimator":
     if obj.loss is None and any(k.startswith("loss__") for k in state["hyperparams"]):
         obj.loss = LossParams()
     obj.set_params(**state["hyperparams"])         # restores the 6 adapters + scalars
-    obj.config_ = cls._config_cls.model_validate(state["config"])
+    # `_collect_state` dumps `config` with exclude={"tabular_config"}
+    # (the transformer config is persisted once, as the authoritative
+    # flat `tabular_config` key). A `_config_cls` that requires
+    # `tabular_config` (the TFT family's `TFTConfig`) must have it
+    # merged back before validation; `BaseModelConfig` has no such
+    # field so this is a no-op for the base / dummy path.
+    config_state = state["config"]
+    if "tabular_config" in cls._config_cls.model_fields:
+        config_state = {**config_state, "tabular_config": state["tabular_config"]}
+    obj.config_ = cls._config_cls.model_validate(config_state)
     obj.transformer_ = TabularToSequence.deserialize(...)
     obj._restore_family_state(state)               # family hook: classes_ / quantiles_ / threshold
     backbone, head = obj._build_backbone_head(obj.config_, obj.transformer_)  # family hook
@@ -2506,7 +2531,7 @@ Round 1 (design-review swarm):
   declares the test that counts V-projection weights (1, not H).
 - **Classifier/Regressor mixin shape (arch r1-NITPICK 1).**
   Clarified as nested classes on `TransformerSequenceEstimator`
-  with an example `class TFTClassifier(TransformerSequenceEstimator.Classifier, BaseSequenceClassifier)`.
+  with an example `class TFTClassifier(_TFTEstimatorMixin, TransformerSequenceEstimator.Classifier, BaseSequenceClassifier)`.
 - **Style line 1233 / line 1247 (style r1-I1, r1-I2).** Rewritten
   in place during the CI wall-clock and A20 edits.
 
@@ -3194,6 +3219,39 @@ Post-Gemini confirming swarm (Phase 1-6 integration):
   `LossParams` pre-injection so a future family implementor reading the
   canonical reference does not reproduce the C1 bug.
 
+Phase 7 (TFT concrete Claude swarm, round 1):
+
+- **`_base.load()` re-merges `tabular_config` for a tabular-config-
+  bearing `_config_cls` (Phase-6a A17 seam, Phase 7 first to hit it).**
+  `_collect_state` dumps `config` with `exclude={"tabular_config"}` (the
+  transformer config is the single authoritative flat key); `load()`
+  validated `state["config"]` directly, which works for the dummy's
+  `BaseModelConfig` (no such field) but fails for `TFTConfig` (required
+  `tabular_config`). `load()` now merges it back, gated on
+  `"tabular_config" in cls._config_cls.model_fields` (no-op for the
+  base path). Pinned mutation-sensitively: the TFT clf/reg e2e save/
+  load tests now assert `reloaded.config_ == est.config_` (and the
+  nested `tabular_config`), not just byte-equal predictions, so a
+  revert of the re-merge fails the suite.
+- **`_TFTEstimatorMixin` shared module (code-opus / arch IMPROVEMENT).**
+  The not-in-plan `models/transformer/tft/_estimator.py` holds the
+  shared A4-adapter `__init__`, `_config_cls`, `_config_kwargs`,
+  `_build_tft_backbone`; `TFTClassifier`/`TFTRegressor` are thin. This
+  is the project's standing DRY discipline (window_time_index /
+  below_floor_mask); the TYPE_CHECKING `_MixinBase` alias gives pyright
+  the cooperative-`super` signature while the runtime base stays
+  `object`. A1 / A2 / A4 reconciled to show the 3-base form + the new
+  module.
+- **`TFTRegressor` init/clone unit coverage (qa CRITICAL).** The
+  regressor MRO diverges from the classifier after the shared mixin, so
+  `test_classifier_init.py` did not transfer. Added
+  `test_regressor_init.py` (mirrors it + a quantile-mode clone
+  round-trip pinning `quantiles` / `task_type`).
+- **Multiclass + empty-categorical e2e (qa IMPROVEMENT).** Added lean
+  (1-epoch, hidden=8) TFT e2e cases: multiclass head/softmax through
+  the real backbone, and the empty-categorical-side `_static_pad` /
+  `_tv_pad` path wired through the estimator.
+
 ## Deferred
 
 Round 1 (design-review swarm):
@@ -3704,3 +3762,22 @@ Post-Gemini confirming swarm (Phase 1-6 integration):
   then so the abstraction is shaped by a real second caller rather than
   guessed. The A17 pseudocode now documents the step so a Phase-7
   author cannot miss it.
+
+Phase 7 (TFT concrete Claude swarm, round 1):
+
+- **`prediction_readout="mean_pool"` TFT e2e (qa NITPICK).** Deferred:
+  `mean_pool` is covered at the backbone level (`test_backbone.py`) and
+  in `test_tabular_to_backbone.py`; the estimator only passes the
+  string through to `TFTConfig`, and `test_classifier_init` /
+  `test_regressor_init` already pin that it is stored and reaches the
+  config. A full-training e2e for a config passthrough adds ~1-2 min
+  per gate pass for near-zero marginal signal; revisit only if a
+  readout-specific estimator code path appears.
+- **`_restore_default_loss_adapter` base classmethod (arch-opus
+  IMPROVEMENT-3, re-evaluated in Phase 7).** Still deferred: Phase 7
+  composes a mixin but does NOT override `load()`, so there is still no
+  second caller to shape the abstraction. The inline `load()`
+  loss-restore + the now-also-inline `tabular_config` re-merge remain
+  the single call site; extracting a hook is premature until a v2/v3
+  family overrides `load`. The A17 pseudocode documents both steps so a
+  future author cannot miss them.

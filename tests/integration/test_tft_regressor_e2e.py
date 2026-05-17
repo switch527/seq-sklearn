@@ -92,6 +92,8 @@ def test_tft_point_regressor_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path
     est.save(tmp_path)  # type: ignore[arg-type]
     reloaded = TFTRegressor.load(tmp_path)  # type: ignore[arg-type]
     assert np.array_equal(reloaded.predict(x), before)
+    assert reloaded.config_ == est.config_
+    assert reloaded.config_.tabular_config == est.config_.tabular_config
 
 
 def test_tft_quantile_regressor_predict_quantiles(
@@ -119,3 +121,5 @@ def test_tft_quantile_regressor_predict_quantiles(
     reloaded = TFTRegressor.load(tmp_path)  # type: ignore[arg-type]
     assert list(reloaded.quantiles_) == [0.1, 0.5, 0.9]
     assert np.array_equal(reloaded.predict_quantiles(x), full)
+    assert reloaded.config_ == est.config_
+    assert reloaded.config_.tabular_config == est.config_.tabular_config

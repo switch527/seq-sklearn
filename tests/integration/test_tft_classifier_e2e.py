@@ -95,6 +95,11 @@ def test_tft_classifier_fit_predict_roundtrip(
     est.save(tmp_path)  # type: ignore[arg-type]
     reloaded = TFTClassifier.load(tmp_path)  # type: ignore[arg-type]
     assert np.array_equal(reloaded.predict_proba(x), before)
+    # Pin the reconstructed TFTConfig directly: byte-equal predictions
+    # can coincide even if the load()-side tabular_config re-merge
+    # restored a wrong/partial config. This kills a revert of that fix.
+    assert reloaded.config_ == est.config_
+    assert reloaded.config_.tabular_config == est.config_.tabular_config
 
 
 def test_tft_classifier_predict_with_attention_contract(
@@ -137,3 +142,46 @@ def test_tft_classifier_predict_with_attention_contract(
     mapped = np.asarray(est.classes_)[out.predictions]
     assert np.array_equal(mapped, est.predict(x))
     assert n_vars >= 1  # the panel exercises every feature group
+
+
+def _gen(**kw: object) -> SyntheticPanelGenerator:
+    base: dict[str, object] = {
+        "num_entities": 20,
+        "periods_per_entity": 24,
+        "signal_strength": 0.7,
+        "lookback": 8,
+        "seed": 42,
+    }
+    base.update(kw)
+    return SyntheticPanelGenerator(**base)  # type: ignore[arg-type]
+
+
+def test_tft_multiclass_predict_proba_simplex(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Real TFT through the multiclass head: _head_out_dim() == num_classes
+    # and the softmax branch, not exercised by the binary e2e.
+    _force_cpu(monkeypatch)
+    gen = _gen(target_kind="multiclass", num_classes=3)
+    x, y = gen.generate(seed=42)
+    est = _estimator(gen, task_type="multiclass", hidden_size=8, max_epochs=1).fit(x, y)
+    proba = est.predict_proba(x)
+    assert proba.shape == (len(x), 3)
+    assert np.allclose(proba.sum(axis=1), 1.0)
+    assert set(np.unique(est.predict(x))).issubset(set(np.unique(y)))
+
+
+def test_tft_classifier_no_categorical_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Empty categorical side: _build_tft_backbone passes [] cardinality
+    # lists so the backbone's _static_pad / _tv_pad synthetic-variable
+    # paths are reached through the full estimator pipeline.
+    _force_cpu(monkeypatch)
+    gen = _gen(num_static_categorical=0, num_time_varying_categorical=0)
+    x, y = gen.generate(seed=42)
+    assert not gen.static_categorical_cols
+    assert not gen.time_varying_categorical_cols
+    est = _estimator(gen, hidden_size=8, max_epochs=1).fit(x, y)
+    proba = est.predict_proba(x)
+    assert proba.shape == (len(x), 2)
+    assert np.isfinite(proba).all()
+    assert np.allclose(proba.sum(axis=1), 1.0)
