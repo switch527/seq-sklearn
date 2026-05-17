@@ -655,8 +655,8 @@ so ALPHA → BETA promotion is one registry edit. The reserved-keys
 collision check (preventing `extra=(("lr", 0.1),)` from colliding
 with the typed `OptimizerConfig.learning_rate` kwarg at
 `torch.optim.AdamW(...)` construction) lives at the CONFIG layer
-as a `@model_validator(mode="after")` on each family sub-config —
-NOT at the factory call site — so the validation fires at
+as a `@model_validator(mode="after")` on each family sub-config,
+NOT at the factory call site, so the validation fires at
 `OptimizerConfig(...)` construction time and Phase 1 owns the test.
 The factories (Phase 4) trust the validated configs and do not
 re-check. Reserved-key sets keyed by `cfg.name`:
@@ -3781,7 +3781,7 @@ Post-Gemini confirming swarm (Phase 1-6 integration):
 
 Phase 7 (TFT concrete Claude swarm, round 1):
 
-- **`prediction_readout="mean_pool"` TFT e2e — SUPERSEDED.** Round 1
+- **`prediction_readout="mean_pool"` TFT e2e: SUPERSEDED.** Round 1
   deferred this; Round 2 resolved it (see the round-2 Addressed block:
   `test_tft_classifier_mean_pool_readout_roundtrip`). The round-1
   deferral reason (config passthrough, low signal) was wrong: it is the
