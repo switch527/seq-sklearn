@@ -35,7 +35,11 @@ from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 
 from seq_sklearn.config._extras import extract_deprecated_extras
 from seq_sklearn.config.base import BaseModelConfig
-from seq_sklearn.data.splits import compute_three_way_split, window_time_index
+from seq_sklearn.data.splits import (
+    below_floor_mask,
+    compute_three_way_split,
+    window_time_index,
+)
 from seq_sklearn.data.tabular_to_sequence import TabularToSequence
 from seq_sklearn.errors import ConfigError
 from seq_sklearn.hardware import detect
@@ -324,19 +328,14 @@ class Trainer:
         )
 
     def _below_floor_mask(self, entity_ids: np.ndarray) -> np.ndarray:
-        """Per-window mask of entities below ``min_periods_predict``.
+        """Below-`min_periods_predict` window mask (shared `splits` impl).
 
-        ``transform`` emits one window per entity row, so an entity's
-        window count is its row count; a count below
-        ``min_periods_predict`` means ``transform`` injected a sentinel
-        target. Mirrors :meth:`BaseSequenceEstimator._below_floor_mask`
-        so the frozen-Phase-4 Trainer drops the same windows the
-        estimator's recomputed calibration fold already excludes.
+        Delegates to :func:`seq_sklearn.data.splits.below_floor_mask`,
+        the single source the estimator's calibration-fold / predict
+        path also uses, so the Trainer's train / val drop and the
+        estimator's drop cannot diverge.
         """
-        floor = self.transformer.config.min_periods_predict
-        codes, counts = np.unique(entity_ids, return_counts=True)
-        below = set(codes[counts < floor].tolist())
-        return np.array([e in below for e in entity_ids], dtype=bool)
+        return below_floor_mask(entity_ids, self.transformer.config.min_periods_predict)
 
     def fit(
         self,
@@ -380,6 +379,17 @@ class Trainer:
         below = self._below_floor_mask(entity_ids)
         train_idx = train_idx[~below[train_idx]]
         val_idx = val_idx[~below[val_idx]]
+        # Symmetric with the estimator's empty-calibration-fold guard:
+        # if every train / val window was below-floor, fail loudly here
+        # rather than hand Lightning an empty loader (silent EarlyStopping
+        # / checkpoint degradation on a never-logged val_loss).
+        if train_idx.size == 0 or val_idx.size == 0:
+            raise ConfigError(
+                "the train / val fold is empty after dropping below-floor "
+                f"windows: every entity has fewer than min_periods_predict="
+                f"{self.transformer.config.min_periods_predict} rows. Lower "
+                "min_periods_predict or supply longer-tenure entities."
+            )
 
         class_weights = self._class_weights(train_idx, batch["target"])
 

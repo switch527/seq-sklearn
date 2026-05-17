@@ -13,7 +13,7 @@ import numpy as np
 
 from seq_sklearn.errors import ConfigError
 
-__all__ = ["compute_three_way_split", "window_time_index"]
+__all__ = ["below_floor_mask", "compute_three_way_split", "window_time_index"]
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,23 @@ def window_time_index(entity_ids: np.ndarray) -> np.ndarray:
         )
     _values, counts = np.unique(entity_ids, return_counts=True)
     return np.concatenate([np.arange(c) for c in counts])
+
+
+def below_floor_mask(entity_ids: np.ndarray, floor: int) -> np.ndarray:
+    """Per-window mask of entities with fewer than ``floor`` windows.
+
+    ``TabularToSequence.transform`` emits exactly one window per entity
+    row and injects a sentinel target (``-1`` classification / ``NaN``
+    regression) for entities whose row count is below
+    ``min_periods_predict``. Both the Trainer (so train / val never fit
+    a sentinel) and the estimator's calibration fold / predict path must
+    exclude the same windows; this is the single implementation both
+    delegate to so the rule cannot drift between them (the same
+    single-source pattern as :func:`window_time_index`).
+    """
+    codes, counts = np.unique(entity_ids, return_counts=True)
+    below = set(codes[counts < floor].tolist())
+    return np.array([e in below for e in entity_ids], dtype=bool)
 
 
 def compute_three_way_split(

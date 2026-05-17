@@ -40,7 +40,11 @@ from seq_sklearn.config._adapters import (
 )
 from seq_sklearn.config.base import BaseModelConfig
 from seq_sklearn.config.tabular import TabularToSequenceConfig
-from seq_sklearn.data.splits import compute_three_way_split, window_time_index
+from seq_sklearn.data.splits import (
+    below_floor_mask,
+    compute_three_way_split,
+    window_time_index,
+)
 from seq_sklearn.data.tabular_to_sequence import TabularToSequence
 from seq_sklearn.errors import ConfigError, DataContractError, NotFittedError
 from seq_sklearn.models._backbone import BackboneOutput
@@ -591,10 +595,7 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         breach WARNING is emitted once per call by ``transform`` itself.
         """
         entity_ids = batch["entity_id"].cpu().numpy()
-        floor = self.transformer_.config.min_periods_predict
-        codes, counts = np.unique(entity_ids, return_counts=True)
-        below_codes = set(codes[counts < floor].tolist())
-        return np.array([e in below_codes for e in entity_ids], dtype=bool)
+        return below_floor_mask(entity_ids, self.transformer_.config.min_periods_predict)
 
     def _check_fitted(self) -> None:
         if not hasattr(self, "transformer_"):

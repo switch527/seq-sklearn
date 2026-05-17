@@ -983,6 +983,16 @@ STABLE.
 2. Calls `data.splits.compute_three_way_split(...)` for the train /
    val / cal split (F2). All split logic lives in `data/splits.py`;
    the Trainer does not implement split semantics inline.
+2a. Drops below-`min_periods_predict` windows from `train_idx` /
+   `val_idx` via `data.splits.below_floor_mask` (the shared helper the
+   estimator's calibration fold / predict path also uses). Those
+   windows carry sentinel targets (`-1` classification / `NaN`
+   regression) from `transform`; training on them raises in
+   `_class_weights` (`torch.bincount(-1)`) or trips the F9
+   non-finite-loss abort. If every train / val window is below-floor
+   the Trainer raises `ConfigError` (symmetric with the estimator's
+   empty-calibration-fold guard) rather than handing Lightning an
+   empty loader.
 3. Builds DataLoaders with the F5 defaults
    (`num_workers=min(4, os.cpu_count() or 1)`, `pin_memory=True` on CUDA,
    `persistent_workers=True` when `num_workers > 0`).
@@ -2134,6 +2144,12 @@ def save(self, path: str | Path) -> None:
 def load(cls, path: str | Path) -> "BaseSequenceEstimator":
     weights, state = load_weights_and_state(path)  # UserWarning on version mismatch
     obj = cls(task_type=state["task_type"])
+    # `loss` is the one adapter __init__ stores verbatim as None (F5
+    # task-aware default injection must see "unspecified"); restore a
+    # default LossParams before set_params so persisted `loss__*`
+    # leaves have an object to route onto instead of None.set_params.
+    if obj.loss is None and any(k.startswith("loss__") for k in state["hyperparams"]):
+        obj.loss = LossParams()
     obj.set_params(**state["hyperparams"])         # restores the 6 adapters + scalars
     obj.config_ = cls._config_cls.model_validate(state["config"])
     obj.transformer_ = TabularToSequence.deserialize(...)
@@ -3127,11 +3143,12 @@ Gemini final-pass (Phase 1-6 integration, post-consensus):
   to `_class_weights` (`torch.bincount` on `-1` raises) and the loss
   (NaN regression target trips the F9 abort). The Phase-6a ledger had
   noted this exposure existed in the frozen Phase-4 Trainer but left it
-  unaddressed; the integration pass correctly re-raised it. Fixed:
-  `Trainer._below_floor_mask` (mirrors the estimator's) drops below-floor
-  windows from `train_idx` / `val_idx` before class-weights / sampler /
-  loaders. Deliberate frozen-Phase-4 touch, reviewed by the post-Gemini
-  confirming swarm.
+  unaddressed; the integration pass correctly re-raised it. Fixed (a
+  deliberate frozen-Phase-4 touch): `Trainer._below_floor_mask` drops
+  below-floor windows from `train_idx` / `val_idx` before class-weights
+  / sampler / loaders. (The duplicated mask logic was subsequently
+  hoisted to a shared `data/splits` helper, see the confirming-swarm
+  block below.)
 - **`optuna_trial` typed `object` contradicting A16 (Gemini
   IMPROVEMENT, verified).** `optuna` is a hard dependency (A18,
   pyproject.toml), so annotating `optuna_trial: object | None` and
@@ -3143,6 +3160,38 @@ Gemini final-pass (Phase 1-6 integration, post-consensus):
   the F4 schema invariants enforce structural presence and the
   cast-narrowing matches the established `load()` convention; Gemini
   itself offered "or leave as-is" for this reason.
+
+Post-Gemini confirming swarm (Phase 1-6 integration):
+
+- **`below_floor_mask` de-duplicated into `data/splits.py` (arch-opus /
+  code-opus / qa-opus IMPROVEMENT).** The Trainer and estimator each
+  carried a copy of the `count < min_periods_predict` rule, the exact
+  drift hazard the shared `window_time_index` helper was factored to
+  prevent. Hoisted to `seq_sklearn.data.splits.below_floor_mask`;
+  `Trainer._below_floor_mask` and `BaseSequenceEstimator._below_floor_mask`
+  are now thin adapters delegating to it (single source, cannot drift).
+  Direct `splits` unit tests added.
+- **Trainer empty-fold guard (code-opus / arch-opus IMPROVEMENT).** An
+  all-below-floor train / val fold was silently handed to Lightning as
+  an empty loader (EarlyStopping / checkpoint degrade on a never-logged
+  `val_loss`). `Trainer.fit` now raises `ConfigError` after the filter
+  when `train_idx` or `val_idx` is empty, symmetric with the estimator's
+  empty-calibration-fold guard. `test_fit_all_below_floor_raises_configerror`
+  covers it.
+- **Classifier `bincount(-1)` arm tested (qa-sonnet / qa-opus
+  IMPROVEMENT).** The C2 filter protects both the regression NaN->F9
+  arm AND the classifier multiclass + class_weighted
+  `torch.bincount(-1)` arm, but only the regressor arm had a regression
+  test. Added `test_fit_filters_below_floor_classifier_class_weighted`
+  (multiclass + class_weighted + below-floor entities).
+- **C1 multi-leaf round-trip (qa-sonnet / qa-opus IMPROVEMENT).**
+  `test_save_load_with_explicit_loss_adapter_round_trips` now saves a
+  `LossParams` with non-default `label_smoothing` / `focal_gamma` and
+  asserts every leaf (not just `strategy`) survives load and clone.
+- **A7 / A17 doc sync (arch-sonnet IMPROVEMENT).** A7 gains the
+  below-floor filter step (2a); the A17 `load()` pseudocode shows the
+  `LossParams` pre-injection so a future family implementor reading the
+  canonical reference does not reproduce the C1 bug.
 
 ## Deferred
 
@@ -3641,3 +3690,16 @@ Phase 6b (family-base Claude swarm, round 1):
   determinism are all value-level and already pinned). A test that
   fails only on the grad graph would assert an internal detail with no
   user-visible contract; low value for the maintenance cost.
+
+Post-Gemini confirming swarm (Phase 1-6 integration):
+
+- **Factor the C1 loss-restore into a base classmethod (arch-opus
+  IMPROVEMENT-3).** Deferred to Phase 7: the `if obj.loss is None ...`
+  restore is inline in `load()`. A17 designates `_restore_family_state`
+  / `_build_backbone_head` / `_build_calibrator_from` as the family
+  override surface, NOT `load()` itself, and no v1 family overrides
+  `load()`. Extracting a `_restore_default_loss_adapter` hook is
+  speculative until a Phase-7 family actually overrides `load`; revisit
+  then so the abstraction is shaped by a real second caller rather than
+  guessed. The A17 pseudocode now documents the step so a Phase-7
+  author cannot miss it.

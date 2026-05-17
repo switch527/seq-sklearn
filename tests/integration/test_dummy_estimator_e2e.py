@@ -14,7 +14,13 @@ import pytest
 import sklearn.base
 import torch
 
-from seq_sklearn.config._adapters import LossParams, SchedulerParams, TabularConfigParams
+from seq_sklearn.config._adapters import (
+    LossParams,
+    SamplerParams,
+    SchedulerParams,
+    TabularConfigParams,
+)
+from seq_sklearn.errors import ConfigError
 from tests._test_models._dummy_estimator import _DummySequenceClassifier
 
 
@@ -222,13 +228,100 @@ def test_save_load_with_explicit_loss_adapter_round_trips(
     # the bare object; load()'s set_params then routed `loss__strategy`
     # to None.set_params -> AttributeError. Every other test uses the
     # loss=None default, so this shipped untested. The reloaded
-    # estimator must predict byte-equal AND clone.
+    # estimator must both predict byte-equal and survive clone().
     _force_cpu(monkeypatch)
     x, y = _binary_panel()
-    est = _estimator(loss=LossParams(strategy="cross_entropy")).fit(x, y)
+    est = _estimator(
+        loss=LossParams(strategy="cross_entropy", label_smoothing=0.1, focal_gamma=3.0)
+    ).fit(x, y)
     before = est.predict_proba(x)
     est.save(tmp_path)  # type: ignore[arg-type]
     reloaded = _DummySequenceClassifier.load(tmp_path)  # type: ignore[arg-type]
     assert np.array_equal(reloaded.predict_proba(x), before)
-    assert reloaded.get_params(deep=True)["loss__strategy"] == "cross_entropy"
-    sklearn.base.clone(reloaded)  # must not raise
+    # every loss leaf (not just strategy) survives restore -> set_params
+    params = reloaded.get_params(deep=True)
+    assert params["loss__strategy"] == "cross_entropy"
+    assert params["loss__label_smoothing"] == 0.1
+    assert params["loss__focal_gamma"] == 3.0
+    clone = sklearn.base.clone(reloaded)  # must not raise
+    assert clone.get_params(deep=True)["loss__label_smoothing"] == 0.1
+
+
+def _mixed_multiclass_panel() -> tuple[pd.DataFrame, np.ndarray]:
+    """16 above-floor (8-row) + 4 below-floor (2-row) entities, 3 classes."""
+    rng = np.random.default_rng(11)
+    rows: list[dict[str, object]] = []
+    y: list[int] = []
+    spec = [(e, 8) for e in range(16)] + [(100 + e, 2) for e in range(4)]
+    for eid, n in spec:
+        label = eid % 3
+        sr = float(label) + rng.normal(0, 0.1)
+        for t in range(n):
+            rows.append(
+                {
+                    "id": eid,
+                    "time": pd.Timestamp("2021-01-01") + pd.offsets.Day(t),
+                    "sr": sr,
+                    "tr": float(label) + 0.3 * rng.normal(),
+                }
+            )
+            y.append(label)
+    return pd.DataFrame(rows), np.asarray(y)
+
+
+def _below_tab() -> TabularConfigParams:
+    return TabularConfigParams(
+        static_real_cols=("sr",),
+        time_varying_real_cols=("tr",),
+        lookback=4,
+        min_periods=1,
+        min_periods_predict=3,
+    )
+
+
+def test_fit_filters_below_floor_classifier_class_weighted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The other C2 arm: classifier multiclass + class_weighted reaches
+    # torch.bincount over the train fold; an unfiltered -1 sentinel
+    # (below-floor classification target) raises RuntimeError. The
+    # regressor regression test only covers the NaN->F9 arm, so this
+    # pins the bincount arm independently.
+    _force_cpu(monkeypatch)
+    x, y = _mixed_multiclass_panel()
+    est = _estimator(
+        task_type="multiclass",
+        tabular_config=_below_tab(),
+        sampler=SamplerParams(strategy="class_weighted"),
+        loss=LossParams(strategy="cross_entropy"),
+    ).fit(x, y)  # must not raise RuntimeError from bincount(-1)
+    proba = est.predict_proba(x)
+    assert proba.shape[0] == len(x)
+    assert np.allclose(np.nansum(proba, axis=1)[: 16 * 5], 1.0)
+
+
+def test_fit_all_below_floor_raises_configerror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Empty-fold guard symmetric with the estimator's
+    # _calibration_fold: every entity below min_periods_predict means
+    # train/val empty after the filter -> loud ConfigError, not a
+    # silent empty Lightning loader.
+    _force_cpu(monkeypatch)
+    rng = np.random.default_rng(0)
+    rows: list[dict[str, object]] = []
+    y: list[int] = []
+    for e in range(12):  # every entity 2 rows, floor is 3
+        for t in range(2):
+            rows.append(
+                {
+                    "id": e,
+                    "time": pd.Timestamp("2021-01-01") + pd.offsets.Day(t),
+                    "sr": 0.0,
+                    "tr": float(rng.normal()),
+                }
+            )
+            y.append(e % 2)
+    est = _estimator(task_type="binary", tabular_config=_below_tab())
+    with pytest.raises(ConfigError, match="empty after dropping below-floor"):
+        est.fit(pd.DataFrame(rows), np.asarray(y))
