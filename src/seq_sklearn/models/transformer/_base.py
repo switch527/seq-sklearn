@@ -52,7 +52,6 @@ def _emit_arr(a: np.ndarray, device: torch.device | str | None) -> np.ndarray:
 
 
 def _reorder_np(a: np.ndarray, order: np.ndarray) -> np.ndarray:
-    """Index an emission-order ndarray back to caller X row order (F1)."""
     return a[order]
 
 

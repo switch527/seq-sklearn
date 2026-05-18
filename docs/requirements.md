@@ -1050,14 +1050,16 @@ compute it from `phi(window)`, so the label is a function of the window
 ending at `window_end` and is paired in the emitted panel row with that
 window's features and timestamp. The DGP therefore aligns with
 `TabularToSequence`'s default `prediction_step=0`. The F6 *spec* has
-no horizon shift; the generator *code* does declare a
-`prediction_step` parameter (default `1`) but uses it ONLY as a
-vestigial tail-window skip-guard - it never shifts the label forward
-(the label is always `phi(window)` per steps 7-9). The generator
-emits one contemporaneous `(features, target)` row per window. The S4
-refactor reconciles that vestigial code parameter (remove it, or make
-`generator.prediction_step>0` emit genuinely forecast-aligned targets
-matching `TabularToSequence.prediction_step>0`). The DGP signal is
+no horizon shift. The generator *code* historically declared a
+`prediction_step` parameter (default `1`) used ONLY as a vestigial
+tail-window skip-guard that never shifted the label (the label is
+always `phi(window)` per steps 7-9). The Phase 9 / S6 refactor
+RESOLVED that drift by removing the parameter and the skip-guard
+entirely (the S5-consensus'd Step 6 decision; the forecast-aligned
+alternative was deferred, see implementation_plan Deferred). The
+generator is now unconditionally contemporaneous and emits one
+`(features, target)` row per window, so an `n`-period entity yields
+`n` rows (single-period entities now appear). The DGP signal is
 unchanged by the Phase 9 `prediction_step`
 default correction, so the N1 thresholds below are NOT re-tuned and
 `dgp_version` is NOT bumped: the prior `prediction_step=1` default had

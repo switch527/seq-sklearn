@@ -9,6 +9,8 @@ internal sort is a non-identity permutation.
 Mandatory tests #3, #6, #7, #8, #11 (refactor_prediction_step.md).
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -16,6 +18,7 @@ import torch
 
 from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
+from seq_sklearn.logging import Event
 from seq_sklearn.models.transformer.tft.classifier import TFTClassifier
 from seq_sklearn.models.transformer.tft.regressor import TFTRegressor
 
@@ -110,6 +113,7 @@ def test_predict_output_row_order_shuffled_panel(monkeypatch: pytest.MonkeyPatch
 
 def test_below_min_periods_predict_entity_nan_filled_preserves_count(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """#6: a sub-floor entity is NaN-filled per row, never dropped."""
     _force_cpu(monkeypatch)
@@ -130,7 +134,8 @@ def test_below_min_periods_predict_entity_nan_filled_preserves_count(
     est = TFTClassifier(task_type="binary", tabular_config=tab, cal_fraction=0.0, **_COMMON).fit(
         panel, y
     )
-    proba = est.predict_proba(panel)
+    with caplog.at_level(logging.WARNING, logger="seq_sklearn"):
+        proba = est.predict_proba(panel)
 
     assert len(proba) == len(panel)
     short_mask = (panel[gen.id_col] == short_id).to_numpy()
@@ -139,6 +144,20 @@ def test_below_min_periods_predict_entity_nan_filled_preserves_count(
     assert np.isnan(proba[short_mask]).all()
     # Above-floor rows finite and index-aligned.
     assert np.isfinite(proba[~short_mask]).all()
+    # The breach warning is AGGREGATED per transform call: every record
+    # carries the entity COUNT (one sub-floor entity here; all others
+    # have 16 rows >= 4), never one warning per below-floor row/entity.
+    # That aggregation is the #6 contract; the predict path may invoke
+    # transform more than once internally, so assert the property on
+    # every record rather than coupling to that internal call count.
+    breach = [
+        r
+        for r in caplog.records
+        if getattr(r, "event", None) == Event.DATA_DUPLICATE_FLOOR_BREACH_COUNT
+    ]
+    assert len(breach) >= 1
+    assert all(r.payload["count"] == 1 for r in breach)
+    assert all(r.payload["min_periods_predict"] == 4 for r in breach)
 
 
 def _binary_panels(
@@ -291,3 +310,43 @@ def test_predict_with_attention_row_order_shuffled_panel(
         )
     # quantiles_used is fit-time metadata, shuffle-INVARIANT.
     assert ra.quantiles_used == rb.quantiles_used
+
+
+def test_predict_quantiles_row_order_shuffled_panel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3 (regressor array surface): predict / predict_quantiles follow caller order.
+
+    Closes the ledger #3 `predict_quantiles` clause and gives the
+    `_calibrated_matrix` array-path reorder (`_regressor.py`) an
+    adversarial oracle: existing int-id regressor tests coincidentally
+    hide the bug because the (id, time) sort is identity there.
+    """
+    _force_cpu(monkeypatch)
+    rgen = _gen("regression_quantile")
+    panel, ry = rgen.generate(seed=42)
+    panel = _string_ids(panel, rgen.id_col)
+    ry = ry.astype(float)
+    est = TFTRegressor(
+        task_type="regression_quantile",
+        tabular_config=_tab(rgen),
+        quantiles=(0.1, 0.5, 0.9),
+        cal_fraction=0.0,
+        **_COMMON,
+    ).fit(panel, ry)
+
+    pq = est.predict_quantiles(panel)
+    pt = est.predict(panel)
+    assert len(pq) == len(panel)
+    assert len(pt) == len(panel)
+    # Per-row variance so the [perm] oracle is non-vacuous: a no-op
+    # reorder (regression) would leave both calls in sorted order, and
+    # since the underlying data is identical the shuffled call would
+    # equal the unshuffled one, so pq[perm] != pq_s for a non-identity
+    # perm -> the assertion below fails. That is the mutation the test
+    # is built to catch.
+    assert not np.allclose(pq, pq[::-1])
+
+    sp, _, perm = _shuffle(panel, ry, seed=4)
+    pq_s = est.predict_quantiles(sp)
+    pt_s = est.predict(sp)
+    np.testing.assert_allclose(pq[perm], pq_s, rtol=1e-5, atol=1e-6, equal_nan=True)
+    np.testing.assert_allclose(pt[perm], pt_s, rtol=1e-5, atol=1e-6, equal_nan=True)

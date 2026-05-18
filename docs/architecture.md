@@ -4072,28 +4072,35 @@ Deferred (routed to design-review, NOT silently resolved):
   (the slow acceptance/calibration/snapshot e2e run nightly), a
   deliberate divergence from the 100% bar of code phases.
 
-Open investigation (tracked, NOT resolved): TFT learnability vs N1
-acceptance.
+TFT learnability vs N1 acceptance: RESOLVED (root cause found and
+fixed in the Phase 9 / S6 refactor).
 
-- **The v1 TFT does not currently learn the F6 binary task to the N1
-  bar.** Evidence: the quickstart trains a 64-dim TFT for 60 epochs at
-  `signal_strength=0.9` and scores ~0.59-0.62 accuracy *on its own
-  training data* (near-chance), under both `constant` and
-  `cosine_with_warmup` schedules. This was latent because no test
-  before Phase 9 asserted predictive accuracy (the Phase 7 e2e tests
-  assert only output shape / finiteness). It implicates both
-  `tests/e2e/test_quickstart.py` (A14 >=0.75, now `xfail`,
-  non-strict, assertion unchanged) and the slow
-  `tests/e2e/test_acceptance_thresholds.py` (same N1 thresholds, never
-  run). Candidate root causes, priority order: (1) an eval/training
-  defect or a predict-to-`y` alignment bug in the Phase 7 TFT
-  (most serious); (2) model/optimization inadequacy on F6 within a sane
-  budget; (3) F6 DGP signal vs N1 thresholds mis-calibrated. This is a
-  v1-readiness question, not a Phase 9 test defect. A focused
-  root-cause deep-dive follows this checkpoint commit; the `xfail` and
-  this entry are the explicit in-repo annotation of the gap. A14 is NOT
-  weakened (the >=0.75 assertion and the slow acceptance thresholds
-  stand); the marker is removed once the root cause is fixed.
+- **Root cause: the `prediction_step=1` default re-aligned the
+  already-contemporaneous F6 panel into a 1-step forecast.** Evidence
+  from the controlled deep-dive: on the same F6 data a GBDT baseline
+  scored ~0.98 AUC while the TFT scored ~0.68 at `prediction_step=1`
+  vs ~0.94 at `prediction_step=0`; the quickstart scored ~0.59-0.62
+  on its own training data only because candidate (1) (a
+  predict-to-`y` / windowing alignment defect) was real: F6 is
+  contemporaneous by steps 7-9, so a forecast-shifted target made the
+  task near-unlearnable. It was latent because no pre-Phase-9 test
+  asserted predictive accuracy. NOT model inadequacy and NOT a
+  DGP/threshold mis-calibration (candidates 2 and 3 ruled out: the
+  same model clears the bar at `prediction_step=0`). A secondary
+  sklearn-contract bug surfaced in the same investigation (predict
+  returned internal `(id, time)` sorted order, not caller `X` row
+  order; masked by int-id panels) and was fixed under the same F1
+  contract.
+- **Fix (full governance pipeline S1-S8).** `prediction_step` default
+  `1 -> 0` (contemporaneous; `>0` is opt-in forecast with a horizon-
+  edge clamp) plus the F1 caller-row-order restore contract. A14 was
+  NOT weakened: the quickstart `>=0.75` assertion is unchanged and
+  the TFT-learnability `xfail` was REMOVED in S6 (the test now passes
+  hard: ~0.59-0.62 pre-fix -> >=0.75 post-fix). The slow
+  `tests/e2e/test_acceptance_thresholds.py` N1 thresholds stand and
+  pass. Mandatory test #4 pins the contemporaneous-default signal
+  floor so a regression to `prediction_step=1` is caught in the inner
+  loop.
 
 Root cause RESOLVED (deep-dive outcome; pending the staged
 doc/code consensus pipeline):
@@ -4137,15 +4144,17 @@ doc/code consensus pipeline):
   `transform(x_cal)`-sorted outputs with caller-order `y_cal` and must
   reorder by the per-call permutation before pairing (F2). Specified
   in F1 and the A5 transform step above.
-- **F6 generator vestigial `prediction_step` skip-guard (in-scope for
-  the refactor plan).** `generator.py`'s `target_idx = window_end +
-  prediction_step; if target_idx >= n_periods: continue` only trims
-  tail windows; it never shifts the label (F6 is contemporaneous by
-  steps 7-9). With the default `0` it is dead/incoherent. The S4
-  refactor plan MUST decide its fate (remove it, or make
-  `generator.prediction_step>0` emit genuinely forecast-aligned
-  targets so forecast-mode data matches `TabularToSequence.
-  prediction_step>0`); it must not be silently left.
+- **F6 generator vestigial `prediction_step` skip-guard (RESOLVED in
+  S6).** `generator.py`'s old `target_idx = window_end +
+  prediction_step; if target_idx >= n_periods: continue` only trimmed
+  tail windows; it never shifted the label (F6 is contemporaneous by
+  steps 7-9). The S5-consensus'd refactor plan Step 6 decided to
+  REMOVE the parameter and the skip-guard entirely (the forecast-
+  aligned alternative was deferred, implementation_plan Deferred);
+  S6 implemented the removal. The generator is now unconditionally
+  contemporaneous (one row per window; `n`-period entity yields `n`
+  rows; single-period entities now appear), pinned by mandatory
+  test #12.
 - **Governance**: this is an assumption changed since Phase 1, so it
   goes through the full pipeline: req/arch/impl-plan revision -> Claude
   design-review consensus -> Gemini design consensus -> point-for-point

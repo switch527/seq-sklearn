@@ -602,3 +602,52 @@ ZERO hits in `src/seq_sklearn/data/synthetic/`; no unclassified
 implicit `=1` reliance. All 8 generator `prediction_step=` kwarg
 sites swept; the generator `prediction_step=-1` ValueError test
 removed (covered by #12).
+
+## S7 Claude code-review ledger (Addressed / Deferred)
+
+Round 1 (dual-model swarm on `git diff 67172c0..4d4f343`):
+style-opus/sonnet APPROVE (0/0/2N); code-opus APPROVE (0C/3I/2N);
+code-sonnet APPROVE (0C/2I/1N); arch-opus REQUEST_CHANGES (0C/2I/2N,
+the RC driven by doc-drift IMPROVEMENTs); qa-opus REQUEST_CHANGES
+(3C/2I/1N); qa-sonnet REQUEST_CHANGES (2C/3I/2N). Addressed in R1:
+- qa-opus C1 (#4 mis-marked `slow`, defeating its inner-loop
+  purpose): retuned to a measured <30s footprint (ne=36, pe=14,
+  ep=12, hs=16 -> acc ~0.80 in ~8s) and the `slow` mark REMOVED so
+  it runs in `pytest -m "not slow"`.
+- qa-opus C2/C3 + qa-sonnet C1 (ledger #3 omitted `predict_quantiles`
+  / the regressor `_calibrated_matrix` array-path reorder had no
+  adversarial oracle): added
+  `test_predict_quantiles_row_order_shuffled_panel` (regressor
+  quantile, shuffled string-id, mutation-sensitive).
+- qa-sonnet C2 (#6 missing the "exactly one aggregated breach
+  warning" assertion): added a `caplog` assertion pinning the
+  aggregation contract (every breach record carries the entity
+  count, not one-per-entity) on the predict path.
+- arch-opus I1/I2 + code-opus I3 (doc drift): `requirements.md` F6
+  prose and the `architecture.md` Phase 9 ledger updated to RESOLVED
+  (generator `prediction_step` removed; TFT-learnability root cause
+  found and fixed; quickstart `xfail` removed).
+- code-opus I1 + code-sonnet I1 + qa I1 (`_regressor._calibrated_
+  matrix` returned a dead caller-order `below` mask): now returns the
+  unpermuted sorted-space mask with a docstring stating only the
+  first element carries the F1 caller-order guarantee.
+- style-opus N1 + style-sonnet N1/N2 + code-opus NITPICK: trivial
+  `_reorder_np` docstring and the test-name-restating docstring
+  removed; the redundant `np.asarray` re-copy on `input_row_order`
+  dropped.
+
+Deferred (tracked, reason recorded, consensus-valid):
+- The two calibration bands (`temperature` ECE, `conformal`
+  coverage) re-derivation -> S8/Gemini (implementation_plan Deferred
+  "S7 code-review"): only those two parametrize cases
+  `xfail(strict=False)`, band CONSTANTS unchanged (no unilateral
+  weakening); S8 re-derives against a multi-seed corrected-regime run
+  and restores hard assertions.
+- qa-sonnet I2 (`entity_id` `assert_allclose` vs `assert_array_equal`
+  in the uniform per-row loop): DEFERRED NITPICK; codes are 0..N-1
+  integers separated by >=1 so `atol=1e-6` is safe, and special-
+  casing one field breaks the uniform-loop clarity.
+- `Trainer.fit` `batch.pop` not test-pinned (carried plan N2):
+  remains DEFERRED as in the S5 ledger (backbone is key-agnostic; a
+  "key absent" assertion would couple a test to an internal batch-
+  dict shape the design leaves loose).

@@ -524,9 +524,9 @@ class TabularToSequence:
             "entity_id": torch.as_tensor(np.asarray(entity_rows, dtype=np.int64), dtype=torch.long),
             # Per-call, stateless (I-B): indexing any emission-order array
             # by this restores the caller's input X row order (F1).
-            "input_row_order": torch.as_tensor(
-                np.asarray(input_row_order, dtype=np.int64), dtype=torch.long
-            ),
+            # _restore_permutation returns an int64 argsort result, so a
+            # direct as_tensor (no re-copy) is sufficient.
+            "input_row_order": torch.as_tensor(input_row_order, dtype=torch.long),
         }
 
     def fit_transform(self, X: pd.DataFrame, y: object) -> dict[str, torch.Tensor]:  # noqa: N803

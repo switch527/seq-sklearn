@@ -850,7 +850,6 @@ def test_transform_input_row_order_is_stateless() -> None:
 
 
 def test_restore_permutation_inverts_a_dense_permutation() -> None:
-    """_restore_permutation is the inverse of a dense permutation."""
     emitted = np.array([3, 0, 2, 1])
     order = _restore_permutation(emitted, 4)
     # argsort of a dense permutation indexes emission order back to

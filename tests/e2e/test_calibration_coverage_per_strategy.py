@@ -108,8 +108,11 @@ _PS_REFACTOR_BAND_XFAIL = (
     "pinned against the buggy ps=1 regime; this case breaches its "
     "band marginally (ECE 0.061 vs 0.05; coverage 0.856 vs 0.85) "
     "under the corrected distribution. NOT a weakening: the band "
-    "constant is unchanged; the band is re-derived against the "
-    "corrected regime in S7/S8 review, then this xfail is removed."
+    "constant is unchanged. Tracked deferral (implementation_plan.md "
+    "Deferred -> 'S7 code-review ... Two calibration bands "
+    "re-derivation deferred to S8/Gemini'): S8/Gemini re-derives both "
+    "bands against a multi-seed corrected-regime run and converts "
+    "them back to hard assertions, then this xfail is removed."
 )
 
 

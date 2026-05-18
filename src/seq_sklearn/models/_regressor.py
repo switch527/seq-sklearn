@@ -76,7 +76,7 @@ class BaseSequenceRegressor(RegressorMixin, BaseSequenceEstimator):
             self.quantiles_ = np.asarray(state["quantiles_"], dtype=np.float64)
 
     def _calibrated_matrix(self, X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:  # noqa: N803
-        """``(calibrated (N, Q) matrix, below-floor row mask)``.
+        """``(calibrated (N, Q) matrix in caller X row order, below mask)``.
 
         Calibrated when a calibrator is fitted, else raw. Shared so the
         point estimate (``predict``) is the same median
@@ -84,6 +84,13 @@ class BaseSequenceRegressor(RegressorMixin, BaseSequenceEstimator):
         by the calibration offset. Below-floor entity rows are
         NaN-filled here so every regressor predict path satisfies the
         F NaN-in-output contract (never zero-filled).
+
+        The second element is the SORTED-space below-floor mask and is
+        currently discarded by both callers; it is left unpermuted on
+        purpose so a future caller cannot silently pair a caller-order
+        array with a caller-order mask through a path that never
+        validated the pairing. Only the first element carries the F1
+        caller-order guarantee.
         """
         raw, below, input_row_order = self._predict_raw(X)
         # _calibrate_raw NaN-fills in sorted (transform) space; restore
@@ -92,7 +99,7 @@ class BaseSequenceRegressor(RegressorMixin, BaseSequenceEstimator):
         # predict_with_attention, which reorders per-field in Step 4;
         # reordering there would double-permute the attention path).
         calibrated = self._calibrate_raw(raw, below)
-        return calibrated[input_row_order], below[input_row_order]
+        return calibrated[input_row_order], below
 
     def _calibrate_raw(self, raw: Tensor, below: np.ndarray) -> np.ndarray:
         """Calibrated ``(N, Q)`` matrix from raw head logits + below mask.
