@@ -4110,10 +4110,12 @@ doc/code consensus pipeline):
   alignment it reaches train AUC ~0.94 (a gradient-boosting baseline on
   the per-window features reaches ~0.98), versus AUC ~0.68 under the
   old default. F6 emits a contemporaneous target by spec (steps 7-9
-  compute it from `phi(window)`; the F6 spec has no horizon shift (the
-  generator code declares a vestigial `prediction_step` skip-guard,
-  default 1, that never shifts the label, reconciled in S4) and never
-  shifts the label). The sole defect: `TabularToSequence`'s default
+  compute it from `phi(window)`). The F6 spec has no horizon shift;
+  the generator code historically declared a vestigial
+  `prediction_step=1` skip-guard that never shifted the label,
+  removed in S6 per the S5-consensus'd Step 6 decision (see the
+  RESOLVED ledger entry below). The sole defect: `TabularToSequence`'s
+  default
   `prediction_step=1` re-aligned the already-contemporaneous panel to a
   1-step forecast, destroying the signal for the classification /
   regression task the library exists for. This contradicted the

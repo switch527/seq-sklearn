@@ -81,7 +81,13 @@ def _string_ids(panel: pd.DataFrame, id_col: str) -> pd.DataFrame:
 def _shuffle(
     panel: pd.DataFrame, y: np.ndarray, seed: int
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
-    """Return (shuffled panel, shuffled y, perm) with perm the new->old map."""
+    """Return (shuffled panel, shuffled y, perm).
+
+    ``perm`` is the index used as ``panel.iloc[perm]``: shuffled row
+    ``i`` is original row ``perm[i]``, so for any original-order
+    output array ``a``, ``a[perm]`` is the shuffled-order output. The
+    row-order oracle asserts ``a[perm] == predict(shuffled)``.
+    """
     rng = np.random.default_rng(seed)
     perm = rng.permutation(len(panel))
     sp = panel.iloc[perm].reset_index(drop=True)
