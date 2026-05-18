@@ -697,3 +697,15 @@ path uncovered on CPU CI, expected). The reorder branches in
 added covered code with new tests and removed no tests. Step 9
 coverage bar satisfied; qa-opus/qa-sonnet R2-I1 (no `--cov`
 artifact) resolved.
+
+Round 3 (dual-model confirming swarm): arch-opus APPROVE (0/0/0,
+the sole R2 blocker resolved by a030a18); code-opus APPROVE
+(0/0/0); qa-opus APPROVE (0C/0I/1N, only the carried deferred
+sub-floor-boundary NITPICK); style-sonnet APPROVE (0/0/0). All R1
+CRITICALs and the R2 IMPROVEMENT confirmed CLOSED; the calibration-
+band deferral is properly tracked in both docs.
+
+S7 Claude code-review consensus REACHED after 3 rounds (zero
+CRITICAL on the confirming round; every IMPROVEMENT resolved or
+deferred with a reason; only the carried sub-floor-boundary NITPICK
+remains). Cleared for S8 (Gemini code final pass).
