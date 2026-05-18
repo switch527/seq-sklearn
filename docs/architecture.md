@@ -3947,3 +3947,65 @@ Deferred:
   `cls._config_cls` access in `models/_base.load`; introducing a public
   classmethod accessor is a Phase 6 base-class API change outside Phase
   8 scope. Revisit when a v2/v3 estimator family needs the accessor.
+
+Phase 8 (Gemini cross-family final-pass, post-consensus):
+
+The scarce Gemini code final-pass ran after the 3-round Claude swarm
+consensus (file-access preflight passed: 7 targets readable). Gemini
+emitted CRITICAL: 1, IMPROVEMENT: 0, NITPICK: 0. The single path:line
+claim was verified against the source. Claude perspective: AGREED (a
+valid new CRITICAL, in scope, requirement-grounded, not hallucinated).
+Per the gemini-final-pass protocol a valid new Gemini CRITICAL
+invalidated the Claude consensus; the fix landed in d19192f and a
+confirming Round 4 swarm re-established consensus (0 CRITICAL across all
+8 agents; architecture and qa consensus explicitly re-established).
+
+Addressed:
+
+- **Gemini CRITICAL `suggest_params` leaks raw `pydantic.ValidationError`
+  (F8).** VERIFIED valid. `suggest_params` ended with an unguarded
+  `return config_cls(**merged)`. It is the documented body of the
+  Optuna `objective`, run inside `optuna_trial_guard`, which only
+  converts `ConfigError` / `TrainingError` to a pruned trial. A raw
+  `ValidationError` (an invalid `base` override, or a future config
+  validator) escaped the guard and, under `study.optimize(catch=())`,
+  terminated the whole study, the exact failure mode the guard exists
+  to prevent. Confirmed against `docs/requirements.md:1107` (F8
+  mandates the wrap) and the canonical `models/_base.py:247-248`
+  pattern. Fixed in d19192f: the final construction is wrapped
+  `try: ... except ValidationError as exc: raise ConfigError(str(exc))
+  from exc`, matching `BaseSequenceEstimator._build_config`. The
+  sampler stays closed under F5 by construction; this is
+  defense-in-depth at the public boundary.
+  `test_invalid_assembled_config_wrapped_as_configerror` (monkeypatched
+  bad model-shape so `10 % 3 != 0` trips the TFTConfig
+  heads-divide-hidden validator) revert-tests the wrap and keeps 100%
+  line+branch.
+- **Missing Gemini-final-pass ledger block (code-opus r4-I1).** This
+  block, restoring the Phase 5 / Phase 7 ledger-tracking precedent.
+
+Deferred:
+
+- **Base-override-induced `ValidationError` test (qa-opus r4-I1).**
+  The wrap is path-agnostic: it converts any `ValidationError` from
+  `config_cls(**merged)` regardless of which input made the assembly
+  invalid, and is already revert-tested via the deterministic
+  shape-induced case. `base` must be a valid frozen pydantic instance,
+  so a base-only trigger is not reliably constructible without
+  monkeypatching and would add no branch coverage (already 100%).
+  Fidelity-only, non-blocking per the raising agent. Revisit if a
+  reachable base-override failure mode is identified.
+
+Phase 8 (CPU/CUDA parity boundary check, post-consensus):
+
+- **GPU parity is not applicable to Phase 8.** Unlike Phase 7 (a real
+  TFT trained on CUDA), Phase 8 adds no tensor or device-bearing code:
+  `suggest_params`, `optuna_trial_guard`, and the
+  `config_to_estimator_kwargs` bridge are pure config sampling and
+  control flow. The only training-touching test
+  (`test_optuna_pruning_e2e.py`) is CPU-pinned and already runs green
+  in the gate. There is no Phase 8 numerical surface to validate
+  across CPU and CUDA, so a dedicated parity run would only
+  re-confirm Phase 7's already-passed result and needlessly occupy the
+  GPU. The v1 CPU+CUDA equal-support requirement remains validated by
+  the Phase 7 parity boundary check; Metal/ROCm stay out of v1 scope.
