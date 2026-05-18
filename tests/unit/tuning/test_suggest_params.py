@@ -82,6 +82,35 @@ def test_regressor_only_samples_regression_tasks_with_valid_quantiles() -> None:
     assert seen <= {"regression_point", "regression_quantile"}
 
 
+def test_regression_quantile_preserves_base_quantiles() -> None:
+    # The truthy arm of the quantile injection: a base that carries its
+    # own quantiles must NOT be overwritten with _DEFAULT_QUANTILES when
+    # regression_quantile is sampled. (coverage.py does not branch-split
+    # the ternary, so this needs an explicit value assertion.)
+    base = TFTConfig(
+        task_type="regression_quantile",
+        loss=LossConfig(strategy="pinball"),
+        quantiles=(0.25, 0.75),
+        tabular_config=TabularToSequenceConfig(
+            id_col="id",
+            time_col="t",
+            time_varying_real_cols=("x0",),
+        ),
+    )
+    study = optuna.create_study()
+    saw_quantile = False
+    for _ in range(200):
+        trial = study.ask()
+        cfg = suggest_params(trial, TFTRegressor, base=base)
+        if cfg.task_type == "regression_quantile":
+            saw_quantile = True
+            assert cfg.quantiles == (0.25, 0.75)  # base preserved
+        else:
+            assert cfg.quantiles is None
+        study.tell(trial, 0.0)
+    assert saw_quantile
+
+
 def test_attention_heads_always_divide_hidden_size() -> None:
     study = optuna.create_study()
     base = _base()

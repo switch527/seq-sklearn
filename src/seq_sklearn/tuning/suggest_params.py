@@ -22,6 +22,11 @@ from typing import Any
 
 import optuna
 
+from seq_sklearn.config._domains import (
+    CLASSIFICATION_TASK_TYPES,
+    REGRESSION_TASK_TYPES,
+    V1_TASK_TYPES,
+)
 from seq_sklearn.config._validity import legal_strategies_for, legal_task_loss_pairs
 from seq_sklearn.config.base import BaseModelConfig
 from seq_sklearn.config.tft import TFTConfig
@@ -34,22 +39,27 @@ __all__ = ["suggest_params"]
 
 logger = logging.getLogger(__name__)
 
-_CLASSIFICATION_LOSSES = frozenset({"cross_entropy", "focal"})
-_REGRESSION_LOSSES = frozenset({"mse", "mae", "huber", "pinball"})
-
-# v1 task types per model family, derived from the single F5 table so
-# this never becomes a hand-maintained parallel copy.
+# v1 task types per model family. The classification / regression split
+# and the v1 set are both single-sourced from config._domains, so no F5
+# taxonomy is re-encoded here. The (task, loss) pairs come from the F5
+# table for the legal-loss lookup below.
 _V1_PAIRS = legal_task_loss_pairs()
+_V1_SET = frozenset(V1_TASK_TYPES)
 _V1_CLASSIFICATION_TASKS: tuple[str, ...] = tuple(
-    sorted({t for (t, loss) in _V1_PAIRS if loss in _CLASSIFICATION_LOSSES})
+    t for t in CLASSIFICATION_TASK_TYPES if t in _V1_SET
 )
-_V1_REGRESSION_TASKS: tuple[str, ...] = tuple(
-    sorted({t for (t, loss) in _V1_PAIRS if loss in _REGRESSION_LOSSES})
-)
+_V1_REGRESSION_TASKS: tuple[str, ...] = tuple(t for t in REGRESSION_TASK_TYPES if t in _V1_SET)
 
 # Default quantile vector injected when regression_quantile is sampled
 # and `base` carries none. Monotone, in (0, 1) per the parent validator.
 _DEFAULT_QUANTILES: tuple[float, ...] = (0.1, 0.5, 0.9)
+
+# Fields the sampler always writes itself, so a required-without-default
+# config field among these does NOT force the caller to pass `base`.
+# Kept in sync with the merged-dict assignments below.
+_SAMPLER_POPULATED_FIELDS = frozenset(
+    {"task_type", "loss", "sampler", "calibration_strategy", "optimizer", "quantiles"}
+)
 
 
 def _suggest_tft_model_shape(trial: optuna.trial.BaseTrial) -> dict[str, object]:
@@ -129,6 +139,11 @@ def suggest_params(
             structural field (for TFT this MUST carry ``tabular_config``,
             which has no default). Required whenever ``model_class``'s
             config has a required field outside the search space.
+            ``quantiles`` is taken from ``base`` when the sampled task
+            is ``regression_quantile`` (falling back to
+            ``(0.1, 0.5, 0.9)`` only if ``base`` carries none); for
+            every other task it is forced to ``None`` (the parent
+            validator rejects quantiles on non-quantile tasks).
         search_advanced: also sample BETA ``advanced`` fields (no-op in v1).
         search_extras: also sample curated ALPHA ``extra`` keys (no-op in v1).
 
@@ -147,7 +162,7 @@ def suggest_params(
     required_non_search = {
         name
         for name, field in config_cls.model_fields.items()
-        if field.is_required() and name not in {"task_type", "loss"}
+        if field.is_required() and name not in _SAMPLER_POPULATED_FIELDS
     }
     if required_non_search and base is None:
         raise ConfigError(

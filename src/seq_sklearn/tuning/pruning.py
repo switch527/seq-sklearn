@@ -26,10 +26,12 @@ def optuna_trial_guard(trial: optuna.trial.BaseTrial) -> Generator[None, None, N
 
     :class:`ConfigError` and :class:`TrainingError` are re-raised as
     :class:`optuna.TrialPruned` with the original message, so the trial
-    is recorded as pruned and the study continues.
-    :class:`DataContractError`, :class:`KeyboardInterrupt`, and every
-    unexpected exception propagate unchanged so the study fails fast on
-    genuine bugs.
+    is recorded as pruned and the study continues. Everything else
+    propagates unchanged so the study fails fast on genuine bugs: this
+    deliberately includes ``DataContractError`` (a
+    :class:`~seq_sklearn.errors.SeqSklearnError` sibling of the caught
+    pair, never caught here because a broken input contract is a bug,
+    not a bad trial) and ``KeyboardInterrupt``.
 
     Args:
         trial: the active Optuna trial (used for the pruned-trial log

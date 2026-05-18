@@ -1,9 +1,11 @@
-"""Frozen-config to estimator-kwargs bridge (A16, not public API).
+"""Frozen-config to estimator-kwargs bridge (A16; not in ``__all__``).
 
 A sampled :class:`BaseModelConfig` is immutable pydantic; an estimator
 ``__init__`` takes the mutable :class:`sklearn.base.BaseEstimator`
 adapters (A4 step 3). The round-trip is non-obvious, so it lives in one
 documented place rather than being open-coded in every ``objective``.
+Importable directly (like ``check_combo``) but kept out of the
+``tuning`` package's headline ``__all__``.
 
 Per-model dispatch: each concrete config class registers its nested
 sub-config to adapter map in ``_ADAPTER_MAP_BY_CONFIG``. v2 / v3 add
@@ -22,6 +24,7 @@ from seq_sklearn.config._adapters import (
 )
 from seq_sklearn.config.base import BaseModelConfig
 from seq_sklearn.config.tft import TFTConfig
+from seq_sklearn.errors import ConfigError
 
 # Nested pydantic sub-config field name -> mutable adapter class.
 _TFT_ADAPTER_MAP: dict[str, type[BaseEstimator]] = {
@@ -60,6 +63,12 @@ def config_to_estimator_kwargs(config: BaseModelConfig) -> dict[str, object]:
     adapter_map = adapter_map_for(type(config))
     kwargs: dict[str, object] = {}
     for field_name, adapter_cls in adapter_map.items():
+        if field_name not in raw:
+            raise ConfigError(
+                f"{type(config).__name__}'s adapter map names sub-config "
+                f"{field_name!r}, but it is absent from the config dump; "
+                "the adapter map and the config schema are out of sync."
+            )
         sub_dict = raw.pop(field_name)
         kwargs[field_name] = adapter_cls(**sub_dict)
     return {**raw, **kwargs}

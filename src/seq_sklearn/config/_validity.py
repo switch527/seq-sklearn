@@ -83,8 +83,9 @@ def legal_strategies_for(
 
     Raises:
         ValueError: if ``task_type`` is a v1.1 task, or
-            ``(task_type, loss_strategy)`` is not a legal cell. The
-            message mirrors :func:`check_combo`.
+            ``(task_type, loss_strategy)`` is not a legal cell.
+            :func:`check_combo` delegates its v1.1 and cell-lookup
+            checks here, so both raise the identical message.
     """
     if task_type in V1_1_TASK_TYPES:
         raise ValueError(

@@ -125,7 +125,7 @@ src/seq_sklearn/
     suggest_params.py               suggest_params(trial, model_class, *, search_advanced, search_extras)
     pruning.py                      optuna_trial_guard context manager
     _alpha_keys.py                  curated per-family ALPHA-key enum lists (empty in v1)
-    _config_to_estimator_kwargs.py  _config_to_estimator_kwargs + _ADAPTER_MAP_BY_CONFIG registry
+    _estimator_bridge.py            config_to_estimator_kwargs + _ADAPTER_MAP_BY_CONFIG registry
 ```
 
 ```
@@ -2007,11 +2007,11 @@ _ADAPTER_MAP_BY_CONFIG: dict[
 }
 
 
-def _adapter_map_for(config_cls: type[BaseModelConfig]) -> dict[str, type[BaseEstimator]]:
+def adapter_map_for(config_cls: type[BaseModelConfig]) -> dict[str, type[BaseEstimator]]:
     return _ADAPTER_MAP_BY_CONFIG[config_cls]
 
 
-def _config_to_estimator_kwargs(config: BaseModelConfig) -> dict[str, object]:
+def config_to_estimator_kwargs(config: BaseModelConfig) -> dict[str, object]:
     """Convert a pydantic config dump into the kwargs an estimator's
     `__init__` accepts. Every nested sub-config in the model's adapter
     map is popped from the dump and wrapped as the matching adapter
@@ -2021,9 +2021,11 @@ def _config_to_estimator_kwargs(config: BaseModelConfig) -> dict[str, object]:
     `_ADAPTER_MAP_BY_CONFIG`; the helper itself is per-model dispatch."""
     raw = config.model_dump(mode="json")  # mode='json' pins the
                                           # extra-tuple shape on disk
-    adapter_map = _adapter_map_for(type(config))
+    adapter_map = adapter_map_for(type(config))
     kwargs: dict[str, object] = {}
     for field_name, adapter_cls in adapter_map.items():
+        if field_name not in raw:        # adapter map vs schema drift
+            raise ConfigError(...)       # typed, not bare KeyError
         sub_dict = raw.pop(field_name)
         kwargs[field_name] = adapter_cls(**sub_dict)
     return {**raw, **kwargs}
@@ -2031,7 +2033,7 @@ def _config_to_estimator_kwargs(config: BaseModelConfig) -> dict[str, object]:
 def objective(trial: optuna.Trial) -> float:
     with optuna_trial_guard(trial):
         config = suggest_params(trial, TFTClassifier, base=BASE_CONFIG)
-        model = TFTClassifier(**_config_to_estimator_kwargs(config))
+        model = TFTClassifier(**config_to_estimator_kwargs(config))
         model.fit(
             X_train, y_train,
             calibration_set=(X_cal, y_cal),
@@ -2040,17 +2042,22 @@ def objective(trial: optuna.Trial) -> float:
         return model.score(X_val, y_val)
 ```
 
-`_config_to_estimator_kwargs` is documented here (not exported)
-because the round-trip between a frozen pydantic dump and the
-mutable BaseEstimator-adapter kwargs is non-obvious. v2 / v3
-estimators with their own nested config adapters add similar
-helpers. The shape is the same: pop every sub-config dict from
-`model_dump(mode="json")`, wrap each in the matching adapter, pass
-the rest through. Phase 8's
+`config_to_estimator_kwargs` (in `tuning/_estimator_bridge.py`) is
+importable directly but kept out of the `tuning` package's headline
+`__all__`, mirroring the `check_combo` / `legal_task_loss_pairs`
+cross-module-helper convention (a publicly-named function in a
+`_`-prefixed module). It is documented here because the round-trip
+between a frozen pydantic dump and the mutable BaseEstimator-adapter
+kwargs is non-obvious. v2 / v3 estimators with their own nested config
+adapters add similar helpers. The shape is the same: pop every
+sub-config dict from `model_dump(mode="json")`, wrap each in the
+matching adapter (raising `ConfigError` if the adapter map names a
+sub-config the schema dump lacks), pass the rest through. Phase 8's
 `test_config_to_estimator_kwargs_round_trips_all_adapters` and
-`test_config_to_estimator_kwargs_extra_tuple_type_survives` pin the
-helper's behavior (one covers every adapter slot; the second pins
-the `extra` tuple round-trip under `mode="json"`).
+`test_config_to_estimator_kwargs_extra_tuple_type_survives` (in
+`tests/unit/tuning/test_estimator_bridge.py`) pin the helper's
+behavior (one covers every adapter slot; the second pins the `extra`
+tuple round-trip under `mode="json"`).
 
 The trial reaches `_LightningModule` via `fit`, not via the pydantic
 config. `BaseSequenceEstimator.fit` accepts `optuna_trial:
@@ -3473,7 +3480,7 @@ Hyperparameter-strategy fold-in (Round 1):
   and `search_extras` keyword-only flags. Default behavior samples
   ONLY STABLE fields; the per-model default search space is defined
   by the A16 `suggest_params` implementation (Phase 8).
-- **A16 `_config_to_estimator_kwargs`** generalized to handle six
+- **A16 `config_to_estimator_kwargs`** generalized to handle six
   nested fields per the `_TFT_ADAPTER_MAP` pattern. The helper
   pops every sub-config dict from `model_dump(mode="json")` and
   wraps each in its matching adapter; `mode="json"` is the pinned
@@ -3496,7 +3503,7 @@ Hyperparameter-strategy fold-in (Round 2):
   clone tests (one per adapter); architecture A4 clone-safety
   paragraph and the Round 1 ledger entry rewritten to name each
   adapter explicitly.
-- **`_config_to_estimator_kwargs` untested** (qa r2-C2). Two new
+- **`config_to_estimator_kwargs` untested** (qa r2-C2). Two new
   named tests added to the Phase 8 test roster:
   `test_config_to_estimator_kwargs_round_trips_all_adapters` (every
   adapter slot survives) and
@@ -3514,13 +3521,13 @@ Hyperparameter-strategy fold-in (Round 2):
   scope only fields living on nested sub-configs; model-shape
   fields on `<Model>Config` (`hidden_size`, `attention_heads`, etc.)
   ARE flat top-level kwargs.
-- **`_adapter_map_for` undefined** (arch r2-I4). Architecture A16
+- **`adapter_map_for` undefined** (arch r2-I4). Architecture A16
   defines the registry inline: `_ADAPTER_MAP_BY_CONFIG:
   dict[type[BaseModelConfig], dict[str, type[BaseEstimator]]]` keyed
-  by concrete config class, plus a one-line `_adapter_map_for` body
+  by concrete config class, plus a one-line `adapter_map_for` body
   looking up the registry.
 - **`model_dump` mode inconsistency between strategy and arch**
-  (qa r2-I1). The strategy doc's `_config_to_estimator_kwargs`
+  (qa r2-I1). The strategy doc's `config_to_estimator_kwargs`
   code sample originally used bare `model_dump()`; updated to
   `model_dump(mode="json")` matching the architecture A16 sample
   and the `test_extra_dict_survives_json_roundtrip` contract.
@@ -3882,3 +3889,61 @@ raised is out-of-scope, requirement-refuted, behaviorally inert, and of
 the already-deferred class). The 4-round Claude consensus stands; no
 fifth Claude round is warranted for a downgraded forward-looking note.
 The disagreement is surfaced to the user for override.
+
+Phase 8 (Optuna integration Claude swarm, round 1):
+
+Addressed:
+
+- **A16 bridge naming drift (arch-opus/arch-sonnet r1-C1).** The A16
+  prose named the module `_config_to_estimator_kwargs.py` and the
+  helpers `_config_to_estimator_kwargs` / `_adapter_map_for` with
+  leading underscores; the shipped code uses `_estimator_bridge.py`
+  with `config_to_estimator_kwargs` / `adapter_map_for`. Both arch
+  reviewers judged the code names correct (the `check_combo` /
+  `legal_task_loss_pairs` cross-module-helper convention: publicly
+  named in a `_`-prefixed module). Fixed doc-only: A16 prose, the
+  layout table, the recommended-objective code block, and the
+  `docs/implementation_plan.md` Phase 8 roster (module + test
+  filenames `test_estimator_bridge.py` / `test_pruning.py`) now match
+  the shipped names. Test FUNCTION names
+  (`test_config_to_estimator_kwargs_*`) were already correct and kept.
+- **F5 family split re-encoded (arch-sonnet r1-I2).** The hand-kept
+  `_CLASSIFICATION_LOSSES` / `_REGRESSION_LOSSES` frozensets were
+  replaced by `CLASSIFICATION_TASK_TYPES` / `REGRESSION_TASK_TYPES` in
+  `config/_domains.py` (the single F5 domain source), intersected with
+  `V1_TASK_TYPES`. No parallel taxonomy remains.
+- **`required_non_search` exemption too narrow (arch-sonnet r1-I).**
+  Widened to the full `_SAMPLER_POPULATED_FIELDS` set the sampler
+  always writes (`task_type, loss, sampler, calibration_strategy,
+  optimizer, quantiles`) so a future required-without-default field
+  among these does not wrongly force `base=`.
+- **Untyped bridge KeyError (arch-sonnet r1-I3).**
+  `config_to_estimator_kwargs` now raises `ConfigError` (not bare
+  `KeyError`) when the adapter map names a sub-config absent from the
+  dump.
+- **Quantile preservation undertested (code-opus/qa-opus r1-I1).**
+  Behavior was already correct (base quantiles preserved for
+  `regression_quantile`, defaulted only when absent, nulled for
+  non-quantile tasks); added `test_regression_quantile_preserves_base_quantiles`
+  and a `base:` docstring clause making the contract explicit.
+- **`legal_strategies_for` only transitively covered (qa r1-I1).**
+  Added direct unit tests for the exact-cell return, the v1.1 guard,
+  and the illegal-cell guard.
+- **e2e pruning asserted outcome not causality (qa-opus r1-I3).** The
+  MedianPruner e2e now also asserts both trials recorded a step-0
+  intermediate value, proving the A7
+  report -> should_prune -> _pending_prune -> deferred-raise chain ran
+  (not a pre-report failure).
+- **Doc-comment nitpicks.** `legal_strategies_for` docstring corrected
+  (check_combo delegates here, not the reverse); `pruning.py` docstring
+  explains why `DataContractError` propagates; `_estimator_bridge.py`
+  docstring reworded to "not in `__all__`".
+
+Deferred:
+
+- **`model_class._config_cls` protected access (code-sonnet r1-I2).**
+  pyright `reportPrivateUsage` WARNING (not an error; the gate bar is
+  zero errors and is met). It mirrors the library's own established
+  `cls._config_cls` access in `models/_base.load`; introducing a public
+  classmethod accessor is a Phase 6 base-class API change outside Phase
+  8 scope. Revisit when a v2/v3 estimator family needs the accessor.

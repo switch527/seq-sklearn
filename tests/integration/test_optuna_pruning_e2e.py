@@ -105,3 +105,11 @@ def test_optuna_median_pruner_prunes_second_trial(
 
     assert study.trials[0].state == optuna.trial.TrialState.COMPLETE
     assert study.trials[1].state == optuna.trial.TrialState.PRUNED
+    # Causality, not just outcome: the prune must have come through the
+    # A7 deferred-raise path (on_validation_epoch_end reports the metric,
+    # the raise is deferred to on_train_epoch_end). A trial that died
+    # before reporting would leave intermediate_values empty; both trials
+    # reported at step 0, so the report -> should_prune -> _pending_prune
+    # -> deferred-raise chain actually executed.
+    assert 0 in study.trials[1].intermediate_values
+    assert 0 in study.trials[0].intermediate_values

@@ -1117,8 +1117,8 @@ symbols, and Optuna integration works end-to-end.
 - `src/seq_sklearn/tuning/_alpha_keys.py` (new per architecture A4):
   curated per-family ALPHA-key enum lists. v1 ships empty;
   maintainers populate as ALPHA passthroughs land.
-- `src/seq_sklearn/tuning/_config_to_estimator_kwargs.py` (new per
-  architecture A16): `_config_to_estimator_kwargs` helper + the
+- `src/seq_sklearn/tuning/_estimator_bridge.py` (new per
+  architecture A16): `config_to_estimator_kwargs` helper + the
   `_ADAPTER_MAP_BY_CONFIG` registry + `_TFT_ADAPTER_MAP` per the
   A16 spec. Pops every nested sub-config from
   `config.model_dump(mode="json")` and wraps in the matching
@@ -1157,14 +1157,14 @@ symbols, and Optuna integration works end-to-end.
   `optuna_trial_guard` tests below, where the wrapped objective
   body needs `report` / `should_prune` to be no-ops without
   standing up a `Study`.
-- `tests/unit/tuning/test_config_to_estimator_kwargs.py` (new per
+- `tests/unit/tuning/test_estimator_bridge.py` (new per
   hyperparameter-strategy fold-in):
   `test_config_to_estimator_kwargs_round_trips_all_adapters`
   exercises every adapter slot;
   `test_config_to_estimator_kwargs_extra_tuple_type_survives`
   pins the `mode="json"` round-trip of `extra` tuples through
   adapter construction. Both load-bearing for the Optuna helper.
-- `tests/unit/tuning/test_trial_guard.py`: a `ConfigError` raised
+- `tests/unit/tuning/test_pruning.py`: a `ConfigError` raised
   inside the guard converts to `optuna.TrialPruned`; a
   `TrainingError` does the same; `DataContractError` and
   `KeyboardInterrupt` propagate.
@@ -1503,7 +1503,7 @@ single experienced engineer working full-time."
 | 6a (BaseSequenceEstimator + classifier + regressor + smoke skeleton + base tests) | 2-3 days |
 | 6b (transformer + recurrent family bases + AttentionOutput + family tests) | 2-3 days |
 | 7 | 3-4 days |
-| 8 | 2-3 days (post-fold-in: `_alpha_keys.py`, `_config_to_estimator_kwargs.py` registry, suggest_params flag plumbing) |
+| 8 | 2-3 days (post-fold-in: `_alpha_keys.py`, `_estimator_bridge.py` registry, suggest_params flag plumbing) |
 | 9 | 3-4 days |
 | 10 | 2-3 days |
 | 11 | 1-2 days |
@@ -1903,7 +1903,7 @@ Post-Gemini design-review swarm (Round 1 verification):
   to "TransformerBackboneOutput" in the interpretable-attention
   return note.
 - **`flatten_double_underscore` undefined (arch r1-I6).** A16 now
-  defines `_config_to_estimator_kwargs(config)` inline, with the
+  defines `config_to_estimator_kwargs(config)` inline, with the
   pydantic-dump-to-adapter-instance round trip spelled out for
   the `tabular_config` nested field.
 - **Optuna trial routing untested at unit level (qa r1-I1).**
@@ -2015,9 +2015,9 @@ Hyperparameter-strategy fold-in (Round 1):
   roster with the outer-estimator-level guarantee).
 - **Phase 8 Optuna module and test additions.** Phase 8 now ships
   `_alpha_keys.py` (empty enum lists in v1) and
-  `_config_to_estimator_kwargs.py` (helper + adapter map registry
+  `_estimator_bridge.py` (helper + adapter map registry
   per A16 fold-in). `test_suggest_params.py` gains the per-flag
-  sampling tests; `test_config_to_estimator_kwargs.py` (new)
+  sampling tests; `test_estimator_bridge.py` (new)
   pins the round-trip and `extra`-tuple `mode="json"` contracts.
 - **F7 signature change cascaded through Phase 8.** `suggest_params`
   carries `search_advanced` and `search_extras` keyword-only flags;

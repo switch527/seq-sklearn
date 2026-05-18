@@ -21,7 +21,10 @@ from seq_sklearn.config.loss import LossConfig
 from seq_sklearn.config.optimizer import OptimizerConfig
 from seq_sklearn.config.tabular import TabularToSequenceConfig
 from seq_sklearn.config.tft import TFTConfig
+from seq_sklearn.errors import ConfigError
 from seq_sklearn.tuning._estimator_bridge import (
+    _ADAPTER_MAP_BY_CONFIG,
+    _TFT_ADAPTER_MAP,
     adapter_map_for,
     config_to_estimator_kwargs,
 )
@@ -113,3 +116,15 @@ def test_config_to_estimator_kwargs_extra_tuple_type_survives() -> None:
     assert isinstance(rebuilt_tab.categorical_embed_dims, tuple)
     assert rebuilt_opt == cfg.optimizer
     assert rebuilt_tab == cfg.tabular_config
+
+
+def test_config_to_estimator_kwargs_raises_on_adapter_map_schema_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # If the adapter map names a sub-config the schema dump lacks
+    # (adapter map vs schema drift), the bridge must raise a typed
+    # ConfigError, not a bare KeyError.
+    drifted = {**_TFT_ADAPTER_MAP, "no_such_subconfig": OptimizerParams}
+    monkeypatch.setitem(_ADAPTER_MAP_BY_CONFIG, TFTConfig, drifted)
+    with pytest.raises(ConfigError, match="out of sync"):
+        config_to_estimator_kwargs(_config())
