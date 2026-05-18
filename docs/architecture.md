@@ -687,11 +687,17 @@ TabularToSequence.fit(X: pd.DataFrame, y: ArrayLike) -> TabularToSequence
   8. Mark fitted.
 
 TabularToSequence.transform(X: pd.DataFrame) -> dict[str, Tensor]
-  1. Sort by (id_col, time_col); retain the caller-order restore
-     permutation `input_row_order_` (the inverse of this sort, NOT to
-     be conflated with any model-internal pack_padded valid-first
-     permutation) so predictions are returned in the caller's input
-     row order (F1 output row-order contract), not this internal sort.
+  1. Sort by (id_col, time_col); emit the caller-order restore
+     permutation (the inverse of this sort) as a per-call tensor in
+     the returned batch dict, `batch["input_row_order"]` - NOT stored
+     on the transformer instance (stateless `transform`; storing on
+     `self` races under concurrent `predict`), and NOT to be conflated
+     with any model-internal pack_padded valid-first permutation. The
+     family `predict` / `predict_proba` / `predict_quantiles` /
+     `predict_with_attention` read this tensor and restore caller input
+     row order for the predictions AND every per-row AttentionOutput
+     introspection tensor; the calibration fold uses it too (F1/F2
+     output row-order + calibration-fold contract).
   2. Per entity, slide a window of length lookback over sorted rows.
   3. Align target to prediction_step relative to the window end.
      Default prediction_step=0 = contemporaneous (the window's own
@@ -4097,7 +4103,9 @@ doc/code consensus pipeline):
   alignment it reaches train AUC ~0.94 (a gradient-boosting baseline on
   the per-window features reaches ~0.98), versus AUC ~0.68 under the
   old default. F6 emits a contemporaneous target by spec (steps 7-9
-  compute it from `phi(window)`; F6 has no `prediction_step` and never
+  compute it from `phi(window)`; the F6 spec has no horizon shift (the
+  generator code declares a vestigial `prediction_step` skip-guard,
+  default 1, that never shifts the label, reconciled in S4) and never
   shifts the label). The sole defect: `TabularToSequence`'s default
   `prediction_step=1` re-aligned the already-contemporaneous panel to a
   1-step forecast, destroying the signal for the classification /
@@ -4111,14 +4119,24 @@ doc/code consensus pipeline):
   under the old default). requirements F3 / item 8 / F1 output
   row-order contract / F6 / N1 and architecture A4 (config snippet) /
   A5 (transform step) / this Phase 9 ledger are revised in sync.
-- **Secondary: `predict` output row order (F1 contract).** `predict` /
-  `predict_proba` / `predict_quantiles` currently return predictions in
-  the internal `(id_col, time_col)` sort order, not the caller's input
-  row order, a silent sklearn-contract violation for an unsorted real
-  panel (masked on the int-id synthetic panels because the orders
-  coincide). The transform must retain the `input_row_order_`
-  caller-order restore permutation and the family predict must restore
-  input order. Specified in F1 and the A5 transform step above.
+- **Secondary: output row order (F1/F2 contract), stateless mechanism,
+  3 surfaces.** The v1 code returns the internal `(id_col, time_col)`
+  sort order, a silent sklearn-contract violation for an unsorted real
+  panel (masked on int-id synthetic panels where orders coincide).
+  Mechanism: `transform()` emits the inverse permutation as a per-call
+  `batch["input_row_order"]` tensor (NOT a transformer-instance
+  attribute - that would race under concurrent `predict`, sklearn
+  transformers are stateless within `transform`). It is applied at
+  THREE surfaces the same-family swarm missed: (1) `predict` /
+  `predict_proba` / `predict_quantiles` arrays; (2)
+  `predict_with_attention` -> every per-row tensor in
+  `AttentionOutput`/`RegressionAttentionOutput` (predictions, logits/
+  probabilities, attention_weights, var_selection_weights,
+  padding_mask, entity_id); (3) the explicit-`calibration_set` fold in
+  `models/_base._calibration_fold`, which currently pairs
+  `transform(x_cal)`-sorted outputs with caller-order `y_cal` and must
+  reorder by the per-call permutation before pairing (F2). Specified
+  in F1 and the A5 transform step above.
 - **F6 generator vestigial `prediction_step` skip-guard (in-scope for
   the refactor plan).** `generator.py`'s `target_idx = window_end +
   prediction_step; if target_idx >= n_periods: continue` only trims
@@ -4141,7 +4159,8 @@ doc/code consensus pipeline):
   prediction_step>0 horizon-edge contract untested; placeholder test
   paths) were resolved by the F1 predict-time scoping rewrite, the
   per-row `min_periods_predict` knob, the F3 step-2 cardinality anchor,
-  and the 7 concrete mandatory tests. Deferred NITPICKs (non-blocking,
+  and the concrete mandatory tests (10 after the S3/R5 additions).
+  Deferred NITPICKs (non-blocking,
   recorded so the Gemini pass and S4 see them): (a) `requirements.md`
   uses opposing italic emphasis on "per *entity*" (gate trigger) vs
   "per *row*" (NaN-fill) within cross-referenced lines, both correct in
@@ -4152,3 +4171,32 @@ doc/code consensus pipeline):
   (c) The mandatory signal-reachability floor is intentionally
   provisional (`>=0.70`) and S4-pinned against a measured run, by
   design, not a gap. Next: S3 Gemini design final-pass.
+- **S3 Gemini design final-pass: 3 CRITICAL + 1 IMPROVEMENT, all
+  VERIFIED valid against code, Claude perspective AGREED, all
+  addressed.** Gemini found what the same-family swarm (which converged
+  on F1/F3 grain) systematically missed: (G-C1) the
+  `input_row_order_`-on-instance wording made `transform` stateful and
+  race under concurrent `predict` - rewritten to a per-call
+  `batch["input_row_order"]` tensor, stateless; (G-C2)
+  `models/_base._calibration_fold:357-358` pairs `transform(x_cal)`-
+  sorted outputs with caller-order `y_cal` (F2 break for unsorted
+  `x_cal`) - F1/F2 contract extended to the calibration fold; (G-C3)
+  `predict_with_attention` -> `AttentionOutput` introspection tensors
+  were outside the F1 contract - now explicitly in scope; (G-I1) the
+  "F6 has no `prediction_step`" prose conflated the F6 *spec* with the
+  generator *code* (which declares a vestigial `prediction_step=1`
+  skip-guard) - reworded for precision in F6 and this ledger. Per the
+  gemini-final-pass protocol a valid new CRITICAL invalidates the S2
+  consensus: the F1 contract, A5 step, and this ledger are revised and
+  three mandatory tests are added - #7 calibration-fold alignment
+  under unsorted `x_cal` (mispairing-sensitive, not separable); #8
+  `predict_with_attention`/`AttentionOutput` row-order under a shuffled
+  string-id panel (complete per-row field enumeration, no ellipsis,
+  `quantiles_used` shuffle-invariant); #9 the G-C1 statelessness
+  structural invariant (`transform` sets no `input_row_order`
+  instance attribute) - the Phase-1-8 re-validation obligation is
+  renumbered #10. Claude design-review re-consensus reached after
+  R5->R6 (R5 qa-opus 2 CRITICAL on test #7 separability-masking and
+  test #8 field-completeness were resolved; R6 all 6 APPROVE, 0C/0I).
+  Post-Gemini design consensus is REACHED; cleared for S4 (the
+  point-for-point code refactor plan).

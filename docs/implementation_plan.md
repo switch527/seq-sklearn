@@ -1808,7 +1808,51 @@ Round 3 (design-review swarm):
        invariant (req `min_periods_predict` per-row clause) that a
        drop-the-entity regression would otherwise break silently while
        still passing the row-order test #3.
-    7. Phase-1-8 re-validation obligation: audit every test/usage
+    7. `tests/integration/test_predict_row_order.py::test_calibration_fold_alignment_unsorted_x_cal`
+       (Gemini S3 G-C2): the fixture MUST be mispairing-SENSITIVE, NOT
+       a separable fold (separability masks a label mispairing). Use a
+       `calibration_set=(X_cal, y_cal)` with string entity ids in a
+       NON-`(id_col,time_col)` order so the internal sort is a
+       non-identity permutation, and a fold where the calibrated
+       output depends on correct (prediction,label) pairing
+       (e.g. labels constructed so the correctly-paired temperature/
+       Platt fit is numerically distinct from the mispaired fit).
+       Assert BOTH: (a) the correctly-paired calibrator/threshold
+       equals an independently computed oracle (concrete form: the
+       fitted binary `decision_threshold_` is within 1e-6 of the
+       oracle threshold, or post-calibration ECE <= the N1 band); AND
+       (b) it differs measurably from the result the sorted-vs-caller
+       mispairing would produce (assert the two are NOT close), so the
+       test fails if `_calibration_fold` pairs `transform(x_cal)`-
+       sorted outputs with caller-order `y_cal`.
+    8. `tests/integration/test_predict_row_order.py::test_predict_with_attention_row_order_shuffled_panel`
+       (Gemini S3 G-C3): shuffled string-id panel; assert
+       `predict_with_attention` / `predict_with_states` returns a
+       dataclass whose EVERY per-row field is aligned to `X.index`,
+       enumerated with no ellipsis - `AttentionOutput`: `predictions`,
+       `probabilities`, `logits`, `var_selection_weights`,
+       `static_var_selection_weights`, `attention_weights`,
+       `padding_mask`, `entity_id`; `RegressionAttentionOutput`:
+       `predictions`, `var_selection_weights`,
+       `static_var_selection_weights`, `attention_weights`,
+       `padding_mask`, `entity_id`. Separately assert
+       `RegressionAttentionOutput.quantiles_used` is shuffle-INVARIANT
+       (identical regardless of input row order; it is fit-time
+       metadata, never permuted). Same `input_row_order` permutation
+       as the array predict surfaces.
+    9. `tests/unit/data/test_tabular_to_sequence.py::test_transform_input_row_order_is_stateless`
+       (Gemini S3 G-C1 structural invariant): assert `transform()`
+       returns the `input_row_order` key in the batch dict AND that
+       `transform` sets NO `input_row_order`* attribute on the
+       transformer instance - snapshot `set(vars(tts))` (and
+       `getattr(tts, "__dict__", {})`) before and after two successive
+       `transform` calls on different-order panels; the attribute set
+       is unchanged and the two calls' returned `input_row_order`
+       tensors are independent (no cross-call leak / no instance
+       state), so a stateful `self.input_row_order_` implementation
+       (which would race under concurrent predict) fails this even in
+       serial execution.
+    10. Phase-1-8 re-validation obligation: audit every test/usage
        constructing `TabularToSequenceConfig` / `TabularConfigParams`
        WITHOUT an explicit `prediction_step` (grep across `tests/` and
        `src/`); any that implicitly relied on the old `=1` windowing

@@ -335,18 +335,49 @@ All classifier and regressor classes expose the same methods:
   `predict_quantiles` return exactly one prediction per row of the
   predict `X`, each keyed to its window's terminal row (the row at
   `window_end`). `TabularToSequence` sorts internally by
-  `(id_col, time_col)` and retains the caller-order restore permutation
-  (`input_row_order_`, distinct from any model-internal pack/pad
-  permutation); predictions are restored to the predict `X`'s input
-  row order before return, so the returned array aligns positionally
-  with that `X` / `X.index`. (At `fit`, the per-row `y` is consumed at
-  the same one-label-per-window grain for the rows that survive the
-  `min_periods` gate; this is the training contract, not the
-  predict-output contract above.) The internal sort is not observable
-  to the caller. (Hard sklearn-contract requirement; the Phase 9 audit
-  found the v1 code returns the internal sorted order instead, masked
-  on int-id synthetic panels where the orders coincide; tracked as the
-  secondary fix in the Phase 9 ledger.)
+  `(id_col, time_col)`. The inverse (caller-order restore) permutation
+  is emitted as a per-call tensor key in the dict returned by
+  `transform()` (e.g. `batch["input_row_order"]`); it is NOT stored on
+  the transformer instance. Storing it on `self` would make
+  `transform()` stateful and race under concurrent `predict` calls on
+  one fitted estimator (sklearn transformers must be stateless within
+  `transform`); the per-call dict tensor is the only sanctioned
+  mechanism. Every caller-facing prediction surface restores caller
+  input-row order from that tensor before returning:
+  - `predict` / `predict_proba` / `predict_quantiles` (the arrays);
+  - `predict_with_attention` / `predict_with_states`: EVERY per-row
+    (axis-0 length N) field of the returned dataclass is reordered
+    identically by the same permutation, enumerated with NO open
+    ellipsis. `AttentionOutput` (all 8 fields are per-row):
+    `predictions`, `probabilities`, `logits`, `var_selection_weights`,
+    `static_var_selection_weights`, `attention_weights`,
+    `padding_mask`, `entity_id`. `RegressionAttentionOutput` (6 per-row
+    fields): `predictions`, `var_selection_weights`,
+    `static_var_selection_weights`, `attention_weights`,
+    `padding_mask`, `entity_id`. The ONLY non-per-row field is
+    `RegressionAttentionOutput.quantiles_used` (a fit-time
+    `tuple[float, ...] | None`): it is scalar metadata, NOT indexed by
+    row, and MUST be left shuffle-invariant (never permuted). Adding a
+    new per-row field to either dataclass in a future MINOR obligates
+    adding it to this enumeration and to mandatory test #8.
+  So every such output aligns positionally with the predict `X` /
+  `X.index`. The internal sort is not observable to the caller.
+- **Calibration-fold alignment (F2).** The same permutation governs an
+  explicit `calibration_set=(X_cal, y_cal)`: the fold pairs
+  `transform(X_cal)`-order model outputs with `y_cal`. `y_cal` is in
+  the caller's row order, so the fold MUST reorder the model outputs
+  (or `y_cal`) by the per-call `input_row_order` before pairing, or the
+  calibrator / threshold tuner fits on mismatched (prediction, label)
+  pairs whenever `X_cal` is not already `(id_col, time_col)`-sorted.
+  This is part of the F1/F2 contract, not only the predict surface.
+  (At `fit` the per-row `y` is consumed at the one-label-per-window
+  grain for rows surviving the `min_periods` gate; that training
+  contract is separate from the predict-output and calibration-fold
+  contracts above.) (Hard sklearn-contract requirement; the Phase 9
+  audit found the v1 code returns the internal sorted order and the
+  calibration fold pairs sorted outputs with unsorted `y_cal`, masked
+  on int-id synthetic panels where the orders coincide; tracked in the
+  Phase 9 ledger.)
 - `score(X, y)` returning accuracy by default for classifiers and R² for
   regressors, with a `scoring` argument for a callable scorer.
 - `get_params(deep=True)` and `set_params(**params)` so every estimator
@@ -1018,10 +1049,16 @@ The emitted target is **contemporaneous** with the window: steps 7-9
 compute it from `phi(window)`, so the label is a function of the window
 ending at `window_end` and is paired in the emitted panel row with that
 window's features and timestamp. The DGP therefore aligns with
-`TabularToSequence`'s default `prediction_step=0`. F6 has no
-`prediction_step` of its own (it never shifts the label forward); the
-generator emits one contemporaneous `(features, target)` row per
-window. The DGP signal is unchanged by the Phase 9 `prediction_step`
+`TabularToSequence`'s default `prediction_step=0`. The F6 *spec* has
+no horizon shift; the generator *code* does declare a
+`prediction_step` parameter (default `1`) but uses it ONLY as a
+vestigial tail-window skip-guard - it never shifts the label forward
+(the label is always `phi(window)` per steps 7-9). The generator
+emits one contemporaneous `(features, target)` row per window. The S4
+refactor reconciles that vestigial code parameter (remove it, or make
+`generator.prediction_step>0` emit genuinely forecast-aligned targets
+matching `TabularToSequence.prediction_step>0`). The DGP signal is
+unchanged by the Phase 9 `prediction_step`
 default correction, so the N1 thresholds below are NOT re-tuned and
 `dgp_version` is NOT bumped: the prior `prediction_step=1` default had
 merely prevented those thresholds from ever being measured on the task
