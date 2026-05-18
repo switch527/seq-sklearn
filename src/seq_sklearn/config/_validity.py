@@ -12,7 +12,7 @@ from typing import Final
 
 from seq_sklearn.config._domains import V1_1_TASK_TYPES
 
-__all__ = ["check_combo", "legal_task_loss_pairs"]
+__all__ = ["check_combo", "legal_strategies_for", "legal_task_loss_pairs"]
 
 
 def legal_task_loss_pairs(*, include_v1_1: bool = False) -> frozenset[tuple[str, str]]:
@@ -72,6 +72,36 @@ _LEGAL_CELLS: Final[dict[tuple[str, str], tuple[tuple[str, ...], tuple[str, ...]
 }
 
 
+def legal_strategies_for(
+    task_type: str, loss_strategy: str
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return ``(legal_imbalance, legal_calibration)`` for an F5 cell.
+
+    The sanctioned public accessor for the per-cell legal subsets so the
+    Optuna sampler stays closed under the validity matrix without
+    reaching into the private ``_LEGAL_CELLS`` table or hand-copying it.
+
+    Raises:
+        ValueError: if ``task_type`` is a v1.1 task, or
+            ``(task_type, loss_strategy)`` is not a legal cell. The
+            message mirrors :func:`check_combo`.
+    """
+    if task_type in V1_1_TASK_TYPES:
+        raise ValueError(
+            f"task_type={task_type!r} is scheduled for v1.1; v1 supports "
+            "single-output classification and regression only."
+        )
+    cell = _LEGAL_CELLS.get((task_type, loss_strategy))
+    if cell is None:
+        legal_losses = sorted({lt for (tt, lt) in _LEGAL_CELLS if tt == task_type})
+        raise ValueError(
+            f"loss_strategy={loss_strategy!r} is not legal for "
+            f"task_type={task_type!r}. Legal losses for this task: "
+            f"{legal_losses}."
+        )
+    return cell
+
+
 def check_combo(
     task_type: str,
     loss_strategy: str,
@@ -86,22 +116,7 @@ def check_combo(
     on v1 get a clear forward-looking error rather than a downstream
     shape mismatch.
     """
-    if task_type in V1_1_TASK_TYPES:
-        raise ValueError(
-            f"task_type={task_type!r} is scheduled for v1.1; v1 supports "
-            "single-output classification and regression only."
-        )
-
-    cell = _LEGAL_CELLS.get((task_type, loss_strategy))
-    if cell is None:
-        legal_losses = sorted({lt for _, lt in _LEGAL_CELLS if _ == task_type})
-        raise ValueError(
-            f"loss_strategy={loss_strategy!r} is not legal for "
-            f"task_type={task_type!r}. Legal losses for this task: "
-            f"{legal_losses}."
-        )
-
-    legal_imbalance, legal_calibration = cell
+    legal_imbalance, legal_calibration = legal_strategies_for(task_type, loss_strategy)
     if imbalance_strategy not in legal_imbalance:
         raise ValueError(
             f"imbalance_strategy={imbalance_strategy!r} is not legal for "
