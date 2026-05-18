@@ -782,3 +782,22 @@ caller-order reorder, the device-matched `_reorder_t` index, and the
 tolerance-identical on real hardware - the dtype/device edge both
 Claude (S7) and Gemini (S8) flagged is validated. The S1-S8
 governance pipeline plus the GPU parity gate are all green.
+
+## Post-pipeline deferral closure
+
+Deferral 2 (explicit-`calibration_set`) CLOSED. Decision: keep-as-is
+is the final v1 contract (caller-owned set, real `y_cal`, no
+sentinel hazard; the recomputed-fold drop stays scoped to the
+internal-split branch). Implemented the fail-fast
+`len(x_cal) == len(y_cal)` guard in `_calibration_fold` (raises
+`DataContractError` before transform). Pinned by two new tests:
+`test_explicit_calibration_set_length_mismatch_raises` and
+`test_explicit_calibration_set_keeps_below_floor_entity` (an
+all-below-floor explicit set still calibrates; contrasts the
+internal-split branch's empty-fold raise). ruff + pyright clean.
+implementation_plan Deferred entry marked RESOLVED.
+
+Deferral 1 (the two calibration bands) remains the only open item:
+a multi-seed measurement under the corrected regime + a quality-bar
+decision (the band constant is review-grade; not unilaterally
+picked).

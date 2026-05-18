@@ -364,6 +364,16 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         """
         if calibration_set is not None:
             x_cal, y_cal = calibration_set
+            # Fail fast on a length mismatch (one window per row, so
+            # len(raw) == len(x_cal)); without this the mispaired
+            # arrays fail late and cryptically inside the calibrator /
+            # threshold-tuner fit instead of here.
+            n_x, n_y = len(x_cal), np.asarray(y_cal).shape[0]
+            if n_x != n_y:
+                raise DataContractError(
+                    f"explicit calibration_set length mismatch: x_cal has "
+                    f"{n_x} rows but y_cal has {n_y}"
+                )
             batch = transformer.transform(x_cal)
             # transform() returns raw outputs in sorted (id, time) order;
             # y_cal is in caller order. Reorder the raw outputs to caller

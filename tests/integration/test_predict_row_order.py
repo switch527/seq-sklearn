@@ -18,6 +18,7 @@ import torch
 
 from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
+from seq_sklearn.errors import DataContractError
 from seq_sklearn.logging import Event
 from seq_sklearn.models.transformer.tft.classifier import TFTClassifier
 from seq_sklearn.models.transformer.tft.regressor import TFTRegressor
@@ -356,3 +357,65 @@ def test_predict_quantiles_row_order_shuffled_panel(monkeypatch: pytest.MonkeyPa
     pt_s = est.predict(sp)
     np.testing.assert_allclose(pq[perm], pq_s, rtol=1e-5, atol=1e-6, equal_nan=True)
     np.testing.assert_allclose(pt[perm], pt_s, rtol=1e-5, atol=1e-6, equal_nan=True)
+
+
+def test_explicit_calibration_set_length_mismatch_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deferral 2a: len(x_cal) != len(y_cal) fails fast with DataContractError.
+
+    Without the early guard the mispaired arrays fail late and
+    cryptically inside the calibrator / threshold-tuner fit.
+    """
+    _force_cpu(monkeypatch)
+    gen = _gen("binary")
+    x_tr, y_tr, x_cal, y_cal = _binary_panels(gen, seed=42)
+    est = TFTClassifier(
+        task_type="binary",
+        tabular_config=_tab(gen),
+        threshold_tuning=True,
+        cal_fraction=0.0,
+        **_COMMON,
+    )
+    with pytest.raises(DataContractError, match="calibration_set length mismatch"):
+        est.fit(x_tr, y_tr, calibration_set=(x_cal, y_cal[:-1]))
+
+
+def test_explicit_calibration_set_keeps_below_floor_entity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deferral 2b: explicit calibration_set is caller-owned, NOT floor-filtered.
+
+    The explicit branch intentionally does not drop ``< min_periods_predict``
+    entities (real ``y_cal``, no sentinel hazard) - unlike the internal-split
+    recomputed fold, which raises when its fold is all below-floor. Here every
+    calibration entity is below the floor yet calibration still succeeds,
+    pinning the deliberate asymmetry.
+    """
+    _force_cpu(monkeypatch)
+    gen = _gen("binary")
+    x_tr, y_tr, x_cal, y_cal = _binary_panels(gen, seed=42)
+    # Truncate EVERY calibration entity to 2 rows; min_periods_predict=4
+    # makes them all below-floor, min_periods=1 keeps them at fit.
+    # _binary_panels returns x_cal with a 0..n-1 positional index aligned
+    # to y_cal, so the retained rows' index selects the matching labels.
+    x_cal_trunc = x_cal.groupby(gen.id_col, sort=False, group_keys=False).head(2)
+    y_cal_trunc = np.asarray(y_cal)[x_cal_trunc.index.to_numpy()]
+    x_cal = x_cal_trunc.reset_index(drop=True)
+    assert (x_cal.groupby(gen.id_col).size() == 2).all()
+
+    tab = TabularConfigParams(
+        **{**_tab(gen).get_params(deep=False), "min_periods": 1, "min_periods_predict": 4}
+    )
+    est = TFTClassifier(
+        task_type="binary",
+        tabular_config=tab,
+        threshold_tuning=True,
+        cal_fraction=0.0,
+        **_COMMON,
+    )
+    # No raise, no silent drop-to-empty: calibration completes and a
+    # threshold is set even though every cal entity is below the floor.
+    est.fit(x_tr, y_tr, calibration_set=(x_cal, y_cal_trunc))
+    assert hasattr(est, "decision_threshold_")
+    assert 0.0 <= est.decision_threshold_ <= 1.0
