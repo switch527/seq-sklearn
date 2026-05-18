@@ -2266,7 +2266,21 @@ S7 code-review (S6 implementation, deferred items):
   re-pinning a quality gate is a review-grade judgment, NOT a
   unilateral edit. Deferred state: only those two parametrize cases
   carry `xfail(strict=False)`; the band CONSTANTS are unchanged (no
-  weakening). S8/Gemini re-derives both bands against a multi-seed
-  corrected-regime run and converts them back to hard assertions;
-  the xfails are removed then. This is a tracked deferral with a
-  reason, consensus-valid per the severity-tier rule.
+  weakening). S8/Gemini did NOT re-derive the bands (its pass raised
+  an unrelated finding), so this remains an open tracked follow-up: a
+  dedicated calibration-tuning pass re-derives both bands against a
+  multi-seed corrected-regime run and converts them back to hard
+  assertions, then removes the xfails. This is a tracked deferral
+  with a reason, consensus-valid per the severity-tier rule.
+- **Explicit `calibration_set` below-floor exclusion (Gemini S8 +
+  arch-opus R3-I1 extension).** `_calibration_fold`'s explicit-
+  `calibration_set` branch intentionally does not filter short-
+  history (`< min_periods_predict`) entities: the caller owns an
+  explicit set's composition and the targets are the caller's real
+  `y_cal` (not `transform` sentinels, so no sentinel-label hazard;
+  the recomputed-fold drop is correctly scoped to that branch).
+  Whether to additionally exclude short-history entities from a
+  caller-supplied set, and the related `len(x_cal) == len(y_cal)`
+  early check, are one separate input-validation-pass concern. NOT
+  in scope for a row-order refactor; the behavior is pre-existing
+  and unchanged by this diff (only the G-C2 reorder was added).

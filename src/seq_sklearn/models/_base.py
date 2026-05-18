@@ -341,16 +341,26 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
     ) -> tuple[Tensor, Tensor]:
         """Raw logits + targets for the held-out calibration fold (A9).
 
-        With an explicit ``calibration_set`` the whole set is the fold.
-        Otherwise the same deterministic three-way split the Trainer
-        applied is recomputed (identical config + identical
-        ``window_time_index`` derivation) so the calibrator fits on the
-        rows training held out. Below-floor windows
-        (``min_periods <= n < min_periods_predict``) survive
-        ``TabularToSequence.fit`` but carry sentinel targets (``-1``
-        classification / ``NaN`` regression from ``transform``); they are
-        dropped from the recomputed fold so the calibrator / threshold
-        tuner never fit on a sentinel label.
+        Two branches with deliberately asymmetric below-floor handling:
+
+        - Explicit ``calibration_set``: the whole caller-provided set is
+          the fold and the targets are the caller's REAL ``y_cal``
+          (via ``_encode_targets``), never ``transform``'s sentinels.
+          Below-floor entities are intentionally NOT filtered here: the
+          caller owns the composition of an explicit calibration set,
+          and there is no sentinel-label hazard because ``y_cal`` is
+          real. (Whether to additionally exclude short-history entities
+          from a caller-supplied set is a separate input-validation
+          concern, deferred; see implementation_plan Deferred.)
+        - Recomputed fold (no explicit set): the same deterministic
+          three-way split the Trainer applied is recomputed so the
+          calibrator fits on the rows training held out. Here the
+          targets are ``batch["target"]`` straight from ``transform``,
+          so below-floor windows (``min_periods <= n <
+          min_periods_predict``) carry sentinel targets (``-1``
+          classification / ``NaN`` regression). They MUST be dropped
+          (the ``keep`` filter) so the calibrator / threshold tuner
+          never fit on a sentinel label.
         """
         if calibration_set is not None:
             x_cal, y_cal = calibration_set

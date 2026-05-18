@@ -709,3 +709,64 @@ S7 Claude code-review consensus REACHED after 3 rounds (zero
 CRITICAL on the confirming round; every IMPROVEMENT resolved or
 deferred with a reason; only the carried sub-floor-boundary NITPICK
 remains). Cleared for S8 (Gemini code final pass).
+
+## S8 Gemini code final-pass
+
+Gemini (3.x Pro) @code-reviewer on `git diff 67172c0..HEAD`. Tally:
+CRITICAL 1 · IMPROVEMENT 0 · NITPICK 1. (Gemini's `run_shell_command`
+was unavailable so it did a static read; its cited line numbers are
+off vs the real file, e.g. it cited `_base.py:418-428` for
+`_calibration_fold` whose real def is `_base.py:336`.)
+
+### Gemini final-pass report (verbatim summary)
+
+- CRITICAL `_base.py` `_calibration_fold` explicit-`calibration_set`
+  branch: "fails to drop below-floor entities ... corrupting the
+  calibrator by fitting it on garbage logits", citing the docstring
+  "they are dropped from the recomputed fold".
+- NITPICK `transformer/_base.py` `_reorder_t`: `torch.as_tensor(
+  order, device=t.device)` rebuilds the index tensor on every call;
+  `predict_with_attention` calls it ~6-8x per forward with the same
+  `order`; hoist it once in the caller.
+
+### Claude perspective
+
+- DISAGREED (CRITICAL downgraded to IMPROVEMENT, with reason):
+  Gemini's premise is wrong on two counts. (1) The explicit branch
+  pairs the caller's REAL `y_cal` via `_encode_targets(y_cal)`, NOT
+  `transform`'s `-1`/NaN sentinels, so there is no "sentinel label"
+  or "garbage" hazard; the docstring's "dropped from the RECOMPUTED
+  fold" explicitly scopes the drop to the internal-split branch
+  (which does use `batch["target"]` sentinels and must drop, and
+  does, via `keep`). (2) The diff does NOT introduce this: the
+  pre-refactor explicit branch was byte-identical for below-floor
+  handling (`return self._raw_outputs(batch), torch.as_tensor(
+  self._encode_targets(y_cal))`); the only change is the
+  `[input_row_order]` reorder (the G-C2 fix). The asymmetry (explicit
+  set = caller-owned, not filtered; recomputed fold = sentinel-laden,
+  filtered) is intentional and correct. The adjacent concern is
+  already the tracked S5 arch-opus R3-I1 deferral. NOT a new valid
+  CRITICAL, so S7 consensus stands.
+- AGREED (the real, smaller point): the docstring was ambiguous
+  enough to make a competent cross-family reviewer misread the
+  contract. Addressed: the `_calibration_fold` docstring now states
+  the explicit-vs-recomputed below-floor asymmetry explicitly and
+  why (caller-owned real labels vs sentinel targets).
+- Deferred (extends arch-opus R3-I1): "additionally exclude
+  short-history entities from a caller-supplied explicit
+  `calibration_set`" is a separate input-validation-pass concern,
+  not in scope for a row-order refactor; recorded in
+  implementation_plan Deferred.
+- Deferred (NITPICK, optional per the severity-tier rule): the
+  `_reorder_t` per-call index-tensor build is a marginal micro-opt
+  on a BETA introspection path; a signature-rippling hoist post-
+  consensus risks regression for little value. NITPICKs may remain.
+- Hallucination note: Gemini's line numbers are stale/invented
+  (it reported `_base.py` as 451 lines; actual is 661); every claim
+  was re-verified against the real file before disposition.
+
+S8 outcome: zero NEW valid CRITICAL. The one Gemini CRITICAL is a
+pre-existing, correct-by-design behavior mischaracterized due to a
+docstring ambiguity, which is now fixed. The governance pipeline
+(S1-S8) is complete; the prediction_step refactor is consensus'd
+across both model families.
