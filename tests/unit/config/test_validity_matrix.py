@@ -28,6 +28,7 @@ from seq_sklearn.config._domains import (
 from seq_sklearn.config._validity import (
     _LEGAL_CELLS,
     check_combo,
+    legal_strategies_for,
     legal_task_loss_pairs,
 )
 from seq_sklearn.config.base import BaseModelConfig
@@ -185,3 +186,43 @@ def test_legal_task_loss_pairs_include_v1_1_adds_v1_1_pairs() -> None:
     assert full == frozenset(_LEGAL_CELLS)
     assert ("multilabel", "cross_entropy") in full
     assert any(task in V1_1_TASK_TYPES for task, _ in full)
+
+
+def test_legal_strategies_for_returns_exact_cell() -> None:
+    # The sanctioned public accessor must hand back the same tuple the
+    # private F5 table holds (the Optuna sampler depends on this).
+    checked = 0
+    for (task, loss), cell in _LEGAL_CELLS.items():
+        if task in V1_1_TASK_TYPES:
+            continue
+        assert legal_strategies_for(task, loss) == cell
+        checked += 1
+    # Pin that the loop body actually ran: a future widening of the
+    # skip condition must not silently turn this into a no-op.
+    assert checked > 0
+
+
+def test_legal_strategies_for_preserves_imbalance_then_calibration_order() -> None:
+    # The sampler unpacks `legal_imbalance, legal_calibration =
+    # legal_strategies_for(...)` positionally. Pin the semantic order on
+    # an ASYMMETRIC cell so a swapped return is caught (a symmetric cell
+    # would hide it). For (binary, cross_entropy): imbalance carries
+    # `class_weighted`; calibration carries `platt`. They are disjoint
+    # on those members, so order cannot be confused.
+    legal_imbalance, legal_calibration = legal_strategies_for("binary", "cross_entropy")
+    assert "class_weighted" in legal_imbalance
+    assert "class_weighted" not in legal_calibration
+    assert "platt" in legal_calibration
+    assert "platt" not in legal_imbalance
+
+
+def test_legal_strategies_for_v1_1_task_raises() -> None:
+    # Direct branch coverage: the v1.1 guard, independent of check_combo.
+    with pytest.raises(ValueError, match=r"scheduled for v1\.1"):
+        legal_strategies_for("multilabel", "cross_entropy")
+
+
+def test_legal_strategies_for_illegal_cell_raises() -> None:
+    # Direct branch coverage: the unknown (task, loss) cell guard.
+    with pytest.raises(ValueError, match="is not legal for"):
+        legal_strategies_for("binary", "mse")

@@ -12,8 +12,10 @@ from typing import Final
 
 __all__ = [
     "CALIBRATION_STRATEGIES",
+    "CLASSIFICATION_TASK_TYPES",
     "IMBALANCE_STRATEGIES",
     "LOSS_STRATEGIES",
+    "REGRESSION_TASK_TYPES",
     "TASK_TYPES",
     "V1_1_TASK_TYPES",
     "V1_TASK_TYPES",
@@ -43,6 +45,24 @@ V1_1_TASK_TYPES: Final[tuple[str, ...]] = (
     "regression_multioutput",
 )
 """Task types scheduled for v1.1. v1 rejects with a clear message."""
+
+CLASSIFICATION_TASK_TYPES: Final[tuple[str, ...]] = (
+    "binary",
+    "multiclass",
+    "multilabel",
+)
+"""Classification ``task_type`` values, v1 + v1.1. Single source for the
+model-family split (the Optuna sampler intersects this with
+:py:obj:`V1_TASK_TYPES`)."""
+
+REGRESSION_TASK_TYPES: Final[tuple[str, ...]] = (
+    "regression_point",
+    "regression_quantile",
+    "regression_multioutput",
+)
+"""Regression ``task_type`` values, v1 + v1.1. Counterpart of
+:py:obj:`CLASSIFICATION_TASK_TYPES`; together they partition
+:py:obj:`TASK_TYPES`."""
 
 LOSS_STRATEGIES: Final[tuple[str, ...]] = (
     "cross_entropy",
