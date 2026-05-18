@@ -770,3 +770,15 @@ pre-existing, correct-by-design behavior mischaracterized due to a
 docstring ambiguity, which is now fixed. The governance pipeline
 (S1-S8) is complete; the prediction_step refactor is consensus'd
 across both model families.
+
+## GPU CPU/CUDA parity (final consensus'd code)
+
+`pytest -m gpu` on the final consensus'd code (commit 01542ea,
+RTX PRO 6000): 2 passed, 0 failed
+(`test_tft_classifier_gpu_cpu_predict_proba_parity`,
+`test_calibrators_accept_cuda_input_and_return_cpu`). The F1
+caller-order reorder, the device-matched `_reorder_t` index, and the
+`input_row_order` torch.long -> numpy conversion are CPU/CUDA
+tolerance-identical on real hardware - the dtype/device edge both
+Claude (S7) and Gemini (S8) flagged is validated. The S1-S8
+governance pipeline plus the GPU parity gate are all green.
