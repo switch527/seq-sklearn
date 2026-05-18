@@ -218,12 +218,14 @@ def test_min_periods_predict_nan_target_with_warning(
     events = [
         r
         for r in caplog.records
-        if getattr(r, "event", None) == Event.DATA_MIN_PERIODS_PREDICT_BREACH
+        if getattr(r, "event", None) == Event.DATA_DUPLICATE_FLOOR_BREACH_COUNT
     ]
     assert len(events) == 1
     # Per-entity gate: entities 0 (1 row) and 1 (2 rows) are below the
     # floor of 3, so count == 2 (one aggregated warning per call).
+    # F11 payload: {count, min_periods_predict}.
     assert events[0].payload["count"] == 2
+    assert events[0].payload["min_periods_predict"] == 3
     targets = out["target"].numpy()
     # Entity 0 -> window idx 0; entity 1 -> window idx 1, 2: all NaN.
     assert np.isnan(targets[0])

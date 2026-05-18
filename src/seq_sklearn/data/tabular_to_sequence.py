@@ -433,9 +433,10 @@ class TabularToSequence:
         if below_floor > 0:
             emit(
                 logger,
-                Event.DATA_MIN_PERIODS_PREDICT_BREACH,
+                Event.DATA_DUPLICATE_FLOOR_BREACH_COUNT,
                 level=logging.WARNING,
                 count=below_floor,
+                min_periods_predict=cfg.min_periods_predict,
             )
 
         target_dtype = torch.long if self.task_type in _CLASSIFICATION_TASKS else torch.float32
