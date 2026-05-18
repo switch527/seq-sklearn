@@ -52,6 +52,25 @@ def test_suggest_params_sweep_respects_validity_matrix() -> None:
         study.tell(trial, 0.0)
 
 
+def test_regressor_sweep_respects_validity_matrix() -> None:
+    # The classifier sweep above only proves F5 closure for the
+    # classification cells. The regressor family walks different cells
+    # (regression_point: mse/mae/huber; regression_quantile: pinball),
+    # so it needs its own closed-under-F5 sweep.
+    study = optuna.create_study()
+    base = _base()
+    for _ in range(1000):
+        trial = study.ask()
+        config = suggest_params(trial, TFTRegressor, base=base)
+        check_combo(
+            config.task_type,
+            config.loss.strategy,
+            config.sampler.strategy,
+            config.calibration_strategy,
+        )
+        study.tell(trial, 0.0)
+
+
 def test_classifier_only_samples_classification_tasks() -> None:
     study = optuna.create_study()
     base = _base()
@@ -176,4 +195,22 @@ def test_search_advanced_and_extras_are_v1_noops() -> None:
     cfg = suggest_params(trial, TFTClassifier, base=base, search_advanced=True, search_extras=True)
     assert isinstance(cfg, TFTConfig)
     # advanced stays at its empty v1 default; extra escape hatch untouched.
+    assert cfg.advanced == base.advanced
+
+
+def test_search_advanced_noop_alone() -> None:
+    # Isolate the search_advanced branch from search_extras so a
+    # regression in one is not masked by the other.
+    study = optuna.create_study()
+    base = _base()
+    cfg = suggest_params(study.ask(), TFTClassifier, base=base, search_advanced=True)
+    assert isinstance(cfg, TFTConfig)
+    assert cfg.advanced == base.advanced
+
+
+def test_search_extras_noop_alone() -> None:
+    study = optuna.create_study()
+    base = _base()
+    cfg = suggest_params(study.ask(), TFTClassifier, base=base, search_extras=True)
+    assert isinstance(cfg, TFTConfig)
     assert cfg.advanced == base.advanced
