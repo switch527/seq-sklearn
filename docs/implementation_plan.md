@@ -1737,6 +1737,84 @@ Round 3 (design-review swarm):
   this plan IS the checklist; the Phase 9 PR description
   references this plan's phase entries to confirm every item is
   implemented."
+- **Phase 9 root-cause: `prediction_step` default `1` -> `0`
+  (cross-phase, assumption changed since Phase 1).** The Phase 9
+  accuracy assertions surfaced that the v1 TFT learned nothing on
+  F6 (~0.68 AUC). Deep-dive root cause: `TabularToSequenceConfig`'s
+  default `prediction_step=1` re-aligned the already-contemporaneous
+  F6 panel into a 1-step forecast, contradicting the library's
+  classification identity. Fix: default `0` (contemporaneous);
+  `>0` opt-in forecast. With it, TFT reaches ~0.94 AUC (baseline
+  ~0.98), so N1 thresholds hold unchanged (no `dgp_version` bump,
+  no Phase 7 model change). Secondary: `predict` must return rows
+  in input order, not the internal `(id, time)` sort order (F1
+  contract). requirements F3/item-8/F6/N1 and architecture
+  A4/A5/Phase-9-ledger are revised in sync with this entry. Because
+  this changes a Phase-1 assumption it runs the full governance
+  pipeline: doc revision -> Claude design-review consensus ->
+  Gemini design consensus -> point-for-point refactor plan ->
+  Claude consensus -> code -> Claude /review consensus -> Gemini
+  code consensus. The Phase 9 quickstart / acceptance `xfail`s lift
+  in the code stage once the fix lands.
+  - **Mandatory tests the S4 refactor plan and S6 code stage MUST
+    include (named here so they are not skipped):**
+    1. `test_default_prediction_step_is_contemporaneous`
+       (`tests/unit/data/test_tabular_to_sequence.py`): assert
+       `TabularToSequenceConfig().prediction_step == 0` AND that the
+       default transform's emitted target for a window ending at row
+       `t` equals `label[t]`, not `label[t+1]`, on a fixed
+       ground-truth 3-entity panel.
+    2. Default-is-0 guard at BOTH layers:
+       `TabularToSequenceConfig().prediction_step == 0` and the
+       `TabularConfigParams` adapter default == 0. The named existing
+       functions asserting the old default `1` -
+       `test_tabular.py::test_tabular_to_sequence_config_defaults` and
+       `test_adapters.py::test_tabular_config_params_defaults` (or the
+       specific default-asserting functions/params the S4 grep
+       identifies) - are updated in place, not parametrized-around or
+       silently left.
+    3. `tests/integration/test_predict_row_order.py::test_predict_output_row_order_shuffled_panel`
+       (concrete new file): a multi-entity panel with **string** entity
+       ids AND row-shuffled input; assert `predict` / `predict_proba` /
+       `predict_quantiles` each align element-wise to `X.index` (the
+       int-id synthetic panels coincidentally hide the bug, so this
+       adversarial case is mandatory).
+    4. Fast (<30s) signal-reachability integration test
+       `tests/integration/test_contemporaneous_signal_reachable.py::test_signal_reachable_default_config_floor`:
+       default-config `TFTClassifier` on a small F6 binary panel clears
+       a loose floor (provisional `>=0.70`; S4 pins the exact floor and
+       panel size against a measured run) so a regression to
+       `prediction_step=1` is caught in the inner loop, not only the
+       nightly slow e2e, before the quickstart xfail is lifted.
+    5. `tests/unit/data/test_tabular_to_sequence.py::test_prediction_step_horizon_edge_clamp`:
+       with `prediction_step>0`, a window whose target row would fall
+       past the entity's last period has its target row clamped to
+       `min(window_end+prediction_step, n_rows-1)` and is NOT dropped,
+       so the one-window-per-row count holds for `prediction_step>0`
+       too (verifies the F3 horizon-edge contract). Its expectation
+       must be consistent with whatever S4 decides for the F6 generator
+       vestigial skip-guard (remove vs make `generator.prediction_step
+       >0` emit genuinely forecast-aligned targets); S4 records that
+       decision and this test enforces it (a parity check that the
+       generator's forecast-mode emission matches
+       `TabularToSequence.prediction_step>0`).
+    6. `tests/integration/test_predict_row_order.py::test_below_min_periods_predict_entity_nan_filled_preserves_count`:
+       a panel with one sub-`min_periods_predict` entity (N>1 rows) and
+       one above-floor entity; assert `len(predict(X)) == len(X)`,
+       every row of the sub-floor entity is NaN (N NaN rows, not a
+       single collapsed row, not dropped), the above-floor rows are
+       finite, all `X.index`-aligned, and exactly one aggregated breach
+       warning fired. This pins the F1 per-row NaN-fill cardinality
+       invariant (req `min_periods_predict` per-row clause) that a
+       drop-the-entity regression would otherwise break silently while
+       still passing the row-order test #3.
+    7. Phase-1-8 re-validation obligation: audit every test/usage
+       constructing `TabularToSequenceConfig` / `TabularConfigParams`
+       WITHOUT an explicit `prediction_step` (grep across `tests/` and
+       `src/`); any that implicitly relied on the old `=1` windowing
+       (target alignment, below-floor counts, sentinel positions,
+       synth->tensor shapes) is reviewed and updated. The full
+       Phases 1-9 gate (+3 randomized) must stay green post-change.
 
 ## Deferred
 

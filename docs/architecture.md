@@ -582,7 +582,7 @@ class TabularToSequenceConfig(BaseModel):
     time_varying_real_cols: tuple[str, ...] = ()
     time_varying_categorical_cols: tuple[str, ...] = ()
     lookback: int = 12
-    prediction_step: int = 1
+    prediction_step: int = 0  # 0 = contemporaneous (default); >0 = opt-in forecast (F3)
     min_periods: int = 1
     min_periods_predict: int = 1
     scaling_real: Literal["standard", "robust", "quantile_uniform", "none"] = "standard"
@@ -687,9 +687,15 @@ TabularToSequence.fit(X: pd.DataFrame, y: ArrayLike) -> TabularToSequence
   8. Mark fitted.
 
 TabularToSequence.transform(X: pd.DataFrame) -> dict[str, Tensor]
-  1. Sort by (id_col, time_col).
+  1. Sort by (id_col, time_col); retain the caller-order restore
+     permutation `input_row_order_` (the inverse of this sort, NOT to
+     be conflated with any model-internal pack_padded valid-first
+     permutation) so predictions are returned in the caller's input
+     row order (F1 output row-order contract), not this internal sort.
   2. Per entity, slide a window of length lookback over sorted rows.
   3. Align target to prediction_step relative to the window end.
+     Default prediction_step=0 = contemporaneous (the window's own
+     final-period label, F3); >0 = opt-in forecast.
   4. Encode categoricals (unseen -> <unk> at index 0).
   5. Scale reals, clip if configured.
   6. Pad short entities to lookback length with mask.
@@ -4082,3 +4088,67 @@ acceptance.
   this entry are the explicit in-repo annotation of the gap. A14 is NOT
   weakened (the >=0.75 assertion and the slow acceptance thresholds
   stand); the marker is removed once the root cause is fixed.
+
+Root cause RESOLVED (deep-dive outcome; pending the staged
+doc/code consensus pipeline):
+
+- **`TabularToSequenceConfig.prediction_step` default `1` -> `0`.** The
+  deep-dive proved the TFT model is correct: with contemporaneous
+  alignment it reaches train AUC ~0.94 (a gradient-boosting baseline on
+  the per-window features reaches ~0.98), versus AUC ~0.68 under the
+  old default. F6 emits a contemporaneous target by spec (steps 7-9
+  compute it from `phi(window)`; F6 has no `prediction_step` and never
+  shifts the label). The sole defect: `TabularToSequence`'s default
+  `prediction_step=1` re-aligned the already-contemporaneous panel to a
+  1-step forecast, destroying the signal for the classification /
+  regression task the library exists for. This contradicted the
+  library's own positioning (requirements item 8, "matching the
+  classifier's contract"; "not a forecasting library"). Fix: default
+  becomes `0` (contemporaneous); `prediction_step>0` stays as opt-in
+  forecasting. NOT a Phase 7 model change, NOT a DGP change, NOT a
+  `dgp_version` bump, NOT an N1 threshold re-tune (the thresholds were
+  defined for the contemporaneous task and were merely unmeasurable
+  under the old default). requirements F3 / item 8 / F1 output
+  row-order contract / F6 / N1 and architecture A4 (config snippet) /
+  A5 (transform step) / this Phase 9 ledger are revised in sync.
+- **Secondary: `predict` output row order (F1 contract).** `predict` /
+  `predict_proba` / `predict_quantiles` currently return predictions in
+  the internal `(id_col, time_col)` sort order, not the caller's input
+  row order, a silent sklearn-contract violation for an unsorted real
+  panel (masked on the int-id synthetic panels because the orders
+  coincide). The transform must retain the `input_row_order_`
+  caller-order restore permutation and the family predict must restore
+  input order. Specified in F1 and the A5 transform step above.
+- **F6 generator vestigial `prediction_step` skip-guard (in-scope for
+  the refactor plan).** `generator.py`'s `target_idx = window_end +
+  prediction_step; if target_idx >= n_periods: continue` only trims
+  tail windows; it never shifts the label (F6 is contemporaneous by
+  steps 7-9). With the default `0` it is dead/incoherent. The S4
+  refactor plan MUST decide its fate (remove it, or make
+  `generator.prediction_step>0` emit genuinely forecast-aligned
+  targets so forecast-mode data matches `TabularToSequence.
+  prediction_step>0`); it must not be silently left.
+- **Governance**: this is an assumption changed since Phase 1, so it
+  goes through the full pipeline: req/arch/impl-plan revision -> Claude
+  design-review consensus -> Gemini design consensus -> point-for-point
+  refactor plan -> Claude consensus -> code change -> Claude /review
+  consensus -> Gemini code consensus.
+  The quickstart / acceptance `xfail`s are removed in the code stage
+  once the fix lands and the thresholds are met.
+- **S2 status: Claude design-review consensus REACHED after 4 rounds**
+  (all 6 dual-model reviewers APPROVE; 0 CRITICAL / 0 IMPROVEMENT on
+  the final round). R1-R3 CRITICALs (F1 vs per-window/per-entity grain;
+  prediction_step>0 horizon-edge contract untested; placeholder test
+  paths) were resolved by the F1 predict-time scoping rewrite, the
+  per-row `min_periods_predict` knob, the F3 step-2 cardinality anchor,
+  and the 7 concrete mandatory tests. Deferred NITPICKs (non-blocking,
+  recorded so the Gemini pass and S4 see them): (a) `requirements.md`
+  uses opposing italic emphasis on "per *entity*" (gate trigger) vs
+  "per *row*" (NaN-fill) within cross-referenced lines, both correct in
+  context; optional clarifier. (b) An older Phase-prior F11 ledger
+  entry still cites the pre-rename `min_periods_predict_breach` string
+  as a historical record (legitimate, like prior backtick-literal
+  precedents; test #6 asserts the breach-warning count, not the key).
+  (c) The mandatory signal-reachability floor is intentionally
+  provisional (`>=0.70`) and S4-pinned against a measured run, by
+  design, not a gap. Next: S3 Gemini design final-pass.
