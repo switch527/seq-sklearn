@@ -21,7 +21,7 @@ from seq_sklearn.models._base import BaseSequenceEstimator
 from seq_sklearn.models._classifier import BaseSequenceClassifier
 from seq_sklearn.models.transformer.tft.classifier import TFTClassifier
 from seq_sklearn.models.transformer.tft.regressor import TFTRegressor
-from seq_sklearn.tuning.suggest_params import suggest_params
+from seq_sklearn.tuning.suggest_params import _MODEL_SHAPE_BY_CONFIG, suggest_params
 
 
 def _base() -> TFTConfig:
@@ -214,3 +214,26 @@ def test_search_extras_noop_alone() -> None:
     cfg = suggest_params(study.ask(), TFTClassifier, base=base, search_extras=True)
     assert isinstance(cfg, TFTConfig)
     assert cfg.advanced == base.advanced
+
+
+def test_invalid_assembled_config_wrapped_as_configerror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # F8 + Gemini final-pass r1-C1: an invalid assembled config must
+    # raise ConfigError, not a raw pydantic.ValidationError, so the
+    # Optuna guard prunes the trial instead of the bare error killing
+    # the study. Force an invalid shape (10 % 3 != 0 fails the
+    # TFTConfig heads-divide-hidden validator).
+    def _bad_shape(_trial: object) -> dict[str, object]:
+        return {
+            "hidden_size": 10,
+            "attention_heads": 3,
+            "dropout": 0.1,
+            "variable_selection_dropout": 0.1,
+            "prediction_readout": "last_valid",
+        }
+
+    monkeypatch.setitem(_MODEL_SHAPE_BY_CONFIG, TFTConfig, _bad_shape)
+    study = optuna.create_study()
+    with pytest.raises(ConfigError):
+        suggest_params(study.ask(), TFTClassifier, base=_base())

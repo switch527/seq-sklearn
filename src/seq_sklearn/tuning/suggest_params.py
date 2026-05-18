@@ -21,6 +21,7 @@ from collections.abc import Callable
 from typing import Any
 
 import optuna
+from pydantic import ValidationError
 
 from seq_sklearn.config._domains import (
     CLASSIFICATION_TASK_TYPES,
@@ -152,9 +153,11 @@ def suggest_params(
         the F5 validity matrix by construction.
 
     Raises:
-        ConfigError: if ``model_class`` has no inferable task family, or
-            ``base`` is required (a non-search required field exists) but
-            was not supplied.
+        ConfigError: if ``model_class`` has no inferable task family;
+            if ``base`` is required (a non-search required field exists)
+            but was not supplied; or if the assembled config fails
+            pydantic validation (the ``ValidationError`` is wrapped per
+            F8 so the Optuna guard can prune the trial).
     """
     config_cls: type[BaseModelConfig] = model_class._config_cls
     tasks = _family_tasks(model_class)
@@ -231,4 +234,15 @@ def suggest_params(
             alpha_keys_for(config_cls),
         )
 
-    return config_cls(**merged)
+    # F8: never leak a raw pydantic.ValidationError. suggest_params is
+    # the documented body of the Optuna `objective`, run inside
+    # optuna_trial_guard, which only converts ConfigError / TrainingError
+    # to a pruned trial. An unwrapped ValidationError would escape the
+    # guard and (under study.optimize(catch=())) kill the whole study.
+    # The sampler is closed under F5 by construction, so this is
+    # defense-in-depth for an invalid `base` override or a future
+    # config validator; it matches BaseSequenceEstimator._build_config.
+    try:
+        return config_cls(**merged)
+    except ValidationError as exc:
+        raise ConfigError(str(exc)) from exc
