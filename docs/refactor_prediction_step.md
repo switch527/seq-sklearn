@@ -651,3 +651,49 @@ Deferred (tracked, reason recorded, consensus-valid):
   remains DEFERRED as in the S5 ledger (backbone is key-agnostic; a
   "key absent" assertion would couple a test to an internal batch-
   dict shape the design leaves loose).
+
+Round 2 (dual-model swarm on `git diff 67172c0..HEAD`,
+4d4f343+bd75259): code-opus APPROVE (0/0/0); code-sonnet APPROVE
+(0C/0I/1N); style-opus/sonnet APPROVE (0/0/0); qa-opus APPROVE
+(0C/1I/1N); qa-sonnet APPROVE (0C/1I/1N); arch-opus REQUEST_CHANGES
+(0C/1I/0N). All R1 CRITICALs confirmed CLOSED with non-vacuous
+mutation-sensitive oracles. Addressed in R2:
+- arch-opus R2-I1: `architecture.md:4113-4116` still said the
+  generator skip-guard was "reconciled in S4" with a duplicated
+  clause and unbalanced parens, contradicting the bd75259 RESOLVED
+  ledger at `architecture.md:4147` in the same file. Rewritten to the
+  resolved state (removed in S6 per the S5 Step 6 decision). Fixed in
+  a030a18.
+- code-sonnet R2-N1: `_shuffle` test-helper docstring made
+  unambiguous (operational description, not new->old jargon).
+
+Deferred (tracked):
+- qa-opus R2-I1 + qa-sonnet R2-I1 (no `--cov` artifact in the prior
+  gate runs): RESOLVED by running the authoritative post-bd75259
+  full gate WITH `--cov=seq_sklearn --cov-report=term-missing` (the
+  Step 9 coverage bar; result recorded in the S6/S7 gate ledger).
+- qa R2-N1 (0/1-row sub-floor boundary in #6): DEFERRED NITPICK; the
+  2-row case is a sufficient representative of the per-row NaN-fill
+  cardinality contract.
+
+## Authoritative post-fix gate + coverage (S7-R2 close)
+
+Full `pytest -m "not gpu" --cov=seq_sklearn` after a030a18
+(task bkx52q3ay): 1926 passed, 2 deselected (gpu), 295 xfailed,
+0 failed, 0 xpassed, 913s. This is the true post-fix artifact
+(supersedes the pre-S6 b7qv69lrx run; arch-opus R2 caveat).
+
+Coverage of the refactor's new/changed code (the Step 9 bar):
+`config/_adapters.py`, `config/tabular.py`,
+`data/synthetic/generator.py`, `data/tabular_to_sequence.py` =
+100% (the new `_restore_permutation`, `_POS` collision guard,
+`emitted_pos`, `input_row_order` emission all covered);
+`transformer/_base.py` 88% (only the GPU-only `_emit` device-tensor
+path uncovered on CPU CI, expected). The reorder branches in
+`_base._calibration_fold` / `_classifier.predict_proba` /
+`_regressor._calibrated_matrix` / `predict_with_attention` and the
+`Trainer.fit` pop are NOT in any term-missing list (covered by
+#3/#6/#7/#8/#11/#9). Coverage delta is non-negative: the refactor
+added covered code with new tests and removed no tests. Step 9
+coverage bar satisfied; qa-opus/qa-sonnet R2-I1 (no `--cov`
+artifact) resolved.
