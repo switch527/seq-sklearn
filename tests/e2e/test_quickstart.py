@@ -38,18 +38,6 @@ def _force_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(torch.cuda, "device_count", lambda: 0)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "TFT learnability finding under root-cause investigation (see "
-        "docs/architecture.md Phase 9 ledger): the v1 TFT scores "
-        "~0.59-0.62 accuracy on its own training data at strong signal, "
-        "so the A14 quickstart >=0.75 and the N1 acceptance thresholds "
-        "are not currently met. NOT a weakening of A14: the assertion "
-        "stays at 0.75 and this xfail is removed once the deep-dive "
-        "resolves the eval/training/DGP root cause."
-    ),
-    strict=False,
-)
 def test_quickstart_meets_n1_binary_accuracy(monkeypatch: pytest.MonkeyPatch) -> None:
     _force_cpu(monkeypatch)
     module = _load_quickstart()

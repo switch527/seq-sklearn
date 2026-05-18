@@ -51,6 +51,20 @@ def _emit_arr(a: np.ndarray, device: torch.device | str | None) -> np.ndarray:
     return cast("np.ndarray", torch.as_tensor(a).to(device))
 
 
+def _reorder_np(a: np.ndarray, order: np.ndarray) -> np.ndarray:
+    """Index an emission-order ndarray back to caller X row order (F1)."""
+    return a[order]
+
+
+def _reorder_t(t: Tensor, order: np.ndarray) -> Tensor:
+    """Index an emission-order tensor back to caller X row order (F1).
+
+    The index tensor is built on ``t``'s device so a GPU-resident
+    introspection tensor reorders without a device-mismatch.
+    """
+    return t[torch.as_tensor(order, device=t.device)]
+
+
 class TransformerSequenceEstimator:
     """Namespace for the transformer-family ``Classifier`` / ``Regressor`` mixins."""
 
@@ -83,15 +97,24 @@ class TransformerSequenceEstimator:
             idx = est._index_from_proba(proba)
             logits = logits_t.numpy()  # already detached + on CPU
             logits[below] = np.nan
+            # Every field above is in transform (sorted) row order with
+            # the below-floor NaN-fill already applied in that space.
+            # Restore caller X row order ONCE here, per field, AFTER the
+            # fill (F1; predictions/proba/logits come from a local
+            # forward, not the base _predict_raw seam, so this is the
+            # single reorder for the whole dataclass).
+            iro = batch["input_row_order"].cpu().numpy()
             return AttentionOutput(
-                predictions=_emit_arr(idx, device),
-                probabilities=_emit_arr(proba, device),
-                logits=_emit_arr(logits, device),
-                var_selection_weights=_emit(tout.var_selection_weights, device),
-                static_var_selection_weights=_emit(tout.static_var_selection_weights, device),
-                attention_weights=_emit(tout.attention_weights, device),
-                padding_mask=_emit(output.padding_mask, device),
-                entity_id=_emit(batch["entity_id"], device),
+                predictions=_emit_arr(_reorder_np(idx, iro), device),
+                probabilities=_emit_arr(_reorder_np(proba, iro), device),
+                logits=_emit_arr(_reorder_np(logits, iro), device),
+                var_selection_weights=_emit(_reorder_t(tout.var_selection_weights, iro), device),
+                static_var_selection_weights=_emit(
+                    _reorder_t(tout.static_var_selection_weights, iro), device
+                ),
+                attention_weights=_emit(_reorder_t(tout.attention_weights, iro), device),
+                padding_mask=_emit(_reorder_t(output.padding_mask, iro), device),
+                entity_id=_emit(_reorder_t(batch["entity_id"], iro), device),
             )
 
     class Regressor:
@@ -128,12 +151,20 @@ class TransformerSequenceEstimator:
             else:
                 predictions = mat.reshape(-1)
                 quantiles_used = None
+            # predictions is in transform (sorted) order, NaN-filled in
+            # that space by _calibrate_raw. Restore caller X row order
+            # ONCE per per-row field here, AFTER the fill (F1).
+            # quantiles_used is fit-time metadata, NOT per-row: it is
+            # shuffle-invariant and left untouched.
+            iro = batch["input_row_order"].cpu().numpy()
             return RegressionAttentionOutput(
-                predictions=_emit_arr(predictions, device),
+                predictions=_emit_arr(_reorder_np(predictions, iro), device),
                 quantiles_used=quantiles_used,
-                var_selection_weights=_emit(tout.var_selection_weights, device),
-                static_var_selection_weights=_emit(tout.static_var_selection_weights, device),
-                attention_weights=_emit(tout.attention_weights, device),
-                padding_mask=_emit(output.padding_mask, device),
-                entity_id=_emit(batch["entity_id"], device),
+                var_selection_weights=_emit(_reorder_t(tout.var_selection_weights, iro), device),
+                static_var_selection_weights=_emit(
+                    _reorder_t(tout.static_var_selection_weights, iro), device
+                ),
+                attention_weights=_emit(_reorder_t(tout.attention_weights, iro), device),
+                padding_mask=_emit(_reorder_t(output.padding_mask, iro), device),
+                entity_id=_emit(_reorder_t(batch["entity_id"], iro), device),
             )

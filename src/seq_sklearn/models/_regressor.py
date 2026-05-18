@@ -85,8 +85,14 @@ class BaseSequenceRegressor(RegressorMixin, BaseSequenceEstimator):
         NaN-filled here so every regressor predict path satisfies the
         F NaN-in-output contract (never zero-filled).
         """
-        raw, below = self._predict_raw(X)
-        return self._calibrate_raw(raw, below), below
+        raw, below, input_row_order = self._predict_raw(X)
+        # _calibrate_raw NaN-fills in sorted (transform) space; restore
+        # caller X row order at this array boundary, AFTER the fill (F1).
+        # _calibrate_raw itself must NOT reorder (it is shared with
+        # predict_with_attention, which reorders per-field in Step 4;
+        # reordering there would double-permute the attention path).
+        calibrated = self._calibrate_raw(raw, below)
+        return calibrated[input_row_order], below[input_row_order]
 
     def _calibrate_raw(self, raw: Tensor, below: np.ndarray) -> np.ndarray:
         """Calibrated ``(N, Q)`` matrix from raw head logits + below mask.

@@ -57,7 +57,7 @@ class TabularToSequenceConfig(BaseModel):
     time_varying_real_cols: tuple[str, ...] = ()
     time_varying_categorical_cols: tuple[str, ...] = ()
     lookback: int = Field(default=12, ge=1)
-    prediction_step: int = Field(default=1, ge=0)
+    prediction_step: int = Field(default=0, ge=0)
     min_periods: int = Field(default=1, ge=1)
     min_periods_predict: int = Field(default=1, ge=1)
     scaling_real: Literal["standard", "robust", "quantile_uniform", "none"] = "standard"

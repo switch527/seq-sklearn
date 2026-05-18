@@ -12,7 +12,11 @@ from hypothesis import strategies as st
 
 from seq_sklearn.config.tabular import TabularToSequenceConfig
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
-from seq_sklearn.data.tabular_to_sequence import TabularToSequence
+from seq_sklearn.data.tabular_to_sequence import (
+    _POS,
+    TabularToSequence,
+    _restore_permutation,
+)
 from seq_sklearn.errors import ConfigError, DataContractError, NotFittedError
 from seq_sklearn.logging import Event
 
@@ -567,7 +571,6 @@ def test_property_tv_real_shape(seed: int) -> None:
     gen = SyntheticPanelGenerator(
         num_entities=12,
         periods_per_entity=(1, 60),
-        prediction_step=0,
         seed=seed,
     )
     panel, y = gen.generate()
@@ -731,3 +734,125 @@ def test_deserialize_tolerates_null_fingerprint() -> None:
     blob["feature_schema_fingerprint"] = None
     restored = TabularToSequence.deserialize(blob, cfg, "binary")
     assert restored.feature_schema_fingerprint_ is None
+
+
+# --- Phase 9 prediction_step refactor: mandatory tests --------------
+
+
+def _time_varying_label_panel() -> tuple[pd.DataFrame, np.ndarray]:
+    """One 4-row entity with a strictly time-varying label.
+
+    Label at row ``t`` is ``t``; a contemporaneous (prediction_step=0)
+    transform must emit target ``t`` for the window ending at row ``t``,
+    not ``t + 1`` (which the old default would have produced).
+    """
+    rows = [
+        {
+            "id": 0,
+            "time": pd.Timestamp("2020-01-01") + pd.offsets.MonthBegin(t),
+            "sc": "s0",
+            "sr": 1.0,
+            "tr": float(t),
+            "tc": "c0",
+        }
+        for t in range(4)
+    ]
+    return pd.DataFrame(rows), np.asarray([0.0, 1.0, 2.0, 3.0])
+
+
+def test_default_prediction_step_is_contemporaneous() -> None:
+    """#1: default config is contemporaneous; target[t] == label[t]."""
+    assert TabularToSequenceConfig(id_col="id", time_col="time").prediction_step == 0
+    frame, y = _time_varying_label_panel()
+    # _config() omits prediction_step -> exercises the new default.
+    out = TabularToSequence(_config(), "regression_point").fit_transform(frame, y)
+    targets = out["target"].numpy()
+    # One window per row, window ending at row t carries label[t] == t.
+    np.testing.assert_array_equal(targets, np.asarray([0.0, 1.0, 2.0, 3.0]))
+
+
+def test_prediction_step_horizon_edge_clamp() -> None:
+    """#5: prediction_step>0 clamps the horizon target, never drops a row."""
+    frame, y = _time_varying_label_panel()
+    out = TabularToSequence(_config(prediction_step=2), "regression_point").fit_transform(frame, y)
+    targets = out["target"].numpy()
+    # n=4. Interior e: target row e+2. Late e (e+2 > 3) clamps to row 3.
+    # One window per row still holds (count == 4), nothing dropped.
+    assert targets.shape == (4,)
+    np.testing.assert_array_equal(targets, np.asarray([2.0, 3.0, 3.0, 3.0]))
+
+
+def _shuffled_string_id_panel() -> tuple[pd.DataFrame, np.ndarray]:
+    """Two string-id entities interleaved in NON-(id,time) order.
+
+    Caller rows (positional index in parens):
+      (0) id=b time=1   (1) id=a time=1
+      (2) id=b time=2   (3) id=a time=2
+    Label at each row == its caller positional index, so a correctly
+    restored emission-order array indexed by input_row_order reproduces
+    ``[0, 1, 2, 3]``.
+    """
+    rows = [
+        {"id": "b", "time": 1, "sr": 1.0, "tr": 0.0},
+        {"id": "a", "time": 1, "sr": 1.0, "tr": 1.0},
+        {"id": "b", "time": 2, "sr": 1.0, "tr": 2.0},
+        {"id": "a", "time": 2, "sr": 1.0, "tr": 3.0},
+    ]
+    return pd.DataFrame(rows), np.asarray([0.0, 1.0, 2.0, 3.0])
+
+
+def _row_order_config() -> TabularToSequenceConfig:
+    return TabularToSequenceConfig(
+        id_col="id",
+        time_col="time",
+        static_real_cols=("sr",),
+        time_varying_real_cols=("tr",),
+        lookback=2,
+    )
+
+
+def test_transform_input_row_order_is_stateless() -> None:
+    """#9: value oracle + statelessness + no cross-call leak + error paths."""
+    frame, y = _shuffled_string_id_panel()
+    tts = TabularToSequence(_row_order_config(), "regression_point").fit(frame, y)
+
+    # (a) VALUE ORACLE. Hand-computed: _POS = [0,1,2,3] (pre-sort).
+    # stable sort by (id,time): a@1(pos1), a@2(pos3), b@1(pos0), b@2(pos2)
+    # -> emitted_pos = [1,3,0,2] -> argsort = [2,0,3,1].
+    out = tts.transform(frame)
+    assert out["input_row_order"].tolist() == [2, 0, 3, 1]
+    iro = out["input_row_order"].numpy()
+    # Indexing the emission-order target by iro restores caller order;
+    # label == caller positional index, so this must be [0,1,2,3].
+    np.testing.assert_array_equal(out["target"].numpy()[iro], np.asarray([0.0, 1.0, 2.0, 3.0]))
+
+    # (b) STATELESS: no input_row_order* attribute on the instance.
+    before = set(vars(tts))
+    tts.transform(frame)
+    second = tts.transform(frame.iloc[::-1].reset_index(drop=True))
+    after = set(vars(tts))
+    assert before == after
+    assert not any("input_row_order" in name for name in vars(tts))
+
+    # (c) NO CROSS-CALL LEAK: a different-order panel yields its own
+    # permutation; the prior call's tensor is independent.
+    first = tts.transform(frame)
+    assert first["input_row_order"].tolist() == [2, 0, 3, 1]
+    assert second["input_row_order"].tolist() != first["input_row_order"].tolist()
+
+    # (d1) precondition raise, exercised by a direct helper call.
+    with pytest.raises(DataContractError, match="row-order restore precondition"):
+        _restore_permutation([0, 1], 3)
+    # (d2) private-column collision raise, before the sort/assign.
+    colliding = frame.assign(**{_POS: range(len(frame))})
+    with pytest.raises(DataContractError, match="collides with the private"):
+        tts.transform(colliding)
+
+
+def test_restore_permutation_inverts_a_dense_permutation() -> None:
+    """_restore_permutation is the inverse of a dense permutation."""
+    emitted = np.array([3, 0, 2, 1])
+    order = _restore_permutation(emitted, 4)
+    # argsort of a dense permutation indexes emission order back to
+    # caller order: emitted[order] == arange(n).
+    np.testing.assert_array_equal(emitted[order], np.arange(4))

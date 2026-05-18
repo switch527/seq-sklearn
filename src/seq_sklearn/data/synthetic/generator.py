@@ -18,15 +18,16 @@ defaults and exposes them as constructor arguments:
 * Period grain (``period_grain``, default ``"monthly"``). F6 lists day,
   week, month, quarter, year; monthly matches the canonical
   ``periods_per_entity=(1, 60)`` coverage scenario.
-* Target-window emission rule: a row is emitted as a labelled example
-  only when a full ``lookback`` window ends at it AND a target row exists
-  ``prediction_step`` periods after the window end. Entities shorter than
-  ``lookback`` still emit one left-padded window (consistent with F3
-  variable-history handling) provided the prediction-step target exists;
-  the padded timesteps carry zeros and are flagged downstream by
+* Target-window emission rule: F6 is contemporaneous. One labelled
+  row is emitted per window end, with the label computed from that
+  window itself (no forward target row, no horizon shift). Every
+  period of every entity yields one row, so an ``n``-period entity
+  emits ``n`` rows (a single-period entity emits one). Entities
+  shorter than ``lookback`` still emit left-padded windows (consistent
+  with F3 variable-history handling); the padded timesteps carry zeros
+  and are flagged downstream by
   :class:`~seq_sklearn.data.tabular_to_sequence.TabularToSequence`'s
-  ``padding_mask``. The synthetic generator itself emits one row per
-  valid window end with the feature values at that period.
+  ``padding_mask``.
 
 The default panel column names (``id``, ``time`` plus generated feature
 names) line up with :class:`~seq_sklearn.config.tabular.TabularToSequenceConfig`
@@ -121,7 +122,6 @@ class SyntheticPanelGenerator:
         noise_level: float = 0.1,
         signal_strength: float = 0.9,
         lookback: int = 12,
-        prediction_step: int = 1,
         categorical_cardinality: int = 4,
         categorical_embed_dim: int = 3,
         period_grain: PeriodGrain = "monthly",
@@ -144,8 +144,6 @@ class SyntheticPanelGenerator:
             raise ValueError(f"signal_strength must be in [0, 1], got {signal_strength}")
         if lookback < 1:
             raise ValueError(f"lookback must be >= 1, got {lookback}")
-        if prediction_step < 0:
-            raise ValueError(f"prediction_step must be >= 0, got {prediction_step}")
         if categorical_cardinality < 1:
             raise ValueError(f"categorical_cardinality must be >= 1, got {categorical_cardinality}")
         if categorical_embed_dim < 1:
@@ -188,7 +186,6 @@ class SyntheticPanelGenerator:
         self.noise_level = noise_level
         self.signal_strength = signal_strength
         self.lookback = lookback
-        self.prediction_step = prediction_step
         self.categorical_cardinality = categorical_cardinality
         self.categorical_embed_dim = categorical_embed_dim
         self.period_grain: PeriodGrain = period_grain
@@ -371,10 +368,10 @@ class SyntheticPanelGenerator:
             )
 
             for window_end in range(n_periods):
-                target_idx = window_end + self.prediction_step
-                if target_idx >= n_periods:
-                    continue
-
+                # F6 is contemporaneous: one labelled row per window end,
+                # label computed from this window (phi below). No forward
+                # target row, so no tail-window skip; every period emits a
+                # row (an n-period entity yields n rows).
                 window_start = max(0, window_end - self.lookback + 1)
                 window_tv_real = tv_real[window_start : window_end + 1]
                 pad = self.lookback - window_tv_real.shape[0]

@@ -355,7 +355,20 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         if calibration_set is not None:
             x_cal, y_cal = calibration_set
             batch = transformer.transform(x_cal)
-            return self._raw_outputs(batch), torch.as_tensor(self._encode_targets(y_cal))
+            # transform() returns raw outputs in sorted (id, time) order;
+            # y_cal is in caller order. Reorder the raw outputs to caller
+            # order so the calibrator / threshold tuner always sees
+            # (caller-order outputs, caller-order y_cal) (F1/F2, Gemini
+            # G-C2). Pinned here so BOTH consumers (the calibrator-fit
+            # path and the classifier _post_fit threshold path) inherit
+            # the fix.
+            raw = self._raw_outputs(batch)[batch["input_row_order"]]
+            return raw, torch.as_tensor(self._encode_targets(y_cal))
+        # Internal-split branch: raw outputs, cal_idx, and batch["target"]
+        # are all in the SAME sorted space and indexed by the same
+        # sorted-space `keep`, so the pairing is already self-consistent.
+        # input_row_order must NOT be applied here: doing so would
+        # mis-order a currently-correct pairing.
         batch = transformer.transform(X)
         entity_ids = batch["entity_id"].cpu().numpy()
         _, _, cal_idx = compute_three_way_split(
@@ -584,12 +597,20 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
             output = backbone(batch)
         return output, head, batch, self._below_floor_mask(batch)
 
-    def _predict_raw(self, X: pd.DataFrame) -> tuple[Tensor, np.ndarray]:  # noqa: N803
-        """Backbone + head logits and the below-floor mask (F4 fingerprint)."""
-        output, head, _batch, below = self._forward_backbone(X)
+    def _predict_raw(self, X: pd.DataFrame) -> tuple[Tensor, np.ndarray, np.ndarray]:  # noqa: N803
+        """Backbone + head logits, below-floor mask, caller-order restore.
+
+        Returns ``(raw, below, input_row_order)``. ``raw`` and ``below``
+        are in transform (sorted) row order; ``input_row_order`` is the
+        permutation that indexes an emission-order array back to the
+        caller's input ``X`` row order (F1). Callers apply it as the
+        last step, AFTER the sorted-space below-floor NaN-fill.
+        """
+        output, head, batch, below = self._forward_backbone(X)
         with torch.no_grad():
             logits = head(output.representation)
-        return logits.detach().cpu(), below
+        input_row_order = batch["input_row_order"].cpu().numpy()
+        return logits.detach().cpu(), below, input_row_order
 
     def _below_floor_mask(self, batch: dict[str, Tensor]) -> np.ndarray:
         """Per-output-row mask of entities below ``min_periods_predict``.

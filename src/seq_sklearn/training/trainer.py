@@ -413,6 +413,13 @@ class Trainer:
 
         class_weights = self._class_weights(train_idx, batch["target"])
 
+        # input_row_order is a predict-time caller-order restore artifact
+        # (F1) with no training meaning; drop it so it does not leak into
+        # the per-window training batch via the key-agnostic
+        # _TensorDictDataset. pop(default) keeps fit correct even if a
+        # future transform variant omits the key.
+        batch.pop("input_row_order", None)
+
         dataset = _TensorDictDataset(batch)
         loader_kwargs = self._dataloader_kwargs()
         sampler = self._train_sampler(train_idx, batch["target"])
