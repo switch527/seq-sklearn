@@ -87,21 +87,47 @@ TFT train/predict path through the public estimator API.
 ## P-B: The three benchmarks
 
 - **PB.1 `test_train_step_time.py`** uses `pytest-benchmark` (already a
-  dev dep, `perf` marker already registered). Benchmarks a single
-  training step (one optimizer step on one batch) via the Lightning
-  path, `--benchmark-only`. Recorded metrics: median and P95 step
-  seconds from the pytest-benchmark stats object (`stats.stats.median`,
-  and the 95th percentile computed from `stats.stats.data` with a
-  pinned numpy `percentile(..., 95, method="linear")` so the P95 has a
-  non-arbitrary oracle).
+  dev dep, `perf` marker already registered) via the `benchmark`
+  fixture. Benchmarks a single training step (one optimizer step on
+  one batch) via the Lightning path. NOTE (Gemini-NIT): on CPU a
+  single `Trainer.fit` carries dataloader/callback init overhead that
+  is non-trivial vs one step; this is acceptable for a RELATIVE gate
+  because the overhead is identical run-to-run on a fixed proxy and
+  the baseline captures it too, but the doc states it so the absolute
+  number is never read as pure step time. Recorded metrics: median and
+  P95 step seconds from the pytest-benchmark stats object
+  (`stats.stats.median`, and the 95th percentile computed from
+  `stats.stats.data` with a pinned numpy
+  `percentile(..., 95, method="linear")` so the P95 has a
+  non-arbitrary oracle). The suite is selected by the `-m perf`
+  MARKER, never by pytest-benchmark's `--benchmark-only` flag
+  (Gemini-C1: `--benchmark-only` skips every test that does not
+  request the `benchmark` fixture, which would SILENTLY drop PB.2 and
+  PB.3 and leave the gate measuring step time alone).
 - **PB.2 `test_peak_memory.py`** measures peak memory of a full
-  fit+predict of the proxy. CPU cell: `tracemalloc` peak (Python
-  allocations) PLUS `resource.getrusage(RUSAGE_SELF).ru_maxrss` (RSS
-  high-water), the gated metric being `ru_maxrss` (the N7 "GPU memory"
-  analog on CPU). CUDA cell: `torch.cuda.reset_peak_memory_stats()` then
-  `torch.cuda.max_memory_allocated()` after fit+predict. The JSON
-  records the metric name actually gated per cell so a CPU/GPU mix is
-  explicit, never silently comparing RSS to CUDA bytes.
+  fit+predict of the proxy. CRITICAL isolation (Gemini-C3):
+  `resource.getrusage(RUSAGE_SELF).ru_maxrss` is a
+  PROCESS-LIFETIME high-water mark that CANNOT be reset, so measuring
+  it in the shared pytest worker would report the peak of whatever ran
+  before (PB.1's benchmark rounds, collection, other tests), not the
+  isolated proxy. PB.2 therefore runs the fit+predict payload in a
+  FRESH child process (`multiprocessing.get_context("spawn").Process`,
+  spawn not fork so the parent's already-allocated heap is not
+  inherited into the child's `ru_maxrss` baseline) that calls
+  `build_proxy_estimator_and_panel()`, does fit+predict, reads its OWN
+  `ru_maxrss` (and `tracemalloc` peak, logged-only per Q2), and
+  returns the value over a `Queue`. The parent asserts against the
+  baseline. This makes the measurement order-independent and
+  attributable to the proxy alone. CUDA cell: inside the same spawned
+  child, `torch.cuda.reset_peak_memory_stats()` then
+  `torch.cuda.max_memory_allocated()` after fit+predict (CUDA stats
+  ARE resettable, but the child keeps CPU and CUDA paths symmetric and
+  isolated). The JSON records the metric name actually gated per cell
+  so a CPU/GPU mix is explicit, never silently comparing RSS to CUDA
+  bytes. `test_peak_memory_payload_runs_in_child_process` (a
+  `perf`-marked PG.4 test) asserts the measured value comes from a
+  distinct PID, so a regression that inlines the payload back into the
+  pytest process (reintroducing the contamination) fails.
 - **PB.3 `test_inference_latency.py`** measures per-sample inference
   latency on a batch of 1024 windows (the N7 latency reference size),
   reported as median and P95 over a fixed repeat count, measured
@@ -131,18 +157,30 @@ TFT train/predict path through the public estimator API.
   `inference_latency_p95_s`. The `Literal` typing makes a wrong
   metric-name string (e.g. `cuda_bytes`) a load-time
   `ValidationError`, not a silent mis-gate.
-- **PC.1a (module-import boundary, arch-C3).** `PerfBaseline`, the cell
-  resolver (PC.2), the gate helper (PD.1), and `PerfRegressionError`
-  live in `tests/perf/_gate.py`, which imports ONLY pydantic + stdlib
-  at module load (no `torch`, no `seq_sklearn` estimator import). The
-  heavy proxy (`tests/perf/_workload.py`, which imports torch +
-  `TFTClassifier`) is imported only inside the `perf`-marked benchmark
-  bodies and the capture CLI, never at `_gate.py` import time. The
-  default + coverage suite (acceptance criterion 2) runs PG.1/PG.2,
-  which import only `_gate.py`; they therefore never construct a
-  `TFTClassifier` or pull torch through this path, keeping the fast PR
-  job fast (this boundary is asserted by
-  `test_gate_module_has_no_heavy_imports`, PG.3).
+- **PC.1a (module-import boundary, arch-C3; tightened by Gemini-C2).**
+  `PerfBaseline`, the cell resolver (PC.2), the gate helper (PD.1),
+  and `PerfRegressionError` live in `tests/perf/_gate.py`, which
+  imports ONLY pydantic + stdlib at module load (no `torch`, no
+  `seq_sklearn` import). CRITICAL subtlety Gemini caught:
+  `seq_sklearn.hardware` does an UNCONDITIONAL module-level
+  `import torch` (`src/seq_sklearn/hardware.py:14`). Therefore
+  `_gate.py` must NOT do a module-level
+  `from seq_sklearn.hardware import detect`; that single line would
+  transitively pull torch at `_gate.py` import and silently void this
+  whole boundary (and make PG.3 check (a) structurally impossible, not
+  just check (c)). The cell resolver (PC.2) instead does its
+  `from seq_sklearn.hardware import detect` LAZILY, inside the
+  resolver function body, called only by `perf`-marked benchmark
+  tests at run time. The heavy proxy (`tests/perf/_workload.py`,
+  torch + `TFTClassifier`) is likewise imported only inside the
+  `perf` benchmark bodies and the capture CLI. The default + coverage
+  suite (acceptance criterion 2) runs PG.1/PG.2 and PG.3 checks
+  (a)/(b), which import only `_gate.py` and `conftest` and NEVER call
+  the resolver, so they never pull torch, keeping the fast PR job
+  fast. The boundary is what PG.3 (a)/(b) assert; the resolver
+  function legitimately needs torch (via `detect`) when actually
+  called, so PG.3 (c) tests the resolver's branch LOGIC only and does
+  NOT assert `sys.modules` after calling it (Gemini-C2 fix).
 - **PC.2** Cell identity is resolved in two steps, NOT by tier alone
   (arch-I1: `HardwareTier.VOLTA_TURING` spans both V100, CC 7.0, and
   T4, CC 7.5, so a tier-only map would mis-resolve a V100 runner to
@@ -158,9 +196,13 @@ TFT train/predict path through the public estimator API.
   exact resolving device is auditable. The two public cells are the
   only v1 baselines per A13/P2; other devices are optional contributor
   cells (D2), not a Phase 11 deliverable. The cell resolver lives in
-  `_gate.py` but the `torch.cuda` calls are lazily imported INSIDE the
-  resolver function (not at module top) to preserve PC.1a's
-  no-torch-at-import boundary; PG.3 asserts this.
+  `_gate.py` but BOTH `from seq_sklearn.hardware import detect` AND the
+  `torch.cuda` calls are lazily imported INSIDE the resolver function
+  body (not at module top), because `seq_sklearn.hardware` itself
+  module-imports torch (Gemini-C2); this keeps `_gate.py`'s module
+  import torch-free per PC.1a. The resolver is only ever called from
+  `perf`-marked benchmark tests at run time (where torch is loaded
+  anyway), never from PG.1/PG.2 or PG.3 (a)/(b).
 
 ## P-D: The regression gate
 
@@ -283,13 +325,20 @@ TFT train/predict path through the public estimator API.
 - **PF.1** Replace the placeholder nightly `perf` job body
   (`uv run pytest -m perf --benchmark-only || echo "empty in Phase 0"`)
   with: `SEQ_SKLEARN_PERF_GATE=enforce uv run pytest -m perf
-  --benchmark-only -p no:cacheprovider`. The job stays
-  `runs-on: ubuntu-latest` (the cpu-x86 cell) and remains in `nightly.yml`
-  (not `pr.yml`): perf is nightly-only (implementation_plan Phase 11).
+  -p no:cacheprovider`. The `--benchmark-only` flag is DROPPED
+  (Gemini-C1): it restricts the run to tests requesting the
+  `benchmark` fixture, which would silently skip PB.2
+  (`tracemalloc`/`ru_maxrss`) and PB.3 (`time.perf_counter`), leaving
+  the gate measuring only PB.1 step time. The `-m perf` marker alone
+  isolates the perf suite while collecting all three. The job stays
+  `runs-on: ubuntu-latest` (the cpu-x86 cell) and remains in
+  `nightly.yml` (not `pr.yml`): perf is nightly-only
+  (implementation_plan Phase 11).
 - **PF.2** Add a nightly `perf-gpu` job under the existing
   `[self-hosted, gpu]` runner (guarded by the same
-  `vars.GPU_RUNNER_AVAILABLE` condition) running the same command; it
-  resolves the `t4` cell. `continue-on-error: true` per PE.3.
+  `vars.GPU_RUNNER_AVAILABLE` condition) running the same command
+  (also WITHOUT `--benchmark-only`, Gemini-C1); it resolves the `t4`
+  cell. `continue-on-error: true` per PE.3.
 - **PF.3** Add the `perf-baseline-guard` job to `pr.yml` (PE.2), the
   only Phase 11 addition to PR-CI; it is a fast git-diff/marker check,
   not a perf run, so it respects the 5-minute PR budget.
@@ -360,39 +409,38 @@ and the gate's correctness offline, deterministic, and fast.
   (`test_capture_writes_device_name_cpu` is NOT here; it is a
   capture-path test and lives in PG.6, not in this schema file, qa
   R4-C1, see PG.6.)
-- **PG.3 `test_gate_module_boundary.py`**:
+- **PG.3 `test_gate_module_boundary.py`** (restructured per
+  Gemini-C2: the import-boundary guard and the resolver-logic test
+  are now SEPARATE tests, because calling the resolver legitimately
+  imports torch via `seq_sklearn.hardware` and cannot assert it
+  absent):
   - `test_gate_module_has_no_heavy_imports`: in a subprocess launched
     with `sys.executable` (qa NEW-I2: same interpreter/venv as pytest,
-    not ambient `python`), run three checks asserting `"torch"` and
+    not ambient `python`), run TWO checks asserting `"torch"` and
     `"seq_sklearn"` absent from `sys.modules` after each: (a)
-    `import tests.perf._gate` (module-level boundary); (b)
-    `import tests.perf.conftest` (qa R4-I2: the conftest must defer
-    its `import torch` into the fixture body, see PG.5, so importing
-    it for PG.5's `autouse` introspection does not pull torch); (c)
-    call the cell resolver with monkeypatched `detect()` returning
-    `CPU` AND a second sub-case with `detect()` returning
-    `VOLTA_TURING` and `get_device_name` patched to `"V100"` so the
-    CUDA branch body executes (qa R3-I3 + R4-I1: catches an
-    `import torch` moved to the top of the resolver OR inside the
-    `if VOLTA_TURING` branch, not only a bare function-top import; the
-    resolver's own lazy `torch.cuda` call is patched out so the branch
-    runs without a GPU and without importing torch). The V100 sub-case
-    resolves to "no baseline" (PC.2), which calls `pytest.skip`; the
-    subprocess script wraps the resolver call in
-    `try/except _pytest.outcomes.Skipped: pass` (qa confirming-I1) so
-    the `sys.modules` snapshot is taken AFTER the CUDA branch executes
-    regardless of the skip, otherwise the skip exception would abort
-    the subprocess before the assertion. Pins PC.1a / arch-C3 so the
-    fast PR suite cannot regress into pulling torch.
-  - `test_cell_resolver_mapping`: monkeypatch `detect()` and
-    `torch.cuda.get_device_name` => `CPU` resolves `cpu-x86`;
-    `VOLTA_TURING` + device name containing `"T4"` resolves `t4`;
-    `VOLTA_TURING` + a `"V100"` device resolves to "no baseline"
-    (arch-I1 collision); `PASCAL`, `AMPERE_ADA`, `HOPPER`, `BLACKWELL`
-    each resolve to "no baseline". For every "no baseline" case assert
-    the `pytest.skip` reason string CONTAINS both the tier name and
-    the device name (qa NEW-I3: the skip is diagnosable, not opaque;
-    qa Q5 silent-skip gap; PC.2).
+    `import tests.perf._gate` (the module-level boundary, valid only
+    because `detect` is lazy-imported inside the resolver per PC.1a /
+    Gemini-C2, NOT at `_gate` module scope); (b)
+    `import tests.perf.conftest` (qa R4-I2: the conftest defers its
+    `import torch` into the fixture body, see PG.5, so importing it
+    for PG.5's `autouse` introspection does not pull torch). The
+    resolver is deliberately NOT called here; (a)/(b) are the entire
+    fast-PR boundary, and PG.1/PG.2 only ever import `_gate`, never
+    resolve a cell.
+  - `test_cell_resolver_branch_logic` (in-process, NOT asserting
+    `sys.modules`; Gemini-C2): monkeypatch `detect()` and
+    `torch.cuda.get_device_name` and assert resolution only: `CPU ->
+    cpu-x86`; `VOLTA_TURING` + `"T4"` device -> `t4`; `VOLTA_TURING` +
+    `"V100"` -> "no baseline" (`pytest.skip` with a reason containing
+    both the tier name and the device name, qa NEW-I3 / R4-I1 V100
+    collision); `PASCAL`/`AMPERE_ADA`/`HOPPER`/`BLACKWELL` -> "no
+    baseline". This subsumes the old `test_cell_resolver_mapping`.
+    The earlier "run the resolver in a no-torch subprocess" construction
+    (R3-I3 / R4-I1 / confirming-I1) is RETRACTED: its premise (the
+    resolver can execute without importing torch) is false because
+    `seq_sklearn.hardware:14` module-imports torch (Gemini-C2). The
+    no-torch boundary is enforced solely by the two
+    never-call-the-resolver import checks above.
 - **PG.4 `test_workload.py`** (`perf`-marked where it constructs the
   estimator; the budget test is subprocess-isolated):
   - `test_proxy_estimator_config_matches_spec` (`perf`-marked):
@@ -406,15 +454,24 @@ and the gate's correctness offline, deterministic, and fast.
     a hard `timeout` (constant, proposed 180 s); assert exit 0 within
     the timeout, so an oversized proxy fails loudly instead of silently
     timing the nightly job out (qa-I1 / R1).
-- **PG.5 `conftest.py` fixture guard (I3)**: the session-scoped perf
-  fixture asserts `torch.are_deterministic_algorithms_enabled() is
-  True` at setup and raises `RuntimeError` otherwise, so a perf run in
-  non-deterministic mode fails loudly rather than producing
-  unreproducible numbers that the gate then trusts. `tests/perf/
-  conftest.py` does its `import torch` INSIDE the fixture function
-  body, NOT at module level (qa R4-I2), so importing the conftest
-  module to introspect the fixture does not pull torch; PG.3 check
-  (b) pins this. The fixture is `autouse=False` and explicitly
+- **PG.5 `conftest.py` fixture guard (I3; corrected per
+  Gemini-IMPROVEMENT).** The session-scoped perf fixture ENABLES
+  determinism then asserts it: it calls the library's strict-mode
+  entrypoint (`seq_sklearn.training.enable_strict_mode()`, the same
+  one the determinism config path uses) and ONLY THEN asserts
+  `torch.are_deterministic_algorithms_enabled() is True`, raising
+  `RuntimeError` if the assert fails. The earlier wording asserted the
+  flag without anyone setting it, which (Gemini noted) would crash
+  every perf run unconditionally since nothing in the plan turned
+  determinism on before the assert. Enabling-then-asserting both
+  guarantees PA.2's "determinism ON for every perf run" and still
+  fails loudly if `enable_strict_mode` itself regresses.
+  `tests/perf/conftest.py` does its `import torch` AND its
+  `from seq_sklearn.training import enable_strict_mode` INSIDE the
+  fixture function body, NOT at module level (qa R4-I2 + Gemini-C2:
+  `seq_sklearn.training` also pulls torch transitively), so importing
+  the conftest module to introspect the fixture does not pull torch;
+  PG.3 check (b) pins this. The fixture is `autouse=False` and explicitly
   requested only by the `perf`-marked workload tests (qa R3-I4): a
   session `autouse` fixture would run torch at the start of the fast
   PR suite and violate the PC.1a no-torch boundary for the non-`perf`
@@ -465,6 +522,19 @@ and the gate's correctness offline, deterministic, and fast.
   non-provisional) => no raise. Pins PD.1's "latency is
   observational, not gated" so an implementation that accidentally
   hard-gates latency is caught.
+- **PG.10 `test_all_three_perf_tests_collected`** (Gemini-C1
+  regression guard, NON-`perf`-marked so it runs in the fast suite
+  via pytest collection only, no benchmark execution): use
+  `pytest.main(["--collect-only", "-q", "-m", "perf",
+  "tests/perf/"])` (or the `pytester`/`Config` collection API) and
+  assert the collected node ids include all three of
+  `test_train_step_time`, `test_peak_memory`,
+  `test_inference_latency`. A second assertion runs the same
+  collection WITH `--benchmark-only` and asserts it collects FEWER
+  than three (documenting WHY the flag is forbidden in PF.1/PF.2:
+  the test is the executable proof that `--benchmark-only` silently
+  drops PB.2/PB.3). Collection-only, so it neither builds the proxy
+  nor imports torch.
 
 ## Resolved questions (round 1)
 
@@ -689,6 +759,62 @@ deferred-with-reason (D1-D4; arch R3-N2 NG1-density cosmetic
 deferral). NITPICKs permitted to remain per the consensus rule. The
 plan is eligible for the Gemini design final-pass.
 
-Gemini final pass: pending (user deferred any GPU/CPU-heavy work;
-Gemini design-review is doc-only and capacity-gated, run when the
-user clears it).
+## Gemini final-pass report (architecture-reviewer, design)
+
+Run 2026-05-19 on the consensus'd plan (commit `fb4a39a`). Tally:
+**CRITICAL 3 / IMPROVEMENT 1 / NITPICK 1, REQUEST_CHANGES.** All
+findings verified by reading the cited files; none hallucinated.
+
+- **Gemini-C1** (`PF.1/PF.2`, PB.1/PB.3): the CI command used
+  `pytest -m perf --benchmark-only`. `pytest-benchmark`'s
+  `--benchmark-only` collects ONLY tests requesting the `benchmark`
+  fixture, silently skipping PB.2 (`tracemalloc`/`ru_maxrss`) and
+  PB.3 (`time.perf_counter`). The gate would have measured step time
+  alone while reporting green. VERIFIED VALID.
+- **Gemini-C2** (`PC.1a`/`PC.2`/`PG.3`, `src/seq_sklearn/hardware.py:14`):
+  `seq_sklearn.hardware` does an unconditional module-level
+  `import torch`. A module-level `from seq_sklearn.hardware import
+  detect` in `_gate.py` would transitively pull torch at `_gate`
+  import, voiding the entire PC.1a fast-PR boundary (not just PG.3
+  check (c)). VERIFIED VALID, and deeper than Gemini framed: it also
+  invalidates the round-3/4 "run the resolver in a no-torch
+  subprocess" construction, whose premise was impossible.
+- **Gemini-C3** (`PB.2`): `resource.getrusage(...).ru_maxrss` is a
+  non-resettable process-lifetime high-water mark; measured in the
+  shared pytest worker it reports the peak of whatever ran before,
+  not the proxy. Order-contaminated. VERIFIED VALID.
+- **Gemini-IMPROVEMENT** (`PG.5`): the fixture asserted determinism
+  was on but nothing in the plan ENABLED it; the assert would crash
+  every perf run. VERIFIED VALID.
+- **Gemini-NITPICK** (`PB.1`): a single Lightning `fit` step on CPU
+  is dominated by trainer/dataloader init overhead. VALID; acceptable
+  for a relative gate, now documented.
+
+## Claude perspective
+
+- **Agreed / addressed (all five):** C1 (drop `--benchmark-only`,
+  add PG.10 collection guard), C2 (lazy `detect` import inside the
+  resolver, retract the no-torch-subprocess resolver test, PG.3 split
+  into a boundary test that never calls the resolver + an in-process
+  logic test), C3 (PB.2 runs the payload in a spawned child process
+  with its own `ru_maxrss`, PG.4 PID-distinctness test), IMPROVEMENT
+  (PG.5 enables strict mode then asserts), NITPICK (PB.1 documents
+  the overhead as relative-gate-acceptable).
+- **Disagreed:** none. All findings are correct cross-family catches
+  the same-family Claude swarm systematically missed (CI-tool
+  interaction, a transitive module-level import, an OS-metric
+  lifetime semantic, a missing enable call). This is exactly the
+  class of gap the Gemini pass exists to find.
+- **Missed by Gemini:** none material; the swarm-era contracts it
+  did not flag remain sound under the C2 redesign.
+- **Hallucinated:** none. Every `path:line` (incl.
+  `hardware.py:14`) was verified accurate.
+
+CONSENSUS INVALIDATED by three new valid CRITICALs (per the
+gemini-final-pass protocol). The five findings are addressed in-doc
+above; one more `/design-review` Claude round is required on the
+revised plan before Phase 11 is cleared for S6 implementation. The
+prior round-1..4 + confirming consensus stands for everything Gemini
+did not touch; the re-review is scoped to the C1/C2/C3/IMPROVEMENT/
+NITPICK revisions (PB.1, PB.2, PC.1a, PC.2, PF.1, PF.2, PG.3, PG.5,
+PG.10).
