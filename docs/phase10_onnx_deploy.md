@@ -678,3 +678,19 @@ style-sonnet APPROVE (0/0/0).
   `backbone.py` `self.onnx_export = False` comment.
 
 NITPICKs: optional, not blocking.
+
+R2 (confirming, on commit f942fe5): ALL 4 reviewers APPROVE.
+code-opus 0C/0I/1N, arch-opus 0C/0I/0N, qa-opus 0C/0I/0N,
+style-sonnet 0C/0I/0N. qa-opus (who raised the R1 CRITICAL)
+independently confirmed the three pins are genuinely
+mutation-sensitive and independent of the degenerate-oracle trap.
+code-opus's sole NITPICK: the post-export `predict_proba` shape
+assertion in `test_export_onnx_leaves_shared_backbone_unmutated` is a
+redundant smoke check (the load-bearing mutation gate is the
+`onnx_export is False` assertion); left as-is, costs nothing.
+
+POST-GEMINI CONSENSUS REACHED: zero CRITICAL, every IMPROVEMENT
+resolved, NITPICKs optional. The S8 Gemini concurrency CRITICAL is
+fixed, test-pinned (mutation-sensitive, empirically verified), and
+the doc-drift it caused is fully synced. Phase 10 ONNX-export +
+deploy is COMPLETE and ready to merge.
