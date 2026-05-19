@@ -9,7 +9,10 @@ build:
 
 sphinx:
   configuration: docs/conf.py
-  fail_on_warning: false
+  # Mirrors the CI `sphinx-build -W` gate (Phase 12 R2): a warning
+  # is a failure on RTD too, so the published site matches what CI
+  # accepts.
+  fail_on_warning: true
 
 python:
   install:
@@ -18,5 +21,9 @@ python:
       extra_requirements:
         - docs
 
+# Phase 12 R9: RTD-native versioning. The default `stable` / `latest`
+# selector is enabled by the RTD project settings (activate
+# additional version branches in the dashboard after the v1.0.0
+# tag); this file pins the build config that those versions share.
 formats:
   - pdf
