@@ -357,22 +357,26 @@ and the gate's correctness offline, deterministic, and fast.
     `test_corrupt_baseline_warn_logs`: the same two inputs, mode
     `warn` => no raise + a `logging.warning` record (qa R3-I1: the
     warn variants are individually named, four total for PD.1c).
-  - `test_capture_writes_device_name_cpu` (qa R3-C1): drive the CPU
-    capture path (PG.6's monkeypatched-measurement harness, cell
-    `cpu-x86`) and assert the round-tripped `PerfBaseline.device_name
-    == "cpu"`. `device_name` is a free `str`, so schema validation
-    alone cannot catch a capture bug that copies the CUDA branch on
-    CPU or leaves it empty; this is the only assertion that pins the
-    auditability claim in PC.2.
+  (`test_capture_writes_device_name_cpu` is NOT here; it is a
+  capture-path test and lives in PG.6, not in this schema file, qa
+  R4-C1, see PG.6.)
 - **PG.3 `test_gate_module_boundary.py`**:
   - `test_gate_module_has_no_heavy_imports`: in a subprocess launched
     with `sys.executable` (qa NEW-I2: same interpreter/venv as pytest,
-    not ambient `python`), `import tests.perf._gate`, THEN call the
-    cell resolver with a monkeypatched `detect()` returning `CPU`
-    (qa R3-I3: exercises the resolver's internal lazy-import contract,
-    not just the module-level boundary, so a top-of-function
-    `import torch` in the resolver is caught), then assert `"torch"`
-    and `"seq_sklearn"` are absent from `sys.modules`. Pins PC.1a /
+    not ambient `python`), run three checks asserting `"torch"` and
+    `"seq_sklearn"` absent from `sys.modules` after each: (a)
+    `import tests.perf._gate` (module-level boundary); (b)
+    `import tests.perf.conftest` (qa R4-I2: the conftest must defer
+    its `import torch` into the fixture body, see PG.5, so importing
+    it for PG.5's `autouse` introspection does not pull torch); (c)
+    call the cell resolver with monkeypatched `detect()` returning
+    `CPU` AND a second sub-case with `detect()` returning
+    `VOLTA_TURING` and `get_device_name` patched to `"V100"` so the
+    CUDA branch body executes (qa R3-I3 + R4-I1: catches an
+    `import torch` moved to the top of the resolver OR inside the
+    `if VOLTA_TURING` branch, not only a bare function-top import; the
+    resolver's own lazy `torch.cuda` call is patched out so the branch
+    runs without a GPU and without importing torch). Pins PC.1a /
     arch-C3 so the fast PR suite cannot regress into pulling torch.
   - `test_cell_resolver_mapping`: monkeypatch `detect()` and
     `torch.cuda.get_device_name` => `CPU` resolves `cpu-x86`;
@@ -400,14 +404,18 @@ and the gate's correctness offline, deterministic, and fast.
   fixture asserts `torch.are_deterministic_algorithms_enabled() is
   True` at setup and raises `RuntimeError` otherwise, so a perf run in
   non-deterministic mode fails loudly rather than producing
-  unreproducible numbers that the gate then trusts. The fixture is
-  `autouse=False` and explicitly requested only by the `perf`-marked
-  workload tests (qa R3-I4): a session `autouse` fixture would import
-  torch at the start of the fast PR suite and violate the PC.1a
-  no-torch boundary for the non-`perf` PG.1/PG.2/PG.3 tests.
-  `test_perf_fixture_not_autouse` (in `test_gate_module_boundary.py`,
-  non-`perf`) asserts the fixture object has `autouse is False` so the
-  boundary cannot silently regress.
+  unreproducible numbers that the gate then trusts. `tests/perf/
+  conftest.py` does its `import torch` INSIDE the fixture function
+  body, NOT at module level (qa R4-I2), so importing the conftest
+  module to introspect the fixture does not pull torch; PG.3 check
+  (b) pins this. The fixture is `autouse=False` and explicitly
+  requested only by the `perf`-marked workload tests (qa R3-I4): a
+  session `autouse` fixture would run torch at the start of the fast
+  PR suite and violate the PC.1a no-torch boundary for the non-`perf`
+  PG.1/PG.2/PG.3 tests. `test_perf_fixture_not_autouse` (in
+  `test_gate_module_boundary.py`, non-`perf`) asserts the fixture
+  object has `autouse is False` so the boundary cannot silently
+  regress.
 - **PG.6 `test_capture_cli.py`** (qa-I2): monkeypatch the three
   benchmark measurement functions to return known constants, run
   `python -m tests.perf.capture --cell cpu-x86` against `tmp_path`,
@@ -418,6 +426,18 @@ and the gate's correctness offline, deterministic, and fast.
   HEAD is unresolvable (qa NEW-N1: avoids an environmental false
   failure unrelated to capture logic). Catches a capture/gate schema
   divergence before any real nightly run.
+  - `test_capture_writes_device_name_cpu` (qa R3-C1 / R4-C1, lives
+    HERE in the capture-path file, not in PG.2's schema file, because
+    it must exercise the capture code, not schema construction): run
+    the SAME capture entrypoint as above with cell `cpu-x86` and
+    monkeypatched measurements, assert the round-tripped
+    `PerfBaseline.device_name == "cpu"`. `device_name` is a free
+    `str`, so schema validation alone cannot catch a capture bug that
+    copies the CUDA branch on CPU or writes an empty string; running
+    the capture path is the only thing that pins the PC.2
+    auditability claim. The CUDA-cell analog
+    (`device_name == get_device_name(0)`) is GPU-only and Deferred
+    (D4) since it cannot run on CPU CI.
 - **PG.7 `test_check_perf_baselines_script.py`** (qa-I5): drive
   `scripts/check_perf_baselines.sh` in a `tmp_path` git repo over
   these cases: bot author + baseline change => exit 1 AND stdout
@@ -432,11 +452,13 @@ and the gate's correctness offline, deterministic, and fast.
   asserted applied (qa-N1); `test_bench_min_rounds_applied` asserts
   the train-step benchmark is invoked with `BENCH_MIN_ROUNDS` (PD.3 /
   arch R3-N).
-- **PG.9 `test_latency_breach_does_not_raise`** (qa R3-N1): a measured
-  `inference_latency_median_s` of baseline * 3.0 under mode `enforce`
-  (matching metric, non-provisional) => no raise. Pins PD.1's
-  "latency is observational, not gated" so an implementation that
-  accidentally hard-gates latency is caught.
+- **PG.9** `test_latency_breach_does_not_raise` lives in
+  `test_gate_logic.py` (PG.1's file; it is a gate-dispatch behavior
+  test, qa R4-N1): a measured `inference_latency_median_s` of
+  baseline * 3.0 under mode `enforce` (matching metric,
+  non-provisional) => no raise. Pins PD.1's "latency is
+  observational, not gated" so an implementation that accidentally
+  hard-gates latency is caught.
 
 ## Resolved questions (round 1)
 
@@ -487,6 +509,12 @@ and the gate's correctness offline, deterministic, and fast.
   (A13 "optional"): registry admits them by adding a tier->file mapping
   and a captured JSON, no code change; not a v1 deliverable.
 - **D3** Multi-GPU / distributed perf (NG3).
+- **D4** CUDA-cell `device_name == get_device_name(0)` capture test
+  (the GPU analog of `test_capture_writes_device_name_cpu`): GPU-only,
+  cannot run on CPU CI, so deferred to the nightly self-hosted GPU
+  perf job's first real run. The CPU-cell value IS pinned (PG.6); the
+  CUDA value is auditable on every captured row via `device_name`
+  (PC.1) even without a dedicated test (qa R4-N2).
 
 ## Tracking (review loop)
 
@@ -605,4 +633,40 @@ audit-level gaps:
     density): left as-is, pure prose polish with no behavioral content
     (cosmetic; deferred, not blocking).
 
-Gemini final pass: not yet run (runs after Claude consensus).
+Round 4 (architecture 0C/0I/2N APPROVE; style 0/0/0 APPROVE; qa
+1C/2I/2N REQUEST_CHANGES). arch + style reached consensus and judged
+the doc Gemini-eligible; qa surfaced placement/precision fixes that
+are mechanical (not a design disagreement), addressed in a round-4
+follow-up rather than stopping at the nominal cap, since the fixes
+are non-contentious and the reviewer's intent is unambiguous:
+
+- Addressed (CRITICAL):
+  - qa R4-C1: `test_capture_writes_device_name_cpu` moved out of
+    PG.2 (`test_baseline_schema.py`, where a schema-only construction
+    would be vacuous) into PG.6 (`test_capture_cli.py`), reusing the
+    same capture entrypoint+harness so it exercises the capture code,
+    not schema construction. PG.2 now carries an explicit pointer
+    that the test is NOT there and why.
+- Addressed (IMPROVEMENT):
+  - qa R4-I1: PG.3 `test_gate_module_has_no_heavy_imports` adds a
+    `VOLTA_TURING` + `get_device_name->"V100"` sub-case so a torch
+    import inside the resolver's CUDA branch is caught, not only a
+    bare function-top import.
+  - qa R4-I2: PG.5 states `conftest.py` does `import torch` inside
+    the fixture body, not at module level; PG.3 check (b) asserts
+    importing `tests.perf.conftest` does not pull torch.
+- Addressed (NITPICK):
+  - qa R4-N1: PG.9 assigned to `test_gate_logic.py` (PG.1's file).
+  - qa R4-N2: CUDA-cell `device_name` capture test recorded as
+    Deferred D4 with reason (GPU-only, value still auditable via the
+    `device_name` field on every captured row).
+
+Consensus: round 4. architecture-reviewer and style-reviewer APPROVE
+with zero CRITICAL/IMPROVEMENT; qa-test-coverage's round-4 CRITICAL
++ IMPROVEMENTs were mechanical doc-placement/precision items, all
+resolved in-doc above (a confirming qa pass verifies closure). Two
+NITPICKs (PG.3 subprocess-monkeypatch mechanism unstated; NG1 prose
+density) remain, permitted by the consensus rule.
+
+Gemini final pass: not yet run (runs after the confirming qa pass
+verifies the round-4 CRITICAL is closed).
