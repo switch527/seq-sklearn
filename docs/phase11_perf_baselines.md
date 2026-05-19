@@ -892,3 +892,49 @@ mandatory follow-up Claude `/design-review` round on the revised
 plan returned zero CRITICAL with every IMPROVEMENT resolved (arch +
 qa + style). The Phase 11 plan is FINAL and cleared for S6
 implementation. NITPICKs permitted to remain per the consensus rule.
+
+## S6 implementation outcome
+
+Implemented in `tests/perf/` (commits 6da753d..79b9822): `_gate.py`
+(PerfBaseline, two-step lazy resolver, PD.1b-precedence gate,
+stdlib `percentile_linear`), `_constants.py` (torch-free tuning
+constants), `_workload.py` (proxy builder), `_measure.py` (shared
+capture/gate path, spawn-child ru_maxrss isolation, loud-failure
+branches), `conftest.py` (enable-then-assert determinism fixture,
+autouse=False), 3 benchmarks, `capture.py` CLI, full PG.1-PG.10
+roster, `_baselines/cpu-x86.json` (clean CPU capture, 10.9s/step,
+ru_maxrss_kb) + provisional `t4.json`, `check_perf_baselines.sh`
+(full snapshot-guard parity), nightly perf/perf-gpu jobs (no
+`--benchmark-only`), pr.yml perf-baseline-guard. Verified: ruff +
+pyright clean; fast non-perf suite 53 passed; end-to-end perf gate
+5 passed under `enforce`; capture/gate parity (~11s both paths).
+
+## S7 Claude code-review consensus
+
+R1 (arch 2C/2I/2N REQUEST_CHANGES; code 0C/3I/2N; qa 0C/2I/2N;
+style 0C/2I/1N): the 2 arch CRITICALs (corroborated by code-I1 /
+qa-IMPROVEMENT-1) were a real PC.1a regression, `test_workload.py`
+and `test_capture_cli.py` pulled torch at module scope into the
+fast PR suite. Fixed via the torch-free `_constants.py` split,
+lazy `_workload` imports in `_measure`, `importlib.metadata` in
+`capture.py`, and a 9-module `test_fast_suite_modules_have_no_heavy_imports`
+guard. R1 IMPROVEMENT/NITPICKs (except-narrowing, zombie-child
+handling, argparse test, constants-applied test, specific
+skip-reason assertion, percentile edges) all addressed.
+
+R2 (arch 0C/1I/1N; code 0C/1I/2N; style 0/0/0; qa 0C/1I/2N): zero
+CRITICAL. IMPROVEMENTs fixed, `except` widened to
+`(OSError, ValueError, ValidationError)` (catches `UnicodeDecodeError`
+on a non-UTF8 baseline), `_FAST_SUITE_MODULES` +
+`test_boundary_guard_list_is_exhaustive` (drift-proof), a fast
+wedged-child test.
+
+R3 (arch/code/style APPROVE consensus; qa APPROVE with 2 new
+IMPROVEMENTs): the crashed-child and error-record loud-failure
+branches lacked fast tests, added
+`test_measure_peak_memory_crashed_child_raises` /
+`_error_record_raises` via a shared `_patch_fake_child` mock.
+
+S7 CONSENSUS REACHED (commit 79b9822): all four reviewers APPROVE,
+zero CRITICAL, every IMPROVEMENT resolved, NITPICKs optional.
+Cleared for the S8 Gemini code final-pass.
