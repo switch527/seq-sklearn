@@ -37,7 +37,20 @@ jobs:
           version: ${{ env.UV_VERSION }}
           python-version: "3.14"
       - run: uv sync --extra dev
-      - run: uv run pytest -m perf --benchmark-only || echo "tests/perf/ empty in Phase 0"
+      - run: SEQ_SKLEARN_PERF_GATE=enforce uv run pytest -m perf -p no:cacheprovider
+
+  perf-gpu:
+    runs-on: [self-hosted, gpu]
+    if: ${{ vars.GPU_RUNNER_AVAILABLE == 'true' }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
+      - run: uv sync --extra dev
+      - run: SEQ_SKLEARN_PERF_GATE=enforce uv run pytest -m perf -p no:cacheprovider
 
   gpu:
     runs-on: [self-hosted, gpu]
