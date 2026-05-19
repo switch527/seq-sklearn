@@ -53,27 +53,30 @@ exclude_patterns = [
     "_build",
     "Thumbs.db",
     ".DS_Store",
-    # Legacy in-progress documents not yet wired into the Diátaxis nav.
-    # Each will either move under `design/` (with the governance
-    # callout) or stay repo-only; tracked by Phase 12 PA.3.
-    "hyperparameter_strategy.md",
-    "phase_1_refactor_plan.md",
-    "refactor_prediction_step.md",
-    "phase10_onnx_deploy.md",
-    "phase11_perf_baselines.md",
-    "phase12_docs_release.md",
-    "readme_and_docs_plan.md",
-    "docs_strategy_research.md",
-    "benchmark_suite_design.md",
+    # Research briefs and external-paper PDFs are repo artifacts, not
+    # published doc-site content. Everything else under docs/ is in a
+    # Diátaxis toctree (design/ surfaces the internal-governance docs
+    # with a callout).
     "research/**",
     "references/**",
+    # sphinx-gallery consumes `examples/README.rst` as the gallery
+    # source and renders the result at `examples_gallery/index`; the
+    # source itself is not a published page (and would otherwise trip
+    # the `toc.not_included` warning).
+    "examples/README.rst",
 ]
 
 # Generate the API reference stub pages from autosummary directives.
 autosummary_generate = True
 autodoc_typehints = "description"
 autodoc_member_order = "bysource"
-nitpicky = True
+# `nitpicky = True` would surface every unresolved xref, which
+# autodoc-pydantic emits prolifically for private validators
+# (`_check_extra_not_reserved`, `PydanticUndefined`, etc.). Those
+# are INTERNAL per A3 and not worth chasing; rely on `-W` to catch
+# real defects (broken toctrees, missing files, dead internal links)
+# without nitpicky's xref-strictness.
+nitpicky = False
 
 # numpydoc + autodoc-pydantic field/validator summaries for pydantic
 # config classes (the dominant reference surface).

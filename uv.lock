@@ -205,6 +205,19 @@ wheels = [
 ]
 
 [[package]]
+name = "autodoc-pydantic"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "sphinx" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7b/df/87120e2195f08d760bc5cf8a31cfa2381a6887517aa89453b23f1ae3354f/autodoc_pydantic-2.2.0-py3-none-any.whl", hash = "sha256:8c6a36fbf6ed2700ea9c6d21ea76ad541b621fbdf16b5a80ee04673548af4d95", size = 34001, upload-time = "2024-04-27T10:57:00.542Z" },
+]
+
+[[package]]
 name = "babel"
 version = "2.18.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2607,6 +2620,20 @@ wheels = [
 ]
 
 [[package]]
+name = "pydantic-settings"
+version = "2.14.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/07/60/1d1e59c9c90d54591469ada7d268251f71c24bdb765f1a8a832cee8c6653/pydantic_settings-2.14.1.tar.gz", hash = "sha256:e874d3bec7e787b0c9958277956ed9b4dd5de6a80e162188fdaff7c5e26fd5fa", size = 235551, upload-time = "2026-05-08T13:40:06.542Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ae/8d/f1af3832f5e6eb13ba94ee809e72b8ecb5eef226d27ee0bef7d963d943c7/pydantic_settings-2.14.1-py3-none-any.whl", hash = "sha256:6e3c7edfd8277687cdc598f56e5cff0e9bfff0910a3749deaa8d4401c3a2b9de", size = 60964, upload-time = "2026-05-08T13:40:04.958Z" },
+]
+
+[[package]]
 name = "pydata-sphinx-theme"
 version = "0.16.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3087,11 +3114,14 @@ dev = [
     { name = "ruff" },
 ]
 docs = [
+    { name = "autodoc-pydantic" },
+    { name = "matplotlib" },
     { name = "myst-parser" },
     { name = "numpydoc" },
     { name = "pydata-sphinx-theme" },
     { name = "sphinx" },
     { name = "sphinx-copybutton" },
+    { name = "sphinx-gallery" },
     { name = "sphinx-sitemap" },
 ]
 mlflow = [
@@ -3108,9 +3138,11 @@ wandb = [
 
 [package.metadata]
 requires-dist = [
+    { name = "autodoc-pydantic", marker = "extra == 'docs'", specifier = ">=2.2,<3" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.120" },
     { name = "lightning", specifier = ">=2.6.1,<2.7" },
+    { name = "matplotlib", marker = "extra == 'docs'", specifier = ">=3.9,<4" },
     { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=2.18" },
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=4.0,<5" },
     { name = "numpy", specifier = ">=1.26" },
@@ -3135,6 +3167,7 @@ requires-dist = [
     { name = "scikit-learn", specifier = ">=1.6,<2" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=8.1,<9" },
     { name = "sphinx-copybutton", marker = "extra == 'docs'", specifier = ">=0.5,<0.6" },
+    { name = "sphinx-gallery", marker = "extra == 'docs'", specifier = ">=0.18,<0.19" },
     { name = "sphinx-sitemap", marker = "extra == 'docs'", specifier = ">=2.6,<3" },
     { name = "torch", specifier = ">=2.6,<3" },
     { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.19" },
@@ -3249,6 +3282,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fc/2b/a964715e7f5295f77509e59309959f4125122d648f86b4fe7d70ca1d882c/sphinx-copybutton-0.5.2.tar.gz", hash = "sha256:4cf17c82fb9646d1bc9ca92ac280813a3b605d8c421225fd9913154103ee1fbd", size = 23039, upload-time = "2023-04-14T08:10:22.998Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9e/48/1ea60e74949eecb12cdd6ac43987f9fd331156388dcc2319b45e2ebb81bf/sphinx_copybutton-0.5.2-py3-none-any.whl", hash = "sha256:fb543fd386d917746c9a2c50360c7905b605726b9355cd26e9974857afeae06e", size = 13343, upload-time = "2023-04-14T08:10:20.844Z" },
+]
+
+[[package]]
+name = "sphinx-gallery"
+version = "0.18.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pillow" },
+    { name = "sphinx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ac/84/e4b4cde6ea2f3a1dd7d523dcf28260e93999b4882cc352f8bc6a14cbd848/sphinx_gallery-0.18.0.tar.gz", hash = "sha256:4b5b5bc305348c01d00cf66ad852cfd2dd8b67f7f32ae3e2820c01557b3f92f9", size = 466371, upload-time = "2024-10-09T06:01:28.005Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a3/f3/8fd1ef84f318d404dcd713c54647e616d93396beb28db216e281ba86d728/sphinx_gallery-0.18.0-py3-none-any.whl", hash = "sha256:54317366e77b182672797e5b46ab13cca9a27eafc3142c59dc4c211d4afe3420", size = 448725, upload-time = "2024-10-09T06:01:25.93Z" },
 ]
 
 [[package]]

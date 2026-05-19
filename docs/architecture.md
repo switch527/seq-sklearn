@@ -1499,6 +1499,7 @@ docs = [
     "sphinx-sitemap>=2.6,<3",         # SEO sitemap (adoption)
     "sphinx-gallery>=0.18,<0.19",     # executed examples gallery
     "autodoc-pydantic>=2.2,<3",       # pydantic v2 field-table rendering
+    "matplotlib>=3.9,<4",             # sphinx-gallery plot rendering dep
 ]
 ```
 
@@ -2265,7 +2266,7 @@ note. Source: `docs/research/pytorch.md`.
 
 **Metadata block** (inside `state.json`):
 
-```json
+```text
 {
     "seq_sklearn_version": "...",
     "torch_version": "...",
@@ -2410,6 +2411,7 @@ docs = [
     "sphinx-sitemap>=2.6,<3",
     "sphinx-gallery>=0.18,<0.19",     # executed examples gallery
     "autodoc-pydantic>=2.2,<3",       # pydantic v2 field tables
+    "matplotlib>=3.9,<4",             # sphinx-gallery plot rendering dep
 ]
 dev = [
     "ruff>=0.7",
