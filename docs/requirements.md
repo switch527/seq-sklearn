@@ -2113,7 +2113,13 @@ section.
 ### v1-specific criteria (TFT release)
 
 8. All F1-F11 requirements are implemented and tested.
-9. All N1-N7 requirements are met.
+9. All N1-N7 requirements are met. N7's absolute budgets are
+   discharged by `tests/perf/test_n7_absolute.py` (marked
+   `gpu` + `slow`, excluded from PR and nightly CPU/GPU CI), run
+   manually on an A100/T4/4090 as a release-checklist step
+   (`docs/implementation_plan.md` Phase 12 release checklist). Phase
+   11's relative regression gate does not by itself discharge
+   criterion 9; this named test is the absolute-conformance evidence.
 10. Two quickstart examples exist and pass in CI:
     - A binary classifier on synthetic monthly data recovers
       accuracy >= 0.75 on the three-seed median (see N1).

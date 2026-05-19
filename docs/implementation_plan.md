@@ -1329,9 +1329,18 @@ contrived 20% slowdown.
 docstring-examples test (`pytest --doctest-modules src/seq_sklearn/`
 per N1) passes; the quickstart in CI passes.
 
+**Release checklist step (criterion 9, N7 absolute budgets)**: run
+`pytest -m "gpu and slow" tests/perf/test_n7_absolute.py` once on an
+A100/T4/4090 and record the four N7 numbers in the `CHANGELOG.md`
+v1.0.0 entry. This is the documented evidence for acceptance
+criterion 9 (`docs/requirements.md`); it is intentionally excluded
+from PR and nightly CI (the N7 reference workload exceeds the CI
+envelope) and is owned here, not by Phase 11's relative gate.
+
 **Done when**: the docs site renders, the API reference shows the
 pydantic field tables via griffe-pydantic, and the release
-checklist (acceptance criteria 1-11 in requirements) is complete.
+checklist (acceptance criteria 1-11 in requirements, including the
+criterion-9 N7-absolute step above) is complete.
 
 ## Future-proofing for v2 / v3
 

@@ -36,17 +36,23 @@ of these, or to a fundamental correctness concern.
   N7's reference workload (100k entities x 24 months x 30 features,
   < 8 GB GPU, < 30 min on A100/T4/4090) cannot run inside a nightly
   ubuntu/T4 job. Acceptance criterion 9 ("all N1-N7 met") is discharged
-  by a NAMED owning artifact, not a bare deferral (arch-C1): Phase 11
-  ships `tests/perf/test_n7_absolute.py`, marked `@pytest.mark.gpu` and
-  `@pytest.mark.slow` so it never runs in PR or nightly CPU CI, which
-  asserts the four N7 numeric budgets on the N7 reference config. It is
-  the documented evidence for acceptance criterion 9 and is run manually
-  on an A100/T4/4090 as a release-checklist step (added to
-  `docs/requirements.md` acceptance criteria as the criterion-9
-  procedure). Phase 11's *gate* (P3) measures a small deterministic
-  proxy and gates *change*; `test_n7_absolute.py` is the separate
-  absolute-conformance check. The release-checklist wiring of that test
-  is the only N7-absolute work; running it at N7 scale is D1.
+  by a NAMED owning artifact, not a bare deferral (arch-C1). The
+  cross-doc wiring is LANDED in this same change set, not asserted:
+  `docs/requirements.md` criterion 9 now names
+  `tests/perf/test_n7_absolute.py` as the evidence, and
+  `docs/implementation_plan.md` Phase 12 carries the release-checklist
+  step that runs it. Phase 11 ships `tests/perf/test_n7_absolute.py`,
+  marked `@pytest.mark.gpu` AND `@pytest.mark.slow`, asserting the four
+  N7 numeric budgets on the N7 reference config. It is excluded from
+  PR CI and from the nightly GPU job: `nightly.yml`'s gpu job is
+  changed in this set to `-m "gpu and not slow"` so this slow N7-scale
+  test does NOT run nightly (arch-I, the marker-overlap fix). It runs
+  ONLY when invoked manually as the Phase 12 release-checklist step.
+  Phase 11's *gate* (P3) measures a small deterministic proxy and
+  gates *change*; `test_n7_absolute.py` is the separate
+  absolute-conformance check. Authoring the gpu+slow test stub and the
+  three doc/CI edits is the Phase 11 N7-absolute deliverable; actually
+  running it at full N7 scale pre-release is D1.
 - **Non-goal NG2**: not the comparative benchmark suite
   (`docs/benchmark_suite_design.md`); that is separate science, does not
   gate CI, and is not part of v1 Phase 11.
@@ -111,10 +117,14 @@ TFT train/predict path through the public estimator API.
   `model_config = ConfigDict(extra="forbid")` so an unknown key is a
   hard `ValidationError`, never silently dropped (qa-C5). Fields:
   `cell` (`Literal["cpu-x86", "t4"]`), `captured_git_sha: str`,
-  `torch_version: str`, `python_version: str`, `provisional: bool`
-  (default `False`; PE.3 / qa-N3, listed here so PC.1 is the single
-  field-set source of truth), and the metric fields, each a
-  `float` (NOT optional, so a missing one raises at load):
+  `torch_version: str`, `python_version: str`, `device_name: str`
+  (the resolving device string, `"cpu"` for the CPU cell or
+  `torch.cuda.get_device_name(0)` for a CUDA cell; recorded so a
+  Volta/Turing-tier collision is auditable per PC.2 / arch-I1),
+  `provisional: bool` (default `False`; PE.3 / qa-N3, listed here so
+  PC.1 is the single field-set source of truth), and the metric
+  fields, each a `float` (NOT optional, so a missing one raises at
+  load):
   `train_step_median_s`, `train_step_p95_s`, `peak_memory_value`,
   `peak_memory_metric: Literal["ru_maxrss_kb",
   "cuda_max_alloc_bytes"]`, `inference_latency_median_s`,
@@ -133,12 +143,24 @@ TFT train/predict path through the public estimator API.
   `TFTClassifier` or pull torch through this path, keeping the fast PR
   job fast (this boundary is asserted by
   `test_gate_module_has_no_heavy_imports`, PG.3).
-- **PC.2** Cell identity is resolved from `HardwareTier.detect()`:
-  `CPU -> cpu-x86`, `VOLTA_TURING -> t4` (T4 is Turing). Any other tier
-  resolves to no baseline file and the perf tests `pytest.skip` with a
-  reason naming the unmapped tier (the two public cells are the only v1
-  baselines per A13/P2; other tiers are optional contributor cells, not
-  a Phase 11 deliverable).
+- **PC.2** Cell identity is resolved in two steps, NOT by tier alone
+  (arch-I1: `HardwareTier.VOLTA_TURING` spans both V100, CC 7.0, and
+  T4, CC 7.5, so a tier-only map would mis-resolve a V100 runner to
+  `t4.json`). Step 1: `HardwareTier.detect()` is the coarse gate,
+  `CPU -> cpu-x86`. Step 2 for CUDA: the cell is `t4` only if
+  `HardwareTier.detect() == VOLTA_TURING` AND
+  `"T4" in torch.cuda.get_device_name(0)`. Any CUDA device that is not
+  a name-confirmed T4 (V100, A10, H100, ...) resolves to no baseline
+  and the perf path `pytest.skip`s with a reason that includes BOTH
+  the detected tier name AND `torch.cuda.get_device_name(0)`, so a
+  Volta/Turing collision is diagnosable from the skip message, not
+  silent. `device_name` (PC.1) is written on every captured row so the
+  exact resolving device is auditable. The two public cells are the
+  only v1 baselines per A13/P2; other devices are optional contributor
+  cells (D2), not a Phase 11 deliverable. The cell resolver lives in
+  `_gate.py` but the `torch.cuda` calls are lazily imported INSIDE the
+  resolver function (not at module top) to preserve PC.1a's
+  no-torch-at-import boundary; PG.3 asserts this.
 
 ## P-D: The regression gate
 
@@ -160,6 +182,31 @@ TFT train/predict path through the public estimator API.
   configuration bug, not a measured regression, so it must fail loudly
   even in warn mode). This blocks an RSS-kilobytes vs CUDA-bytes
   numeric compare that could otherwise read as a spurious pass.
+- **PD.1b (precedence, qa NEW-C1).** The helper's first action is the
+  provisional short-circuit (PE.3): if `baseline.provisional is True`
+  it warns and returns BEFORE the metric-name guard, the mode read,
+  and any numeric comparison. Rationale: a provisional baseline's
+  `peak_memory_metric` is itself a hand-seeded placeholder, so
+  comparing it is meaningless and a "mismatch" against it is not a
+  real misconfiguration signal. Precedence is therefore strictly:
+  (1) provisional => warn+return; else (2) metric-name mismatch =>
+  raise (mode-independent); else (3) mode dispatch (enforce raises on
+  breach, warn/unset warns). PE.3 and PD.1a do not conflict because
+  (1) strictly precedes (2). `test_provisional_precedes_mismatch`
+  (PG.1) pins this exact order: provisional=True AND a metric-name
+  mismatch AND enforce mode => no raise, only the provisional warning.
+- **PD.1c (missing/corrupt baseline, arch-I4).** If the resolved
+  cell's baseline file is absent or fails `PerfBaseline` validation
+  (truncated, bad JSON, missing/extra key), the helper does NOT
+  silently pass: under `enforce` it raises `PerfRegressionError`
+  ("baseline for cell <cell> missing or invalid: <detail>"); under
+  `warn`/unset it emits the warning and returns. A corrupt baseline is
+  never treated as "no regression". This is ordered AFTER the
+  provisional short-circuit only when a file exists and parses; an
+  unparseable file cannot be read for `provisional`, so the
+  missing/corrupt branch is evaluated first when load itself fails.
+  `PG.2 test_missing_baseline_enforce_raises` and
+  `test_corrupt_baseline_enforce_raises` pin both modes.
 - **PD.2 Nightly vs PR.** Mode is read from `SEQ_SKLEARN_PERF_GATE`:
   `enforce` => a breach raises `PerfRegressionError` (set by the
   nightly perf job); `warn` OR UNSET OR any other value => the helper
@@ -256,15 +303,21 @@ and the gate's correctness offline, deterministic, and fast.
   - `test_warn_mode_breach_does_not_raise`: 1.20 breach,
     `SEQ_SKLEARN_PERF_GATE=warn` => no raise, asserts a
     `logging.warning` record is emitted (caplog). (qa-C3.)
-  - `test_unset_env_defaults_to_warn`: 1.20 breach, env var deleted =>
-    no raise + warning emitted. (qa-C2; pins the safe default.)
+  - `test_unset_env_defaults_to_warn`: 1.20 breach, env cleared via
+    `monkeypatch.delenv("SEQ_SKLEARN_PERF_GATE", raising=False)` (qa
+    NEW-I1: `raising=False` so the test is correct whether or not the
+    var was set in the test process) => no raise + warning emitted.
+    (qa-C2; pins the safe default.)
   - `test_metric_name_mismatch_raises_even_in_warn`: baseline
     `peak_memory_metric="ru_maxrss_kb"`, measured
-    `"cuda_max_alloc_bytes"`, mode `warn` => raises (PD.1a; the one
-    mode-independent raise). (qa-C1.)
+    `"cuda_max_alloc_bytes"`, mode `warn`, `provisional=False` =>
+    raises (PD.1a; the one mode-independent raise). (qa-C1.)
   - `test_provisional_baseline_never_gates`: `provisional=True`,
     1.20 breach, mode `enforce` => no raise + the
     "gating skipped: provisional" warning. (I4.)
+  - `test_provisional_precedes_mismatch`: `provisional=True` AND a
+    metric-name mismatch AND mode `enforce` => no raise, only the
+    provisional warning (pins PD.1b precedence; qa NEW-C1).
 - **PG.2 `test_baseline_schema.py`** (PC.1 schema is enforced, not
   assumed):
   - `test_perf_baselines_present_and_valid`: both
@@ -278,17 +331,29 @@ and the gate's correctness offline, deterministic, and fast.
   - `test_bad_peak_memory_metric_literal_raises`:
     `peak_memory_metric="cuda_bytes"` => `ValidationError` (pins the
     `Literal`).
+  - `test_tracemalloc_key_rejected`: a JSON with a `tracemalloc_peak_kb`
+    key => `ValidationError` (pins Q2/qa NEW-C2: tracemalloc is logged,
+    not persisted).
+  - `test_missing_baseline_enforce_raises` /
+    `test_corrupt_baseline_enforce_raises`: a nonexistent path and a
+    truncated-JSON file, mode `enforce` => `PerfRegressionError`; the
+    same two under `warn` => no raise + warning (pins PD.1c / arch-I4).
 - **PG.3 `test_gate_module_boundary.py`**:
-  - `test_gate_module_has_no_heavy_imports`: import `tests.perf._gate`,
-    assert `"torch"` and `"seq_sklearn"` are absent from `sys.modules`
-    attributable to that import (subprocess-isolated, fresh
-    interpreter). Pins PC.1a / arch-C3 so the fast PR suite cannot
-    regress into pulling torch.
-  - `test_cell_resolver_mapping`: monkeypatch `detect()` => `CPU`
-    resolves `cpu-x86`, `VOLTA_TURING` resolves `t4`; `PASCAL`,
-    `AMPERE_ADA`, `HOPPER`, `BLACKWELL` each resolve to "no baseline"
-    and the perf path `pytest.skip`s with a reason naming the tier
-    (qa Q5 silent-skip gap; PC.2).
+  - `test_gate_module_has_no_heavy_imports`: in a subprocess launched
+    with `sys.executable` (qa NEW-I2: same interpreter/venv as pytest,
+    not ambient `python`), `import tests.perf._gate` then assert
+    `"torch"` and `"seq_sklearn"` are absent from `sys.modules`. Pins
+    PC.1a / arch-C3 so the fast PR suite cannot regress into pulling
+    torch.
+  - `test_cell_resolver_mapping`: monkeypatch `detect()` and
+    `torch.cuda.get_device_name` => `CPU` resolves `cpu-x86`;
+    `VOLTA_TURING` + device name containing `"T4"` resolves `t4`;
+    `VOLTA_TURING` + a `"V100"` device resolves to "no baseline"
+    (arch-I1 collision); `PASCAL`, `AMPERE_ADA`, `HOPPER`, `BLACKWELL`
+    each resolve to "no baseline". For every "no baseline" case assert
+    the `pytest.skip` reason string CONTAINS both the tier name and
+    the device name (qa NEW-I3: the skip is diagnosable, not opaque;
+    qa Q5 silent-skip gap; PC.2).
 - **PG.4 `test_workload.py`** (`perf`-marked where it constructs the
   estimator; the budget test is subprocess-isolated):
   - `test_proxy_estimator_config_matches_spec` (`perf`-marked):
@@ -311,14 +376,18 @@ and the gate's correctness offline, deterministic, and fast.
   benchmark measurement functions to return known constants, run
   `python -m tests.perf.capture --cell cpu-x86` against `tmp_path`,
   assert the written JSON round-trips through `PerfBaseline` and the
-  metric values equal the monkeypatched constants and the embedded
-  `captured_git_sha` is the real `git rev-parse HEAD`. Catches a
-  capture/gate schema divergence before any real nightly run.
+  metric values equal the monkeypatched constants. The
+  `captured_git_sha == git rev-parse HEAD` assertion is guarded by
+  `shutil.which("git")` and skipped (not failed) when git is absent or
+  HEAD is unresolvable (qa NEW-N1: avoids an environmental false
+  failure unrelated to capture logic). Catches a capture/gate schema
+  divergence before any real nightly run.
 - **PG.7 `test_check_perf_baselines_script.py`** (qa-I5): drive
   `scripts/check_perf_baselines.sh` in a `tmp_path` git repo over
-  three cases: bot author + baseline change => exit 1 (the load-bearing
-  arch-C2 case); baseline + source change without marker => exit 1;
-  with marker => exit 0; no baseline change => exit 0. Pins the guard
+  these cases: bot author + baseline change => exit 1 AND stdout
+  contains the bot-fail message (qa NEW-N2; the load-bearing arch-C2
+  case); baseline + source change without marker => exit 1; with
+  marker => exit 0; no baseline change => exit 0. Pins the guard
   regex/branches offline, no CI required.
 - **PG.8 metric-helper oracles** (qa-N2): `test_p95_matches_numpy`
   asserts the P95 helper on a known data list equals
@@ -337,9 +406,14 @@ and the gate's correctness offline, deterministic, and fast.
 - **Q2 RESOLVED** The CPU cell gates `ru_maxrss` (RSS high-water): it
   is the closest analog to N7's GPU-memory budget because it includes
   torch C++/MKL allocations that `tracemalloc` (Python-only) misses.
-  `tracemalloc` peak is recorded as an observational field but not
-  gated. The `peak_memory_metric` `Literal` makes the gated metric
-  explicit on every row (PC.1).
+  `tracemalloc` peak is emitted only in the structured log line at
+  measurement time for human trend inspection; it is NOT persisted in
+  `PerfBaseline` (qa NEW-C2: with `extra="forbid"` an unschema'd
+  `tracemalloc` JSON key would be a hard `ValidationError`, so it must
+  not be written). The single persisted+gated memory metric is
+  `peak_memory_value` tagged by the `peak_memory_metric` `Literal`.
+  `PG.2 test_tracemalloc_key_rejected` pins this: a JSON carrying a
+  `tracemalloc_peak_kb` key fails `PerfBaseline` validation.
 - **Q3 RESOLVED** Median-only step-time gate for v1, matching A13
   verbatim (it names only median step + peak memory as gate
   thresholds). P95 step + both latency stats are recorded for trend
@@ -413,5 +487,43 @@ REQUEST_CHANGES; style 0/0/0 APPROVE):
 - Resolved: Q1 (size + budget test), Q2 (RSS gated, tracemalloc
   observational), Q3 (median-only per A13), Q4 (provisional t4.json
   committed now, never gates).
+
+Round 2 (architecture 1C/3I/1N REQUEST_CHANGES; qa 2C/3I/2N
+REQUEST_CHANGES; style 0/0/0 APPROVE). All round-1 findings confirmed
+discharged; round 2 surfaced revision-introduced issues:
+
+- Addressed (CRITICAL):
+  - arch-C1 (re-raised, not closed in R1): the cross-doc wiring is now
+    actually LANDED in this change set, not asserted. `requirements.md`
+    criterion 9 names `tests/perf/test_n7_absolute.py`;
+    `implementation_plan.md` Phase 12 carries the release-checklist
+    step; `nightly.yml` gpu job changed to `-m "gpu and not slow"` so
+    the gpu+slow N7 test never runs nightly. NG1 reworded to cite the
+    landed edits, not claim a pre-existing one.
+  - qa NEW-C1: PD.1b pins gate precedence (provisional short-circuit
+    strictly precedes the metric-name guard and mode dispatch), so
+    PE.3 and PD.1a no longer conflict; `test_provisional_precedes_mismatch`.
+  - qa NEW-C2: Q2 reworded, `tracemalloc` is logged, NOT persisted in
+    `PerfBaseline` (would violate `extra="forbid"`);
+    `test_tracemalloc_key_rejected` pins it.
+- Addressed (IMPROVEMENT):
+  - arch-I (marker overlap): `nightly.yml` gpu job excludes `slow`
+    (above); NG1 states it.
+  - arch-I4 (corrupt/missing baseline): PD.1c, missing/corrupt under
+    enforce raises, under warn warns; PG.2 tests both.
+  - arch-I1 (V100/T4 CC-7.x collision): PC.2 resolves the t4 cell by
+    `detect()==VOLTA_TURING` AND `"T4" in get_device_name`; non-T4
+    Volta/Turing => no baseline + diagnostic skip; `device_name` added
+    to PC.1; torch lazily imported in the resolver to keep PC.1a.
+  - qa NEW-I1: PG.1 unset test mandates
+    `monkeypatch.delenv(..., raising=False)`.
+  - qa NEW-I2: PG.3 boundary test runs the subprocess via
+    `sys.executable`.
+  - qa NEW-I3: PG.3 `test_cell_resolver_mapping` asserts the skip
+    reason contains both tier and device name.
+- Addressed (NITPICK):
+  - qa NEW-N1: PG.6 git-sha assertion guarded by `shutil.which("git")`.
+  - qa NEW-N2: PG.7 asserts the bot-fail stdout message.
+  - arch NIT (R2): folded into the arch-C1 doc rewrite.
 
 Gemini final pass: not yet run (runs after Claude consensus).

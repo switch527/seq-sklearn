@@ -49,4 +49,4 @@ jobs:
           version: ${{ env.UV_VERSION }}
           python-version: "3.14"
       - run: uv sync --extra dev
-      - run: uv run pytest -m "gpu"
+      - run: uv run pytest -m "gpu and not slow"
