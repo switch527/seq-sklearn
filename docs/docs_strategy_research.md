@@ -199,10 +199,26 @@ section):**
 
 ## Tooling verdict
 
-Confirmed: **mkdocs-material + mkdocstrings + griffe-pydantic + (mike
-deferred)**, matching architecture A12. Accept two caveats
-deliberately: no turnkey `sphinx-gallery` (curated tested example
-scripts in v1.0.0, rendered gallery deferred), and HTML-only output
-(PDF/ePub not needed for an ML library). Sphinx is the documented
-fallback only if the project later needs scientific-Python
-credibility optics or a very large executable gallery.
+> SUPERSEDED at Phase 12 design-review R1. The research below leaned
+> mkdocs-material; the user RATIFIED **Sphinx + numpydoc +
+> sphinx-gallery + PyData theme + Read the Docs** instead, on the
+> "scientific-Python credibility optics" argument this section itself
+> names: the direct peer cluster (scikit-learn, sktime, aeon, skorch,
+> tslearn, darts) is near-unanimously Sphinx, so matching it is a
+> first-order adoption signal to exactly the target audience, and
+> sphinx-gallery closes the executable-gallery gap that was the main
+> mkdocs caveat. Every FRAMEWORK-AGNOSTIC finding above
+> (time-to-first-success, CI-tested snippets, Diátaxis IA,
+> first-screen value prop, versioned/changelog/SemVer, the domain
+> pages, the sklearn-parity pages) stands unchanged; only the
+> rendering toolchain flips. pydantic field tables now render via
+> `autodoc-pydantic` (Sphinx analog of griffe-pydantic). See
+> architecture A12 + requirements Q12/Q16 (reconciled).
+
+Original (pre-decision) verdict, retained for the record:
+**mkdocs-material + mkdocstrings + griffe-pydantic + (mike
+deferred)**, matching the then-current architecture A12. Two caveats
+were flagged: no turnkey `sphinx-gallery`, and HTML-only output.
+Sphinx was named the fallback "if the project later needs
+scientific-Python credibility optics or a very large executable
+gallery", the user invoked exactly that.

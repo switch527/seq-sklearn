@@ -1,306 +1,399 @@
 # Phase 12: Documentation and release prep (plan)
 
+> **Stack decision (Phase 12 design-review R1, user-ratified):**
+> the docs toolchain is **Sphinx + numpydoc + autosummary/autodoc +
+> sphinx-gallery, PyData Sphinx Theme, Read the Docs**, NOT mkdocs.
+> The earlier mkdocs resolution (architecture A12, requirements
+> Q16) is overturned. The contradicting authoritative docs are
+> already reconciled in THIS change set (arch-C1 fixed by landing,
+> not asserting): `docs/architecture.md` A12 rewritten to Sphinx;
+> `docs/requirements.md` N6 + open-Q12 + Q16 + the `[docs]` extra
+> reconciled; `docs/readme_and_docs_plan.md` marked the ratified
+> stack-rationale doc; `docs/docs_strategy_research.md` tooling
+> verdict annotated superseded (its framework-agnostic findings
+> stand). The existing `docs/conf.py` skeleton + `docs/api/
+> generated/*.rst` stubs are the foundation, not discarded.
+
 ## Requirements
 
-The grading rubric. Every swarm finding must trace to one of these,
-to a fundamental correctness concern, or to a cited convergent finding
-in `docs/docs_strategy_research.md` (the research synthesis this plan
-is modeled on; referenced below as RS-Cn / RS-Dn / RS-Sn).
+The grading rubric. Every finding must trace to one of these, to a
+fundamental correctness concern, or to a cited framework-agnostic
+finding in `docs/docs_strategy_research.md` (RS-Cn / RS-Dn / RS-Sn).
 
-- **R1** Ship the `mkdocs.yml` site per architecture A12 (mkdocs +
-  mkdocs-material + mkdocstrings[python] + griffe-pydantic +
-  gen-files + literate-nav + section-index), the `[docs]` extra
-  pinned exactly as A12 specifies, and the A12 mkdocstrings options
-  recipe.
-- **R2** `mkdocs build --strict` passes (A12 `validation:` block: nav
-  omitted/not_found/absolute, links not_found/anchors/absolute,
-  unresolved mkdocstrings xrefs) and is wired as a REAL PR-CI gate
-  replacing the current `pr.yml` no-op docs job.
-- **R3** Every documentation code snippet is executed in CI (RS-C2):
-  `pytest --doctest-modules src/seq_sklearn/` (requirements N1) for
-  docstrings PLUS a Markdown-snippet runner for the prose pages; a
-  green snippet suite is a required PR gate. No stale-example path.
-- **R4** The N1 quickstart-in-CI contract holds: `docs/index.md` and
-  `README.md` mirror the single `examples/quickstart.py` that
-  `tests/e2e/test_quickstart.py` imports; the three cannot drift.
-  Two quickstart examples exist and pass in CI (acceptance criterion
-  10: a binary classifier recovering accuracy >= 0.75 three-seed
-  median; a quantile regressor recovering 80% interval coverage in
-  [0.75, 0.85]).
-- **R5** The site is organized on the Diátaxis four-mode IA
-  (RS-C3): tutorial / how-to / reference / explanation, every page
-  with exactly one home, dense bidirectional cross-linking (RS-SD).
-- **R6** Time-to-first-success (RS-C1) and first-screen value prop
-  (RS-C5): `docs/index.md` opens with the runnable zero-setup
-  `fit`/`predict` (bundled/synthetic data, no download, no GPU, no
-  credentials) above the fold, preceded by a one-screen value prop.
-- **R7** The reference quadrant auto-generates: pydantic config
-  classes as griffe-pydantic field/validator tables; the estimator
-  API in the established docstring convention with the Lim et al.
-  2021 TFT citation; a Glossary as the canonical sklearn-contract
-  page that API and guides link into (RS-SE).
-- **R8** The domain pages that address seq-sklearn's specific misuse
-  risks exist: data-format contract (RS-DA), explicit
-  "not-a-forecaster" / classification-first framing (RS-DB),
-  time-series splitting & leakage (RS-DD), determinism/reproducibility
-  reference (RS-DE), ONNX export round-trip how-to (RS-DG),
-  goal-framed tuning guide (RS-DH), `observability.md` F11 event
-  reference (implementation_plan Phase 12).
-- **R9** Release maturity signals (RS-C6): `CHANGELOG.md` carries the
-  v1.0.0 entry (Keep a Changelog format, already in use); a
-  versioning + deprecation-policy page states the public-API SemVer
-  guarantee and deprecation window; the migration-guide TEMPLATE
-  exists (even though 1.0.0 has nothing to migrate). README badges,
-  CONTRIBUTING, LICENSE, SECURITY already shipped in Phase 0.
-- **R10** Repo rules hold: ruff/pyright clean on any new `.py`
-  (example scripts, gen-files script); no `print` in library code
-  (examples may print); the docs build does not regress the
-  `pytest -m "not slow and not perf"` default suite; the
-  criterion-9 N7-absolute release-checklist step (wired in Phase 11)
-  is enumerated in the release checklist.
-- **R11 (done-when, implementation_plan Phase 12)** The docs site
-  renders, the API reference shows the pydantic field tables via
-  griffe-pydantic, `pytest --doctest-modules src/seq_sklearn/`
+- **R1** Ship the Sphinx site per architecture A12 (rewritten):
+  `docs/conf.py` carrying the A12 extension recipe (autodoc,
+  autosummary, napoleon, intersphinx, doctest, numpydoc,
+  autodoc-pydantic, sphinx-gallery, sphinx-copybutton, myst-parser),
+  the `[docs]` extra pinned exactly as A12 now lists, PyData Sphinx
+  Theme, building on the existing `docs/conf.py` + `docs/api/
+  generated/*.rst` skeleton.
+- **R2** `sphinx-build -W --keep-going` passes (warnings-as-errors:
+  broken xrefs, unknown autosummary targets, toctree omissions) and
+  is a REAL required PR-CI gate replacing the `pr.yml` no-op docs
+  job. The job's required-status-check registration is enumerated in
+  the release checklist (qa-C5: a job not in branch protection is
+  advisory, not a gate).
+- **R3** Every documentation code snippet is executed in CI (RS-C2),
+  by THREE mechanisms with no silent-skip path: (a) docstring
+  snippets via `pytest --doctest-modules src/seq_sklearn/`
+  (requirements N1), added to the `pr.yml` unit job invocation
+  (qa-N2); (b) reST/MyST prose snippets via `sphinx.ext.doctest`
+  (`.. testcode::` / `.. doctest::`) run by `sphinx-build -b doctest`
+  in the docs job; (c) `docs/examples/*.py` executed at build by
+  `sphinx-gallery` (a failing example fails the build). A bounded
+  non-executable-block meta-test (PD.4) caps how much can opt out.
+- **R4** The N1 quickstart anti-drift holds WITHOUT fragile
+  verbatim-substring matching (arch-C2: `examples/quickstart.py` is a
+  `def run_quickstart() -> float` consumed by `importlib` in
+  `tests/e2e/test_quickstart.py`; a print-ending flat script it is
+  not). Mechanism: `examples/quickstart.py` is the SINGLE source;
+  `docs/index.md` embeds it by reference via
+  `literalinclude`/`literal-block` (zero drift by construction);
+  `README.md` carries the same code in a fenced block and
+  `test_quickstart_readme_in_sync` asserts the README block is
+  AST-equivalent to the `run_quickstart` body (normalized compare,
+  not whitespace-exact). Two quickstart examples exist and pass in
+  CI (acceptance criterion 10).
+- **R5** Diátaxis four-mode IA (RS-C3): `tutorial/` `how-to/`
+  `reference/` `explanation/` `about/` `design/` toctrees, every page
+  with exactly one home, dense bidirectional cross-linking via
+  `intersphinx` + `:ref:` (RS-SD).
+- **R6** Time-to-first-success (RS-C1) + first-screen value prop
+  (RS-C5): `docs/index.md` opens with the one-screen value prop then
+  the runnable zero-setup `fit`/`predict` (bundled/synthetic data, no
+  download, GPU, or credentials) above the fold, embedded from
+  `examples/quickstart.py`.
+- **R7** Reference quadrant auto-generates: pydantic config classes
+  as `autodoc-pydantic` field/validator tables (the dominant
+  reference surface; `:inherited-members:` across `TFTConfig <-
+  BaseModelConfig <- BaseTrainingConfig`); the estimator API via
+  `autosummary` + `numpydoc` with the Lim et al. 2021 TFT citation
+  in the TFT class `References`; a Glossary as the canonical
+  sklearn-contract page API + guides `:ref:` into (RS-SE).
+- **R8** The domain misuse-risk pages exist (RS-D*): data-format
+  contract; explicit not-a-forecaster / classification-first framing;
+  time-series splitting & leakage (Wrong-vs-Right, RS-SA); a
+  standalone determinism/reproducibility reference; ONNX export
+  round-trip how-to; goal-framed tuning guide; the F11
+  `observability` event reference.
+- **R9** Release maturity signals (RS-C6): `CHANGELOG.md` v1.0.0
+  entry (Keep a Changelog, in use); `about/versioning` deprecation
+  policy (public-API SemVer guarantee + window); the migration-guide
+  TEMPLATE (1.0.0 has nothing to migrate); RTD versioned hosting
+  configured (`.readthedocs.yaml` + stable/latest), which is RTD's
+  native versioning (NOT deferred, unlike the mkdocs `mike` path).
+- **R10** Repo rules: ruff/pyright clean on new `.py` (example
+  scripts, conf.py); no `print` in library code (example scripts may
+  print); docs build does not regress `pytest -m "not slow and not
+  perf"`; the criterion-9 N7-absolute release-checklist step (wired
+  in Phase 11) is enumerated with `test_n7_absolute.py` existence
+  machine-gated (qa-I4).
+- **R11** Acceptance criterion 11 (Gemini design pass surfaces no new
+  CRITICAL) is made verifiable, not a bare checkbox (qa-I3): the
+  Phase 12 plan's own Gemini final-pass is recorded in this doc's
+  Tracking section with its tally; the release checklist references
+  that recorded result.
+- **R12 (done-when, implementation_plan Phase 12)** the site renders,
+  the API reference shows the pydantic field tables via
+  autodoc-pydantic, `pytest --doctest-modules src/seq_sklearn/`
   passes, the quickstart-in-CI passes, and the release checklist
   (acceptance criteria 1-11, including the criterion-9 step) is
-  enumerated and each item has an owning artifact or CI job.
+  enumerated with every item mapped to an owning CI job or artifact.
 
 ## Scope and non-goals
 
-- **Scope**: a v1.0.0 documentation site (Diátaxis IA, mkdocs-material
-  A12 stack), every snippet CI-tested, the reference auto-generated
-  from pydantic + docstrings, the domain pages that prevent misuse,
-  the README/index rewrite, the v1.0.0 CHANGELOG + versioning &
-  deprecation policy + migration template, and the enumerated release
-  checklist. This phase produces a SHIPPABLE v1.0.0 doc set.
-- **NG1 Rendered executable examples GALLERY** (sphinx-gallery-style
-  thumbnail grid with captured plots). The one gap in the mkdocs
-  stack (RS tooling verdict). v1.0.0 ships a SMALL curated set of
-  runnable, CI-tested example scripts under `examples/` surfaced as
-  plain doc pages; the rendered gallery (mkdocs-gallery / notebook
-  pages) is Deferred D1.
-- **NG2 Versioned doc site via `mike`** + version selector. v1.0.0 is
-  a single version; `site_url` is set now so the selector can be
-  added with no content change at the first post-1.0 release.
-  Deferred D2.
-- **NG3 Migration codemod** (a `bump-pydantic` analog). Nothing to
-  migrate at 1.0.0; the migration-guide template + deprecation policy
-  ship now, the codemod at the first breaking change. Deferred D3.
-- **NG4 Social-proof / "who uses it"** logo grid. No adopters yet;
-  a placeholder section only. Deferred D4.
-- **NG5 Hosting/deploy of the site** (gh-pages publish workflow). The
-  build + strict gate is in scope; the publish-to-gh-pages action is
-  a release-time op, Deferred D5 (the v1.0.0 release itself is the
-  follow-on to this phase, not Phase 12's deliverable).
-- **NG6** No content rewrite of `requirements.md` / `architecture.md`
-  / the phase plans / research docs; they are hosted as-is under a
-  "Design & decisions" section per A12 (`docs/research/*` already
-  exists). Their prose is out of scope for style review here.
+- **Scope**: a shippable v1.0.0 Sphinx site (Diátaxis IA, PyData
+  theme), every snippet CI-executed, reference auto-generated from
+  pydantic + docstrings, the domain pages, the README/index rewrite,
+  the v1.0.0 CHANGELOG + versioning/deprecation policy + migration
+  template, RTD config, and the enumerated release checklist.
+- **NG1** No content rewrite of `requirements.md` / `architecture.md`
+  / phase plans / research docs; hosted as-is under `design/` with an
+  upfront "internal governance, not user docs" callout (qa-N1
+  default). Their prose is out of scope for style review here.
+- **NG2** Migration codemod (a `bump-pydantic` analog): nothing to
+  migrate at 1.0.0; template + deprecation policy ship now, codemod
+  at the first breaking change. Deferred D1.
+- **NG3** Social-proof / who-uses-it grid: no adopters; placeholder
+  only. Deferred D2.
+- **NG4** Release-highlights narrative posts: start at the first
+  minor after 1.0.0 (RS-C6 norm). Deferred D3.
+- **NG5** The v1.0.0 RELEASE itself (TestPyPI RC, tag, PyPI publish,
+  gh-pages/RTD publish trigger): the follow-on to this phase. Phase
+  12 ships the build + strict gate + RTD config + the checklist; the
+  release executes the checklist. Deferred D4.
 
-## P-A: Site scaffold (R1 / R2 / A12)
+Note vs the prior (mkdocs) plan: the executable examples GALLERY is
+NO LONGER deferred. `sphinx-gallery` provides it natively, so v1.0.0
+ships a real rendered, executed gallery (this was the single biggest
+mkdocs caveat; the Sphinx decision removes it).
 
-- **PA.1** `mkdocs.yml` at repo root: `site_name`, `site_url` (set to
-  the eventual canonical URL now so NG2's selector is a no-op
-  content-wise later), `theme: material` (instant nav, copy buttons,
-  dark/light toggle, content tabs, admonitions, built-in search),
-  `repo_url`, the A12 `plugins:` block VERBATIM (mkdocstrings python
-  handler with the A12 options recipe incl. `extensions:
-  [griffe_pydantic]`, gen-files, literate-nav, section-index), and
-  the A12 `validation:` block so `--strict` fails on
-  nav/link/xref defects.
-- **PA.2** The `[docs]` extra in `pyproject.toml` pinned EXACTLY as
-  A12 lists (mkdocs>=1.6,<2; mkdocs-material>=9.7,<10;
-  mkdocstrings[python]>=0.27; griffe-pydantic>=1.3;
-  mkdocs-gen-files>=0.5; mkdocs-literate-nav>=0.6;
-  mkdocs-section-index>=0.3). Plus the Markdown-snippet test runner
-  dep (PD.2) in the `dev` extra.
-- **PA.3** Site tree per A12 layout, organized by Diátaxis (R5):
-  - `index.md` (value prop + above-the-fold quickstart, R6)
-  - `tutorial/` (one linear finishable spine)
-  - `how-to/` (task-named guides)
-  - `reference/` (auto-generated API + config tables + glossary)
-  - `explanation/` (the "why" docs)
-  - `about/` (changelog, versioning & deprecation policy, migration
-    template, release checklist)
-  - `design/` (requirements.md, architecture.md, research/*, phase
-    plans hosted as-is, NG6)
-  The Diátaxis bucket names are the nav sections; A12's flat
-  `guides/` list maps INTO `how-to/` + `explanation/`.
+## P-0: Stack reconciliation (arch-C1, landed in this change set)
+
+The Sphinx-vs-mkdocs contradiction the R1 swarm flagged is resolved
+by editing the authoritative docs, not by the plan asserting a
+winner: A12 rewritten to Sphinx; requirements N6/Q12/Q16 + `[docs]`
+extra reconciled; `readme_and_docs_plan.md` marked ratified;
+`docs_strategy_research.md` verdict annotated superseded. The
+existing `docs/conf.py` + `docs/api/generated/*.rst` are kept and
+extended. `docs/_build/` is added to `.gitignore` (a build artifact
+must never be committed; PA.4).
+
+## P-A: Site scaffold (R1 / R2)
+
+- **PA.1** `docs/conf.py`: extend the existing skeleton to the A12
+  recipe (extensions list, `autosummary_generate=True`,
+  `numpydoc_show_class_members=False`, autodoc-pydantic field/
+  validator summaries on, the `intersphinx_mapping` for
+  sklearn/numpy/torch/pydantic, `sphinx_gallery_conf` pointing at
+  `docs/examples/`, copybutton, myst-parser, `nitpicky=True` so
+  missing xrefs are warnings `-W` turns to errors).
+- **PA.2** `[docs]` extra in `pyproject.toml` pinned EXACTLY as A12
+  now lists (`sphinx>=8,<9`, `pydata-sphinx-theme>=0.16`,
+  `numpydoc>=1.8`, `sphinx-gallery>=0.18`, `autodoc-pydantic>=2.2`,
+  `sphinx-copybutton>=0.5`, `myst-parser>=4`).
+- **PA.3** Diátaxis toctree (A12 layout): the existing MyST
+  `docs/index.md` becomes the value-prop + quickstart landing; the
+  35 existing `docs/api/generated/*.rst` autosummary stubs move under
+  `reference/`; new `tutorial/ how-to/ explanation/ about/ design/`
+  trees. Root `index.md` toctree wires every page (no orphans).
+- **PA.4** `.gitignore` gains `docs/_build/`; the committed
+  `docs/_build/html/` tree is removed (build output, never tracked).
+- **PA.5** `.readthedocs.yaml`: build config (python version, the
+  `[docs]` extra, `sphinx` builder, `fail_on_warning: true` mirroring
+  the CI `-W` gate) + RTD project versioning (stable / latest). This
+  is R9's versioned hosting; RTD does it natively (no `mike`).
 
 ## P-B: The four Diátaxis quadrants
 
-- **PB.1 Tutorial** `tutorial/first_classifier.md`: one linear
-  top-to-bottom narrative, no decisions asked, on a bundled/synthetic
-  panel: build config -> fit -> predict/predict_proba -> evaluate ->
-  read variable-selection weights. Ends labeled "this alone is
-  enough; advanced topics are in How-to/Explanation." Every block
-  CI-tested (R3). This is distinct from the index quickstart (which
-  is the 30-second hook); the tutorial is the 15-minute teach.
-- **PB.2 How-to** `how-to/*.md`, task-named (RS Keras convention),
-  each a focused recipe with a tested snippet: `configure_training`
-  (the pydantic config), `imbalanced_classes`, `extract_attention`
-  (variable-selection / attention surfaces), `tune_with_optuna`,
-  `export_onnx` (RS-DG, the Phase 10 capability's user guide:
-  full export -> reload-in-onnxruntime round trip),
-  `persist_a_model` (RS-SC: joblib vs ONNX decision + the "never
-  load untrusted pickles" + version-pin/containerize warnings),
-  `choose_lookback_and_min_periods`.
-- **PB.3 Reference** (R7, auto-generated, neutral):
-  - `reference/config.md` literate-nav + mkdocstrings +
-    griffe-pydantic over the pydantic config classes (the dominant
-    reference surface). Field tables: name / type / default /
-    constraint / `Field(description=...)` / validators, respecting
-    the `TFTConfig <- BaseModelConfig <- BaseTrainingConfig`
-    inheritance via `inherited_members: true`.
-  - `reference/api.md` mkdocstrings over the estimator public API;
-    the docstring convention already in `src/` (Parameters /
-    Attributes / Returns / Raises / Examples), the Lim et al. 2021
-    TFT paper cited in the TFT class docstring References.
-  - `reference/glossary.md` the canonical sklearn-contract page:
-    fit/predict/predict_proba, trailing-`_` fitted attrs,
-    `classes_`, target types, `random_state`/`n_jobs`, panel terms
-    (entity, period, lookback, min_periods). API + guides link here
-    (RS-SD/SE).
-- **PB.4 Explanation** `explanation/*.md`: `why_tft_for_classification`
-  (with the explicit "seq-sklearn is NOT a forecasting library"
-  statement, RS-DB), `how_variable_selection_and_attention_work`,
-  `design_sklearn_api_over_lightning`, `determinism_and_precision`
-  (the model behind RS-DE's reference page).
+- **PB.1 Tutorial** `tutorial/first_classifier.{md,rst}`: one linear
+  finishable spine on a bundled/synthetic panel (config -> fit ->
+  predict/proba -> evaluate -> read variable-selection), labeled
+  "this alone is enough". Distinct from the index quickstart (the
+  30-second hook); Q1 below asks whether to keep both or use one
+  progressive example (FastAPI single-spine, the R1-qa lean).
+- **PB.2 How-to** `how-to/*`, task-named: `configure_training`,
+  `imbalanced_classes`, `extract_attention`, `tune_with_optuna`,
+  `export_onnx` (RS-DG, the Phase 10 capability's user guide: full
+  export -> reload-in-onnxruntime round trip), `persist_a_model`
+  (RS-SC: joblib vs ONNX decision + "never load untrusted pickles" +
+  version-pin/containerize), `panel_data` (RS-DA, the data-format
+  contract: exact shape, why consecutive rows are consecutive
+  periods, ragged case, PRINTED-shape worked example, top misuse
+  source), `time_series_splitting` (RS-DD/SA: entity-time CV, why
+  random splits leak on multi-entity panels, Wrong-vs-Right),
+  `tuning` (RS-DH: goal-framed, names the ~5 fields that matter,
+  inline win/lose tradeoffs, points at the Optuna integration),
+  `performance` (RS-DF: precision, GPU/CPU, batch/throughput/memory,
+  few-line wins).
+- **PB.3 Reference** (auto-generated, R7): `reference/config` via
+  `autodoc-pydantic` over the config classes (field tables: type /
+  default / constraint / description / validators, inherited-members
+  across the config chain); `reference/api` via `autosummary` +
+  `numpydoc` over the estimator public API (the existing docstring
+  convention; Lim et al. 2021 in the TFT `References`);
+  `reference/glossary` the canonical sklearn-contract page;
+  `reference/observability` the F11 event-payload reference
+  (implementation_plan Phase 12 deliverable).
+- **PB.4 Explanation** `explanation/*`:
+  `why_tft_for_classification` (with the explicit "seq-sklearn is NOT
+  a forecasting library" statement, RS-DB, also a first-screen
+  `index` line), `how_variable_selection_and_attention_work`,
+  `design_sklearn_api_over_lightning`,
+  `determinism_and_precision` (the model behind the RS-DE reference
+  page); `reference/determinism` is the standalone reproducibility
+  reference (seeding, strict-mode side effects, CUDA flags, the
+  "not bit-exact across versions/platforms" caveat + perf cost).
 
-## P-C: Domain pages (R8, the misuse-risk set)
+## P-C: Examples gallery (sphinx-gallery, now in scope)
 
-- **PC.1 `how-to/panel_data.md` (data-format contract, RS-DA, top
-  priority).** The exact panel shape, WHY consecutive rows are
-  consecutive periods regardless of wall-clock (requirements F2),
-  the ragged / variable-history case, a worked example with PRINTED
-  shapes. The single biggest misuse source.
-- **PC.2 Not-a-forecaster framing (RS-DB).** A first-screen line in
-  `index.md` AND a section in
-  `explanation/why_tft_for_classification.md`. The README already
-  states this; carry it into the site prominently.
-- **PC.3 `how-to/time_series_splitting.md` (RS-DD).** Entity-time
-  expanding-window CV, why random splits leak on multi-entity panels
-  (requirements F2), how to use the library's splitter; Wrong-vs-Right
-  runnable form (RS-SA: this IS the Common-Pitfalls page, temporal
-  leakage first).
-- **PC.4 `reference/determinism.md` (RS-DE).** Standalone page:
-  seeding, the strict-mode side effects, CUDA flags, the explicit
-  "not bit-exact across versions/platforms" caveat + the perf cost.
-- **PC.5 `how-to/performance.md` (RS-DF).** Scannable few-line-wins:
-  precision, GPU vs CPU, batch size / throughput / memory.
-- **PC.6 `how-to/tuning.md` (RS-DH).** Goal-framed ("better accuracy
-  / faster / less overfitting"), names the ~5 config fields that
-  matter most, every tradeoff an inline win/lose sentence, points at
-  the Optuna integration rather than reinventing HPO advice. Pairs
-  with the auto-generated `reference/config.md` (split per RS-DH).
-- **PC.7 `reference/observability.md`.** The F11 event-payload
-  reference (implementation_plan Phase 12 deliverable).
+- **PC.1** `docs/examples/` holds runnable `.py` scripts in the
+  sphinx-gallery format (a module docstring header + `# %%` cells).
+  `examples/quickstart.py` (the N1 source) is surfaced here too.
+  v1.0.0 ships a SMALL curated set (quickstart binary classifier,
+  quantile regressor, attention extraction, imbalanced) - quality
+  over count; the grid grows post-v1.
+- **PC.2** sphinx-gallery executes every example at build; a failing
+  example fails `sphinx-build -W`. This IS R3 mechanism (c) and
+  replaces the prior plan's deferred/curated-scripts compromise.
+  Gallery examples force CPU + a tiny synthetic panel +
+  `max_epochs=1` so the build stays inside the docs-CI budget
+  (RK1).
 
-## P-D: Snippet-execution gate (R3, the trust gate)
+## P-D: Snippet-execution gate + its own tests (R3, the trust gate)
 
-- **PD.1** Docstring snippets: `pytest --doctest-modules
-  src/seq_sklearn/` (requirements N1) runs in the default PR suite.
-  Already a requirement; this phase ensures every example added to a
-  docstring is doctest-valid and the job is enforced.
-- **PD.2** Prose snippets: a Markdown-snippet runner
-  (`pytest-markdown-docs` or `mktestdocs`, RS evidence) collects
-  every fenced ```python block under `docs/` and runs it as a test,
-  with `memory=True` semantics for sequential stateful blocks. Added
-  to the `dev` extra and to the PR suite. Snippets that are
-  illustrative-not-runnable use a documented fence info-string the
-  runner skips (e.g. ```python title="..." or a `notest` marker),
-  and a meta-test asserts the skip-marker count is bounded so authors
-  cannot silently opt everything out.
-- **PD.3** CI: the `pr.yml` docs job stops being a no-op. It
-  `uv sync --extra docs --extra dev`, runs `mkdocs build --strict`,
-  `pytest --doctest-modules src/seq_sklearn/`, and the Markdown
-  snippet suite. All three are required. Respects the 5-minute PR
-  budget (build + doctests are fast; no perf/e2e-slow here; the
-  quickstart e2e already runs in the unit job per N1).
-- **PD.4 Tests for the gate itself** (so it cannot silently rot):
-  - `test_mkdocs_build_strict`: invokes `mkdocs build --strict` in a
-    tmp dir, asserts exit 0 (skipped if the `docs` extra absent).
-  - `test_quickstart_mirrors_index_and_readme`: asserts the code in
-    `examples/quickstart.py` appears verbatim in both `docs/index.md`
-    and `README.md` (R4 anti-drift, mechanical).
-  - `test_every_doc_has_a_diataxis_home`: asserts every `docs/**/*.md`
-    is reachable from `mkdocs.yml` nav (no orphan pages; complements
-    `--strict` nav validation with an explicit assertion).
+- **PD.1** `pytest --doctest-modules src/seq_sklearn/` is ADDED to
+  the `pr.yml` unit-job command (qa-N2: it is currently absent from
+  `pr.yml:56`; N1 mandates it). Required.
+- **PD.2** `sphinx-build -b doctest docs/` runs in the docs job;
+  every `.. testcode::`/`.. doctest::` block executes. Illustrative
+  non-runnable code uses a plain `.. code-block:: python` (no skip
+  marker needed, it is simply not a doctest directive).
+- **PD.3** The docs `pr.yml` job (was a no-op) does:
+  `uv sync --extra docs --extra dev`; `sphinx-build -W --keep-going
+  -b html docs/ docs/_build/html`; `sphinx-build -W -b doctest docs/
+  docs/_build/doctest`. Both required. Q4 asks single-vs-split job;
+  default single (one `uv sync`, fits the 5-minute budget; build
+  ~tens of seconds with tiny examples). `linkcheck` runs on the
+  nightly schedule, not the PR gate (network-flaky).
+- **PD.4 Tests for the gate itself** (so it cannot silently rot),
+  under `tests/docs/`, NON-perf/slow, fast, `pytest.importorskip`
+  (visible skip, never silent) where the `docs` extra is needed:
+  - `test_sphinx_build_warns_as_errors`: subprocess `sphinx-build -W
+    -b html` into a tmp dir, assert exit 0. `importorskip("sphinx")`
+    so the skip is VISIBLE in output (qa-C2: no silent no-op).
+  - `test_autodoc_pydantic_field_tables_rendered`: after the build,
+    parse `reference/config` HTML, assert known `TFTConfig` field
+    names (e.g. `hidden_size`, `attention_heads`) AND a validator
+    name appear, so a misconfigured autodoc-pydantic that emits an
+    empty Fields section fails (qa-C3: `-W` alone does not catch an
+    empty-but-valid render).
+  - `test_quickstart_readme_in_sync`: parse the fenced python block
+    in `README.md`, parse `examples/quickstart.py`, assert the
+    README block is AST-equivalent to the `run_quickstart` body
+    (normalized, not whitespace-exact; arch-C2/qa-C4). Fails (not
+    skips) if either is missing. `docs/index` uses `literalinclude`
+    so it cannot drift and needs no test beyond the build.
+  - `test_every_doc_has_a_toctree_home`: assert every `docs/**/*.{md,
+    rst}` (excluding `_build`, `design/` hosted-as-is) is reachable
+    from a toctree (explicit orphan check complementing `-W`).
+  - `test_nonexecutable_block_ratio_bounded`: across `docs/`, assert
+    `plain code-block python` / (all python blocks) < 0.25 (a pinned
+    `_MAX_NONEXEC_RATIO`), so authors cannot silently make the whole
+    suite non-executable (qa-C1: concrete bound, named test).
+  - `test_doc_snippet_suite_fast`: assert the `-b doctest` build
+    wall-clock < a pinned `DOCS_DOCTEST_BUDGET_S` (e.g. 120 s) on the
+    CI tier, so one hanging TFT-fit block cannot blow the PR budget
+    (qa-I1).
+  - `test_n7_absolute_test_present_and_unskipped`: assert
+    `tests/perf/test_n7_absolute.py` exists and has a test function
+    not under an unconditional `pytest.mark.skip` (qa-I4: the
+    criterion-9 release step has a real artifact, not just an
+    enumerated line).
 
-## P-E: Release readiness (R9 / R11)
+## P-E: Release readiness (R9 / R11 / R12)
 
-- **PE.1** `CHANGELOG.md`: convert `[Unreleased]` to `[1.0.0] -
-  <date>` with the full Keep-a-Changelog section set
-  (Added/Changed/Deprecated/Removed/Fixed/Security), summarizing
-  F1-F11 + N1-N7 delivery. A new empty `[Unreleased]` header on top.
-- **PE.2** `about/versioning.md`: public-API SemVer guarantee, the
-  deprecation window (deprecate in a minor with a runtime
-  `DeprecationWarning` pointing at the replacement; remove no earlier
-  than the next major), what counts as public API (the estimator
-  classes + pydantic configs + documented functions; `_`-prefixed is
-  private). `about/migration_template.md`: the empty-but-structured
-  template (changes grouped by surface area, before/after per renamed
-  symbol, deprecation-warning policy, optional codemod slot) so the
-  first breaking release has a form to fill, not a blank page.
-- **PE.3** `about/release_checklist.md`: acceptance criteria 1-11
-  enumerated, each mapped to its owning CI job or artifact, INCLUDING
+- **PE.1** `CHANGELOG.md`: `[Unreleased]` -> `[1.0.0] - <date>` with
+  the full Keep-a-Changelog section set, summarizing F1-F11 + N1-N7;
+  fresh empty `[Unreleased]` on top. `test_changelog_has_1_0_0_entry`
+  asserts the section + SemVer header shape (qa-N3, a cheap regex
+  guard, not a full linter).
+- **PE.2** `about/versioning`: public-API SemVer guarantee (public =
+  estimator classes + pydantic configs + documented functions;
+  `_`-prefixed private), deprecation window (deprecate in a minor
+  with a runtime `DeprecationWarning` naming the replacement; remove
+  no earlier than the next major). `about/migration_template`: the
+  empty-but-structured template (changes grouped by surface area,
+  before/after per renamed symbol, deprecation-warning policy,
+  codemod slot).
+- **PE.3** `about/release_checklist`: acceptance criteria 1-11
+  enumerated, EACH mapped to an owning CI job or artifact, including:
   the criterion-9 manual `pytest -m "gpu and slow"
-  tests/perf/test_n7_absolute.py` step wired in Phase 11 and recorded
-  in implementation_plan Phase 12. This is the document the v1.0.0
-  release (the follow-on, NG5) executes.
+  tests/perf/test_n7_absolute.py` step (Phase 11-wired); criterion 11
+  pointing at THIS doc's recorded Gemini-final-pass tally (R11); and
+  an explicit "the `docs` PR job is registered in branch-protection
+  required-status-checks" line (qa-C5, a human-verified repo-settings
+  item, not a test).
 
 ## P-F: Open questions for the swarm
 
-- **Q1** Markdown-snippet runner choice: `pytest-markdown-docs` vs
-  `mktestdocs`. Both run fenced blocks under pytest; which has the
-  cleaner stateful-block + skip-marker story for our prose pages?
-  (PD.2)
-- **Q2** Tutorial vs index-quickstart split: is a separate 15-minute
-  `tutorial/first_classifier.md` worth its maintenance cost on top of
-  the 30-second `index.md` quickstart, or does one canonical example
-  with progressive sections serve both (FastAPI single-spine model)?
-  (PB.1)
-- **Q3** Should `requirements.md` / `architecture.md` (large internal
-  design docs) be hosted in the site at all (NG6 says yes, as-is
-  under design/), or excluded from the user site and left repo-only
-  to avoid confusing users with internal governance prose?
-- **Q4** Does `mkdocs build --strict` belong in the same PR job as
-  the snippet tests, or a separate job? Trade-off: one
-  `uv sync --extra docs` vs CI parallelism within the 5-minute
-  budget. (PD.3)
+- **Q1** Keep a separate 15-minute `tutorial/first_classifier` on top
+  of the 30-second `index` quickstart, or one progressive example
+  serving both (FastAPI single-spine; the R1-qa lean was single)?
+- **Q2** `docs/index` and the gallery both surface
+  `examples/quickstart.py` via `literalinclude`/gallery; is that
+  double-surfacing confusing, or correct (hook on index, full run in
+  gallery)?
+- **Q3** Host the large internal design docs (`requirements.md`,
+  `architecture.md`, phase plans) in-site under `design/` (NG1) with
+  a callout, or exclude from the user site entirely and keep
+  repo-only? R1-qa/arch leaned host-with-callout.
+- **Q4** Single docs CI job (one `uv sync`, build + doctest
+  sequential) vs split (parallel, two syncs)? Default single; revisit
+  only if the 5-minute budget is breached.
 
 ## Risks
 
-- **RK1** `mkdocs build --strict` is brittle: every unresolved
-  mkdocstrings xref fails the build. Mitigated by building
-  incrementally and the `test_mkdocs_build_strict` gate catching it
-  pre-merge, not at release.
-- **RK2** Doctest snippets that need a fitted model are slow (TFT fit
-  on CPU). Mitigated by docstring examples using the smallest
-  synthetic panel + `max_epochs=1`, and the heavy end-to-end staying
-  in the existing e2e quickstart (not duplicated into docstrings).
-- **RK3** griffe-pydantic rendering of the deep config inheritance
-  chain may mis-render `inherited_members`; A12 already pins the
-  recipe, PB.3 verifies the rendered table in the strict build.
+- **RK1** Building the gallery executes real TFT fits; a too-large
+  example blows the docs-CI budget. Mitigated by CPU + tiny synthetic
+  panel + `max_epochs=1` in every gallery script, and
+  `test_doc_snippet_suite_fast` (PD.4) catching regressions.
+- **RK2** `sphinx-build -W` is brittle: every unresolved xref fails.
+  Mitigated by `nitpicky` + building incrementally +
+  `test_sphinx_build_warns_as_errors` catching it pre-merge.
+- **RK3** autodoc-pydantic may mis-render the deep config inheritance
+  chain. Mitigated by `test_autodoc_pydantic_field_tables_rendered`
+  asserting real field + validator names in the HTML, not just a
+  clean build.
+- **RK4** The existing `docs/conf.py`/`docs/api/generated/*.rst`
+  skeleton may carry stale assumptions from before the stack was
+  ratified. Mitigated by PA.1 treating conf.py as extend-not-trust
+  and the strict build surfacing any stale stub.
 
 ## Deferred (v1.1+, with reason)
 
-- **D1** Rendered executable examples gallery (mkdocs-gallery /
-  notebook pages): the one mkdocs-stack gap; v1.0.0 ships curated
-  CI-tested example scripts instead, gallery is non-blocking polish.
-- **D2** `mike` versioned site + selector: one version at 1.0.0;
-  `site_url` wired now so it is a zero-content-change add later.
-- **D3** Migration codemod: nothing to migrate at 1.0.0; template +
+- **D1** Migration codemod: nothing to migrate at 1.0.0; template +
   policy ship now.
-- **D4** Social-proof / who-uses-it grid: no adopters yet.
-- **D5** gh-pages publish workflow: a release-time op, belongs to the
-  v1.0.0 release that follows this phase, not Phase 12.
-- **D6** Release-highlights narrative posts: start at the first minor
+- **D2** Social-proof / who-uses-it grid: no adopters yet.
+- **D3** Release-highlights narrative posts: start at the first minor
   after 1.0.0 (RS-C6 norm).
+- **D4** The v1.0.0 release execution (TestPyPI RC, tag, PyPI/RTD
+  publish): the follow-on to this phase, not Phase 12's deliverable.
+- **D5** Full large-count example gallery: v1.0.0 ships a small
+  curated executed set; breadth grows post-v1 (quality over count).
 
 ## Tracking (review loop)
 
 Addressed and deferred items are maintained here so successive swarm
 runs see prior decisions and do not re-raise resolved points.
 
-(populated by `/design-review`)
+Round 1 (architecture 2C/5I/2N REQUEST_CHANGES; qa 5C/4I/3N
+REQUEST_CHANGES; style 0/0/0 APPROVE):
+
+- Addressed (CRITICAL):
+  - arch-C1 (Sphinx-vs-mkdocs unreconciled contradiction +
+    competing scaffold): RESOLVED by user decision (Sphinx) and the
+    contradiction LANDED-reconciled in this change set, A12 rewritten,
+    requirements N6/Q12/Q16 + `[docs]` extra reconciled,
+    readme_and_docs_plan ratified, research verdict annotated, the
+    existing scaffold adopted (P-0). The whole plan is rewritten
+    Sphinx-native.
+  - arch-C2 / qa-C4 (verbatim mirror impossible vs the real
+    `run_quickstart()` shape): R4/PD.4 replaced with
+    `literalinclude` (index, zero-drift) + AST-equivalence README
+    test, not substring matching.
+  - qa-C1 (skip-marker meta-test unspecified/unbounded): PD.4
+    `test_nonexecutable_block_ratio_bounded` with a pinned
+    `_MAX_NONEXEC_RATIO`.
+  - qa-C2 (strict-build test silently skipped): PD.4
+    `test_sphinx_build_warns_as_errors` uses `importorskip`
+    (visible) + PE.3 enumerates the branch-protection registration.
+  - qa-C3 (field tables: clean build != rendered content): PD.4
+    `test_autodoc_pydantic_field_tables_rendered` asserts real field
+    + validator names in the HTML.
+  - qa-C5 (docs job not enforced): PE.3 explicit
+    branch-protection-required-check line + R2.
+- Addressed (IMPROVEMENT):
+  - qa-I1 (snippet budget): PD.4 `test_doc_snippet_suite_fast` with
+    a pinned `DOCS_DOCTEST_BUDGET_S`.
+  - qa-I2 (Q1 runner choice): moot under Sphinx, the runner is
+    `sphinx.ext.doctest` + sphinx-gallery, not mktestdocs/
+    pytest-markdown-docs; PD.2 states it.
+  - qa-I3 (criterion 11 not machine-checkable): R11 + PE.3 point the
+    checklist at this doc's recorded Gemini-pass tally.
+  - qa-I4 (`test_n7_absolute` not gated): PD.4
+    `test_n7_absolute_test_present_and_unskipped`.
+  - arch I-set (5): subsumed by the Sphinx rewrite + the above
+    (the mkdocs-specific arch IMPROVEMENTs no longer apply); any
+    still-live ones re-surface in R2 against the rewritten plan.
+- Addressed (NITPICK):
+  - qa-N1 (host design docs default): NG1 = host under `design/`
+    with an "internal governance" callout.
+  - qa-N2 (`--doctest-modules` absent from pr.yml): PD.1 adds it to
+    the unit job.
+  - qa-N3 (CHANGELOG unlinted): PE.1 `test_changelog_has_1_0_0_entry`
+    regex guard.
+- Style: APPROVE 0/0/0 (re-graded in R2 against the rewrite).
+
+Gemini design final-pass: deferred until quota resets; recorded here
+when run (R11).

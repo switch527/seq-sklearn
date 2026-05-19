@@ -1935,8 +1935,10 @@ follow-up.
   | `safetensors` | `>=0.5` | save/load format (F4) |
 
   Optional extras pinned similarly: `onnx>=1.18`, `onnxruntime>=1.21`
-  for `[onnx]`; `mkdocs>=1.6,<2`, `mkdocs-material>=9.7,<10`,
-  `mkdocstrings[python]>=0.27`, `griffe-pydantic>=1.3` for `[docs]`.
+  for `[onnx]`; `sphinx>=8,<9`, `pydata-sphinx-theme>=0.16`,
+  `numpydoc>=1.8`, `sphinx-gallery>=0.18`, `autodoc-pydantic>=2.2`,
+  `sphinx-copybutton>=0.5`, `myst-parser>=4` for `[docs]` (Sphinx
+  stack, Q12/Q16; the prior mkdocs pins are superseded).
 
 - **Upper-bound policy.** Lower bounds by default; an upper bound is
   added preemptively ONLY when one of (a) a documented breaking
@@ -2076,9 +2078,13 @@ F11.
 - `docs/` folder: this requirements doc, the architecture doc, longer-form guides.
 - `docs/examples/` with runnable Python scripts (preferred over
   notebooks for CI testability).
-- API reference auto-generated from docstrings. Tool decided in the
-  architecture phase (mkdocs + mkdocstrings, or sphinx). Documentation
-  build is gated in CI.
+- API reference auto-generated from docstrings. Tool RESOLVED:
+  Sphinx + numpydoc + autosummary/autodoc + sphinx-gallery, PyData
+  Sphinx Theme, hosted on Read the Docs (the near-unanimous stack of
+  the sklearn / time-series-ML peer cluster; ratified by the user
+  over the earlier mkdocs resolution, see Q12/Q16 and
+  `docs/readme_and_docs_plan.md`). Documentation build is gated in
+  CI via `sphinx-build -W`.
 
 ### N7: Performance budgets
 
@@ -2157,10 +2163,18 @@ decision. Items still open are OPEN and feed the design-review loop.
 11. **Calibration.** RESOLVED: temperature default with platt /
     isotonic / none alternatives in F5.
 
-12. **Documentation tool choice.** OPEN. mkdocs + mkdocstrings vs.
-    sphinx. Decide in the architecture phase. Both are viable; the
-    deciding factor will be how heavily the API reference relies on
-    autodoc vs. authored prose.
+12. **Documentation tool choice.** RESOLVED (superseding the earlier
+    interim mkdocs resolution in Q16): **Sphinx + numpydoc +
+    autosummary/autodoc + sphinx-gallery, PyData Sphinx Theme, Read
+    the Docs.** Deciding factor for vast adoption: the direct peer
+    cluster (scikit-learn, sktime, aeon, skorch, tslearn, darts) is
+    near-unanimously Sphinx, so matching it is a credibility signal
+    to exactly the target audience; sphinx-gallery closes the
+    executable-examples-gallery gap; intersphinx gives free
+    cross-references into sklearn/numpy/torch. User-ratified over
+    mkdocs (Phase 12 design-review R1). See
+    `docs/readme_and_docs_plan.md` (the stack-rationale doc, now
+    ratified) and architecture A12 (rewritten to Sphinx).
 
 13. **Recurrent family base implementation timing.** RESOLVED:
     skeleton ships in v1 as an INTERNAL-tier abstract base class
@@ -2186,11 +2200,15 @@ decision. Items still open are OPEN and feed the design-review loop.
     `(t4, torch-latest)` as the public baselines, with optional
     self-hosted cells added by contributors.
 
-16. **Documentation toolchain.** RESOLVED: mkdocs + mkdocs-material +
-    mkdocstrings (python handler) + `griffe-pydantic` for pydantic v2
-    field-table rendering. Pin `mkdocs<2` (the 2.0 release was a
-    breaking rewrite). Pin `mkdocs-material<10`. Source:
-    `docs/research/mkdocstrings.md`. Was Q12.
+16. **Documentation toolchain.** SUPERSEDED by the Q12 re-resolution.
+    The earlier interim resolution here (mkdocs + mkdocs-material +
+    mkdocstrings + `griffe-pydantic`) is overturned: the toolchain is
+    **Sphinx + numpydoc + autosummary/autodoc + sphinx-gallery,
+    PyData Sphinx Theme, Read the Docs** (see Q12 and architecture
+    A12). pydantic v2 field tables render via `autodoc-pydantic`
+    (the Sphinx analog of griffe-pydantic). Rationale: peer-cluster
+    credibility for vast adoption + sphinx-gallery + intersphinx;
+    user-ratified at Phase 12 design-review R1. Was Q12.
 
 17. **TFT block flow verification.** RESOLVED. The LSTM init order,
     static-context vector consumption, interpretable-attention

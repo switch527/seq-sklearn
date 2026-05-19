@@ -220,9 +220,12 @@ Tier 3, ongoing:
 
 ## 6. Open decisions for the review loop
 
-- Stack choice (Sphinx over mkdocs+mkdocstrings) should be ratified in
-  the architecture doc and run through `/design-review`, since
-  requirements.md N6 left it open and the architecture phase owns it.
+- Stack choice (Sphinx over mkdocs+mkdocstrings): RATIFIED at Phase 12
+  design-review R1 (user decision over the earlier interim mkdocs
+  resolution; rationale: peer-cluster credibility for vast adoption +
+  sphinx-gallery + intersphinx). architecture A12, requirements
+  N6/Q12/Q16, and the `[docs]` extra are reconciled to Sphinx. This
+  doc is now the authoritative stack-rationale reference.
 - Logo/wordmark: needs a design pass; placeholder text wordmark
   acceptable for the interim README.
 - JOSS vs arXiv-only vs both: recommend both; confirm with maintainer
