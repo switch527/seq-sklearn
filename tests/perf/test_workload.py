@@ -69,31 +69,26 @@ def test_proxy_builds_within_cpu_budget() -> None:
     assert "OK" in proc.stdout
 
 
-def test_measure_peak_memory_wedged_child_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """qa R2-I1: the zombie-child path (child returned a record but
-    `exitcode is None`) must raise loudly, never silently pass. Fast
-    mock, no real subprocess/torch (the lazy `_workload` import in the
-    child target never runs because the fake Process is not started for
-    real)."""
+def _patch_fake_child(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    exitcode: int | None,
+    record: dict[str, object],
+) -> None:
+    """Monkeypatch `_measure.mp.get_context` so `measure_peak_memory`
+    runs against a fake child with a fixed `exitcode` and queued
+    `record`, no real subprocess/torch (the lazy `_workload` import in
+    the child target never runs). Drives each loud-failure branch."""
     from tests.perf import _measure
-
-    record: dict[str, object] = {
-        "value": 1.0,
-        "peak_memory_metric": "ru_maxrss_kb",
-        "device_name": "cpu",
-        "tracemalloc_peak_bytes": 0,
-        "pid": 999999,
-        "start_method": "spawn",
-    }
 
     class _FakeQueue:
         def get(self, timeout: float | None = None) -> dict[str, object]:
             return record
 
     class _FakeProc:
-        exitcode = None  # never exits cleanly -> wedged
+        def __init__(self, *a: object, **k: object) -> None:
+            self.exitcode = exitcode
 
-        def __init__(self, *a: object, **k: object) -> None: ...
         def start(self) -> None: ...
         def join(self, _t: float | None = None) -> None: ...
         def terminate(self) -> None: ...
@@ -110,7 +105,45 @@ def test_measure_peak_memory_wedged_child_raises(monkeypatch: pytest.MonkeyPatch
         return _FakeCtx()
 
     monkeypatch.setattr(_measure.mp, "get_context", _fake_get_context)
+
+
+_GOOD_RECORD: dict[str, object] = {
+    "value": 1.0,
+    "peak_memory_metric": "ru_maxrss_kb",
+    "device_name": "cpu",
+    "tracemalloc_peak_bytes": 0,
+    "pid": 999999,
+    "start_method": "spawn",
+}
+
+
+def test_measure_peak_memory_wedged_child_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """qa R2-I1: child returned a record but `exitcode is None`
+    (wedged in teardown) must raise loudly, never silently pass."""
+    from tests.perf import _measure
+
+    _patch_fake_child(monkeypatch, exitcode=None, record=_GOOD_RECORD)
     with pytest.raises(RuntimeError, match="wedged"):
+        _measure.measure_peak_memory()
+
+
+def test_measure_peak_memory_crashed_child_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """qa R3-I1: a child that crashed with a nonzero exitcode AFTER
+    queuing a record must not have that record trusted."""
+    from tests.perf import _measure
+
+    _patch_fake_child(monkeypatch, exitcode=1, record=_GOOD_RECORD)
+    with pytest.raises(RuntimeError, match="exited with code 1"):
+        _measure.measure_peak_memory()
+
+
+def test_measure_peak_memory_error_record_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """qa R3-I2: a child that caught an exception and queued an
+    {"error": ...} record must propagate it, not silently discard."""
+    from tests.perf import _measure
+
+    _patch_fake_child(monkeypatch, exitcode=0, record={"error": "SomeError: boom"})
+    with pytest.raises(RuntimeError, match="SomeError: boom"):
         _measure.measure_peak_memory()
 
 
