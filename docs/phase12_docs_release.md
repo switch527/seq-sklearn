@@ -331,30 +331,44 @@ arch R2-I2). The deltas:
     empty Fields section fails (qa-C3: `-W` alone does not catch an
     empty-but-valid render).
   - `test_quickstart_readme_block` (R4 + R3 mechanism (d); qa
-    R2-C1/C2 + R3-C1): locate the FIRST ```` ```python ```` fence
-    after the `## Quickstart` heading in `README.md` (fails, not
-    skips, if the heading or fence is absent, the forcing function
-    for the PE.0 "Planned API" -> real-quickstart rewrite); then
-    `exec` the extracted source in an isolated namespace
-    (`importorskip("seq_sklearn")`, hardware forced to CPU like the
-    existing e2e quickstart test), asserting it runs without
-    exception. ALSO assert it parses and imports the same public
-    symbols `examples/quickstart.py` imports (cheap structural pins
-    LAYERED ON the exec, not a substitute, answering qa R3 that
-    import-set alone is too weak). This is the README's real
-    execution gate; `docs/index` uses `literalinclude` of
-    `examples/quickstart.py` so it is the real tested code and
-    needs no test beyond the build.
+    R2-C1/C2 + R3-C1 + R4-I2/N1): locate the FIRST ```` ```python ````
+    fence after the `## Quickstart` heading in `README.md` (fails,
+    not skips, if the heading or fence is absent, the forcing
+    function for the PE.0 "Planned API" -> real-quickstart rewrite).
+    BEFORE exec: `ast`-scan the block and assert it constructs the
+    estimator with `max_epochs <= _DOC_MAX_EPOCHS` (a pinned module
+    constant, the same bound the gallery scan uses, qa R4-N1: a
+    heavy README fit cannot hang the unit job; the block mirrors the
+    N1-tiny `examples/quickstart.py`). Then `exec` the source in an
+    isolated namespace, applying the EXACT `_force_cpu` monkeypatch
+    set from `tests/e2e/test_quickstart.py` (patch
+    `seq_sklearn.training.trainer.detect` -> `HardwareTier.CPU`,
+    `torch.cuda.is_available` -> `False`, `torch.cuda.device_count`
+    -> `0`; reuse that helper, do not reinvent it; qa R4-I2: CPU is
+    ENFORCED by contract, not by analogy), `importorskip("seq_sklearn")`,
+    asserting it runs without exception. ALSO assert it parses and
+    imports the same public symbols `examples/quickstart.py` imports
+    (cheap structural pins LAYERED ON the exec, not a substitute).
+    This is the README's real execution gate; `docs/index` uses
+    `literalinclude` of `examples/quickstart.py` so it is the real
+    tested code and needs no test beyond the build.
   - `test_no_mkdocs_residue_in_specs` (P-0 guard): grep
     `docs/architecture.md`, `docs/requirements.md`,
     `docs/implementation_plan.md`, `docs/readme_and_docs_plan.md`
-    for `mkdocs`/`mkdocstrings`/`griffe-pydantic`; assert every hit
-    line contains one of a SHORT NAMED allowlist of anchor
-    substrings (`"superseded"`, `"Sphinx analog of griffe-pydantic"`,
-    `"interim mkdocs"`, `"NOT mkdocs"`, `"the 2.0"` for the
-    upper-bound-policy `mkdocs<2` example, `"ratified"`), so the
-    stack reconciliation cannot silently regress and the allowlist
-    is auditable at design time (arch R2-C1, qa R3-N1).
+    for `mkdocs`/`mkdocstrings`/`griffe-pydantic`; a hit is ALLOWED
+    when the hit line OR either ADJACENT line (a +/-2-line window,
+    case-insensitive) contains any of a NAMED anchor set:
+    `superseded`, `overturned`, `reconciled`, `ratified`,
+    `interim`, `earlier mkdocs`, `not mkdocs`, `sphinx analog`,
+    `resolved to sphinx`, and `mkdocs<2` (the upper-bound-policy
+    example, which is about the pin policy, not the docs stack).
+    The window + case-insensitive + broadened anchors close qa
+    R4-I1 (the prior per-line 6-anchor form covered under half the
+    real hits and would have failed day 1). The anchor list is
+    enumerated HERE so it is auditable at design time, and
+    `test_no_mkdocs_residue_in_specs` itself asserts the current
+    spec corpus passes (so the anchor set is proven sufficient on
+    the day it lands, not aspirationally).
   - `test_docs_extra_is_target_or_live` (arch R3-C1/I1): assert the
     architecture A12/A18 `[docs]` pin list equals EITHER the live
     `pyproject.toml [docs]` extra OR that list plus exactly
@@ -364,9 +378,11 @@ arch R2-I2). The deltas:
     name sets.
   - `test_every_gallery_script_has_max_epochs_1` (qa R2-C3, static
     pre-execution scan): `ast`-parse every `docs/examples/*.py`,
-    assert each estimator construction passes `max_epochs=1` (or a
-    pinned `_GALLERY_MAX_EPOCHS`), so an over-heavy gallery script
-    is caught BEFORE the build runs it, not only after via the
+    assert each estimator construction passes
+    `max_epochs <= _DOC_MAX_EPOCHS` (the SAME single pinned module
+    constant the README-block scan uses, so the gallery and the
+    README quickstart share one bound), so an over-heavy script is
+    caught BEFORE the build runs it, not only after via the
     wall-clock `test_doc_snippet_suite_fast`.
   - `test_every_doc_has_a_toctree_home`: assert every `docs/**/*.{md,
     rst}` (excluding `_build`, `design/` hosted-as-is) is reachable
@@ -600,5 +616,35 @@ regressions from the R2 edits, both doc-only, both fixed:
     `ratified`), auditable at design time.
 - Style: APPROVE 0/0/0, consensus on style.
 
-Gemini design final-pass: deferred until quota resets; recorded here
-when run (R11).
+Round 4 (FINAL, 4-round cap; architecture 0C/0I/0N APPROVE; style
+0C/0I/0N APPROVE; qa 0C/2I/1N APPROVE). Zero CRITICAL. All R3
+findings verified closed at source by arch (not just plan claims).
+qa's 2 IMPROVEMENTs + 1 NITPICK were mechanical doc-precision items,
+RESOLVED in this round rather than deferred:
+
+- qa R4-I1: `test_no_mkdocs_residue_in_specs` switched from a
+  per-line 6-anchor allowlist (which covered under half the real
+  hits, day-1 failure) to a +/-2-line case-insensitive window with
+  a broadened enumerated anchor set, and the test asserts the
+  current spec corpus passes so the anchor set is proven sufficient
+  on landing.
+- qa R4-I2: `test_quickstart_readme_block` CPU-forcing is now a
+  contract (reuse `tests/e2e/test_quickstart.py`'s exact `_force_cpu`
+  monkeypatch set), not "like the e2e test" by analogy.
+- qa R4-N1: the README block gets the SAME static
+  `max_epochs <= _DOC_MAX_EPOCHS` pre-exec scan as the gallery
+  (one shared pinned constant), so a heavy README fit cannot hang
+  the unit job.
+
+CONSENSUS REACHED after 4 rounds. architecture + style APPROVE with
+zero findings; qa APPROVE with zero CRITICAL and every IMPROVEMENT
+resolved in-doc (none deferred). The Sphinx-stack reconciliation is
+landed and verified across the spec corpus; the plan is internally
+consistent end to end. NITPICKs permitted to remain (none
+outstanding). Cleared for the gated Gemini design final-pass.
+
+Gemini design final-pass: deferred until Gemini quota resets
+(blocked earlier this session by `429 QUOTA_EXHAUSTED`); per
+R11/PE.3 its tally is recorded here before the release checklist
+references it. A new Gemini CRITICAL would reopen consensus for one
+more `/design-review` round.
