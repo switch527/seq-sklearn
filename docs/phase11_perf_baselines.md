@@ -189,10 +189,15 @@ TFT train/predict path through the public estimator API.
   `peak_memory_metric` is itself a hand-seeded placeholder, so
   comparing it is meaningless and a "mismatch" against it is not a
   real misconfiguration signal. Precedence is therefore strictly:
+  (0) load+validate the baseline file; on load/validation failure
+  apply the PD.1c missing/corrupt branch and stop; else
   (1) provisional => warn+return; else (2) metric-name mismatch =>
   raise (mode-independent); else (3) mode dispatch (enforce raises on
-  breach, warn/unset warns). PE.3 and PD.1a do not conflict because
-  (1) strictly precedes (2). `test_provisional_precedes_mismatch`
+  breach, warn/unset warns). Step (0) necessarily precedes (1) because
+  `provisional` cannot be read from a file that failed to parse (arch
+  R3-I; the enumeration now names the load step PD.1c depends on).
+  PE.3 and PD.1a do not conflict because (1) strictly precedes (2).
+  `test_provisional_precedes_mismatch`
   (PG.1) pins this exact order: provisional=True AND a metric-name
   mismatch AND enforce mode => no raise, only the provisional warning.
 - **PD.1c (missing/corrupt baseline, arch-I4).** If the resolved
@@ -205,8 +210,12 @@ TFT train/predict path through the public estimator API.
   provisional short-circuit only when a file exists and parses; an
   unparseable file cannot be read for `provisional`, so the
   missing/corrupt branch is evaluated first when load itself fails.
-  `PG.2 test_missing_baseline_enforce_raises` and
-  `test_corrupt_baseline_enforce_raises` pin both modes.
+  PG.2 pins all four branches with individually named tests:
+  `test_missing_baseline_enforce_raises`,
+  `test_corrupt_baseline_enforce_raises`,
+  `test_missing_baseline_warn_logs`,
+  `test_corrupt_baseline_warn_logs` (qa R3-I1: the warn-mode variants
+  are named, not folded into "the same two").
 - **PD.2 Nightly vs PR.** Mode is read from `SEQ_SKLEARN_PERF_GATE`:
   `enforce` => a breach raises `PerfRegressionError` (set by the
   nightly perf job); `warn` OR UNSET OR any other value => the helper
@@ -220,10 +229,13 @@ TFT train/predict path through the public estimator API.
   the mode. The enforce path, the warn path, and the unset-default
   path each have a named PG.1 test.
 - **PD.3 Noise control.** Shared GitHub CPU runners are timing-noisy.
-  Mitigations: median (not mean) over a pinned `min_rounds`;
-  pytest-benchmark `warmup=True`; the gate is on median step time vs a
-  15% band (already wide); the CPU cell is nightly-alert-only (PD.2), so
-  a noisy false-positive pages no one and blocks no merge. P95 is
+  Mitigations: median (not mean) over a `_workload.py` module constant
+  `BENCH_MIN_ROUNDS` (named, like `INFERENCE_WARMUP`/`INFERENCE_REPEATS`,
+  so it is falsifiable not prose-only, arch R3-N; PG.8 asserts it is
+  the value passed to pytest-benchmark); pytest-benchmark
+  `warmup=True`; the gate is on median step time vs a 15% band
+  (already wide); the CPU cell is nightly-alert-only (PD.2), so a
+  noisy false-positive pages no one and blocks no merge. P95 is
   recorded for trend visibility but not gated (PD.1).
 
 ## P-E: Baseline capture / update protocol
@@ -303,7 +315,11 @@ and the gate's correctness offline, deterministic, and fast.
   - `test_warn_mode_breach_does_not_raise`: 1.20 breach,
     `SEQ_SKLEARN_PERF_GATE=warn` => no raise, asserts a
     `logging.warning` record is emitted (caplog). (qa-C3.)
-  - `test_unset_env_defaults_to_warn`: 1.20 breach, env cleared via
+  - `test_unset_env_defaults_to_warn`: 1.20 breach,
+    `provisional=False` AND a matching `peak_memory_metric` (qa R3-I2:
+    pinned explicitly so the no-raise is reached via the mode-dispatch
+    default, not the provisional or load-failure short-circuits), env
+    cleared via
     `monkeypatch.delenv("SEQ_SKLEARN_PERF_GATE", raising=False)` (qa
     NEW-I1: `raising=False` so the test is correct whether or not the
     var was set in the test process) => no raise + warning emitted.
@@ -334,17 +350,30 @@ and the gate's correctness offline, deterministic, and fast.
   - `test_tracemalloc_key_rejected`: a JSON with a `tracemalloc_peak_kb`
     key => `ValidationError` (pins Q2/qa NEW-C2: tracemalloc is logged,
     not persisted).
-  - `test_missing_baseline_enforce_raises` /
+  - `test_missing_baseline_enforce_raises`,
     `test_corrupt_baseline_enforce_raises`: a nonexistent path and a
-    truncated-JSON file, mode `enforce` => `PerfRegressionError`; the
-    same two under `warn` => no raise + warning (pins PD.1c / arch-I4).
+    truncated-JSON file, mode `enforce` => `PerfRegressionError`.
+  - `test_missing_baseline_warn_logs`,
+    `test_corrupt_baseline_warn_logs`: the same two inputs, mode
+    `warn` => no raise + a `logging.warning` record (qa R3-I1: the
+    warn variants are individually named, four total for PD.1c).
+  - `test_capture_writes_device_name_cpu` (qa R3-C1): drive the CPU
+    capture path (PG.6's monkeypatched-measurement harness, cell
+    `cpu-x86`) and assert the round-tripped `PerfBaseline.device_name
+    == "cpu"`. `device_name` is a free `str`, so schema validation
+    alone cannot catch a capture bug that copies the CUDA branch on
+    CPU or leaves it empty; this is the only assertion that pins the
+    auditability claim in PC.2.
 - **PG.3 `test_gate_module_boundary.py`**:
   - `test_gate_module_has_no_heavy_imports`: in a subprocess launched
     with `sys.executable` (qa NEW-I2: same interpreter/venv as pytest,
-    not ambient `python`), `import tests.perf._gate` then assert
-    `"torch"` and `"seq_sklearn"` are absent from `sys.modules`. Pins
-    PC.1a / arch-C3 so the fast PR suite cannot regress into pulling
-    torch.
+    not ambient `python`), `import tests.perf._gate`, THEN call the
+    cell resolver with a monkeypatched `detect()` returning `CPU`
+    (qa R3-I3: exercises the resolver's internal lazy-import contract,
+    not just the module-level boundary, so a top-of-function
+    `import torch` in the resolver is caught), then assert `"torch"`
+    and `"seq_sklearn"` are absent from `sys.modules`. Pins PC.1a /
+    arch-C3 so the fast PR suite cannot regress into pulling torch.
   - `test_cell_resolver_mapping`: monkeypatch `detect()` and
     `torch.cuda.get_device_name` => `CPU` resolves `cpu-x86`;
     `VOLTA_TURING` + device name containing `"T4"` resolves `t4`;
@@ -371,7 +400,14 @@ and the gate's correctness offline, deterministic, and fast.
   fixture asserts `torch.are_deterministic_algorithms_enabled() is
   True` at setup and raises `RuntimeError` otherwise, so a perf run in
   non-deterministic mode fails loudly rather than producing
-  unreproducible numbers that the gate then trusts.
+  unreproducible numbers that the gate then trusts. The fixture is
+  `autouse=False` and explicitly requested only by the `perf`-marked
+  workload tests (qa R3-I4): a session `autouse` fixture would import
+  torch at the start of the fast PR suite and violate the PC.1a
+  no-torch boundary for the non-`perf` PG.1/PG.2/PG.3 tests.
+  `test_perf_fixture_not_autouse` (in `test_gate_module_boundary.py`,
+  non-`perf`) asserts the fixture object has `autouse is False` so the
+  boundary cannot silently regress.
 - **PG.6 `test_capture_cli.py`** (qa-I2): monkeypatch the three
   benchmark measurement functions to return known constants, run
   `python -m tests.perf.capture --cell cpu-x86` against `tmp_path`,
@@ -393,7 +429,14 @@ and the gate's correctness offline, deterministic, and fast.
   asserts the P95 helper on a known data list equals
   `np.percentile(data, 95, method="linear")`; the warm-up/repeat counts
   (PB.3) are module constants `INFERENCE_WARMUP`, `INFERENCE_REPEATS`
-  asserted applied (qa-N1).
+  asserted applied (qa-N1); `test_bench_min_rounds_applied` asserts
+  the train-step benchmark is invoked with `BENCH_MIN_ROUNDS` (PD.3 /
+  arch R3-N).
+- **PG.9 `test_latency_breach_does_not_raise`** (qa R3-N1): a measured
+  `inference_latency_median_s` of baseline * 3.0 under mode `enforce`
+  (matching metric, non-provisional) => no raise. Pins PD.1's
+  "latency is observational, not gated" so an implementation that
+  accidentally hard-gates latency is caught.
 
 ## Resolved questions (round 1)
 
@@ -525,5 +568,41 @@ discharged; round 2 surfaced revision-introduced issues:
   - qa NEW-N1: PG.6 git-sha assertion guarded by `shutil.which("git")`.
   - qa NEW-N2: PG.7 asserts the bot-fail stdout message.
   - arch NIT (R2): folded into the arch-C1 doc rewrite.
+
+Round 3 (architecture 0C/1I/2N APPROVE; qa 1C/4I/1N
+REQUEST_CHANGES; style 0/0/0 APPROVE). All round-2 findings verified
+genuinely closed against the landed files; round 3 surfaced
+audit-level gaps:
+
+- Addressed (CRITICAL):
+  - qa R3-C1: `device_name` on the CPU cell had no asserting test (it
+    is a free `str`, schema cannot catch a wrong value). Added
+    `PG.2 test_capture_writes_device_name_cpu` pinning the PC.2
+    auditability claim.
+- Addressed (IMPROVEMENT):
+  - arch R3-I: PD.1b precedence list now names step (0) load+validate
+    => PD.1c on failure, so PD.1b no longer contradicts PD.1c read in
+    isolation.
+  - qa R3-I1: PD.1c warn-mode variants individually named
+    (`test_missing_baseline_warn_logs`,
+    `test_corrupt_baseline_warn_logs`), four named tests total.
+  - qa R3-I2: `test_unset_env_defaults_to_warn` pins
+    `provisional=False` + matching metric so the no-raise is reached
+    via mode dispatch, not a short-circuit.
+  - qa R3-I3: PG.3 boundary test now also calls the resolver
+    (monkeypatched `detect()==CPU`) in the subprocess, exercising the
+    resolver's internal lazy-import contract, not just the module
+    boundary.
+  - qa R3-I4: PG.5 fixture stated `autouse=False`, perf-requested
+    only; `test_perf_fixture_not_autouse` pins it so the PC.1a
+    boundary cannot silently regress.
+- Addressed (NITPICK):
+  - qa R3-N1: `PG.9 test_latency_breach_does_not_raise` pins
+    latency-is-observational.
+  - arch R3-N1 (min_rounds prose-only): PD.3 now names
+    `BENCH_MIN_ROUNDS` as a `_workload.py` constant with PG.8
+    `test_bench_min_rounds_applied` asserting it. arch R3-N2 (NG1
+    density): left as-is, pure prose polish with no behavioral content
+    (cosmetic; deferred, not blocking).
 
 Gemini final pass: not yet run (runs after Claude consensus).
