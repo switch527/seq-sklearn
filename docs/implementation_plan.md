@@ -2254,24 +2254,42 @@ S5 refactor-plan consensus (refactor_prediction_step.md Step 6):
 
 S7 code-review (S6 implementation, deferred items):
 
-- **Two calibration bands re-derivation deferred to S8/Gemini.**
-  `test_classifier_calibration_ece[temperature]` and
-  `test_regressor_calibration_coverage[conformal]` marginally breach
-  their pre-refactor bands under the corrected contemporaneous
-  distribution (measured at seed 42: ECE 0.061 vs the 0.05 band;
-  conformal coverage 0.856 vs the 0.85 upper band; all other
-  strategies still pass their original bands). The bands were pinned
-  against the buggy `prediction_step=1` regime; re-deriving them
-  against the corrected regime is a measured multi-seed e2e task and
-  re-pinning a quality gate is a review-grade judgment, NOT a
-  unilateral edit. Deferred state: only those two parametrize cases
-  carry `xfail(strict=False)`; the band CONSTANTS are unchanged (no
-  weakening). S8/Gemini did NOT re-derive the bands (its pass raised
-  an unrelated finding), so this remains an open tracked follow-up: a
-  dedicated calibration-tuning pass re-derives both bands against a
-  multi-seed corrected-regime run and converts them back to hard
-  assertions, then removes the xfails. This is a tracked deferral
-  with a reason, consensus-valid per the severity-tier rule.
+- **Two calibration bands re-derivation - RESOLVED (post-pipeline,
+  user-directed, Claude /review-gated).** The `temperature` ECE and
+  `conformal` coverage bands were pinned against the buggy
+  `prediction_step=1` seed-42 value. Re-derived against the corrected
+  contemporaneous regime via a 5-seed sweep (42, 137, 9999, 7, 2024):
+  temperature ECE = [0.061, 0.034, 0.035, 0.050, 0.057] (mean 0.047,
+  max 0.061); conformal coverage = [0.856, 0.831, 0.825, 0.850,
+  0.842] (min 0.825, max 0.856; conservative over-coverage on an 80%
+  nominal interval). Re-pinned: `_CLF_ECE_BANDS["temperature"]`
+  0.05 -> 0.07; `_REG_COVERAGE_BANDS["conformal"]` (0.75, 0.85) ->
+  (0.75, 0.88). Both new constants EQUAL this file's existing
+  `platt`/`isotonic` ECE band (0.07) and `isotonic_quantile` upper
+  coverage band (0.88) respectively - temperature/conformal are now
+  held to the same bar the project already accepts for the adjacent
+  strategies, with headroom over the measured 5-seed extremes. The
+  two `xfail(strict=False)` cases and the `_PS_REFACTOR_BAND_XFAIL`
+  constant were removed; both are hard assertions again and pass at
+  seed 42. The user directed this re-pin and required a Claude
+  /review round on the quality-gate constant change before commit
+  (no unilateral weakening). The /review round reached consensus
+  (code-opus/sonnet + qa-opus/sonnet all APPROVE, 0 CRITICAL): the
+  bands still catch a genuinely broken model (near-random ECE
+  0.12-0.20 >> the 0.07 ceiling) and the safety-critical conformal
+  LOWER bound 0.75 is unchanged (under-coverage still caught; only
+  the benign over-coverage ceiling moved).
+- **Calibration ECE/coverage measured in-sample + thin temperature
+  headroom (deferred IMPROVEMENT).** The /review qa pass noted ECE
+  and coverage are evaluated on the training panel (an in-sample
+  proxy) and the temperature band has ~0.009 headroom over the
+  5-seed max. Both are PRE-EXISTING properties shared by ALL five
+  band-sensitive cases (platt, isotonic, conformal,
+  isotonic_quantile too), NOT introduced by this re-pin, and neither
+  creates false-pass risk (a broken model fails in-sample too).
+  Deferred: a holdout-split calibration evaluation + headroom review
+  is a separate calibration-methodology improvement, out of scope
+  for closing the prediction_step deferral.
 - **Explicit `calibration_set` below-floor exclusion (Gemini S8 +
   arch-opus R3-I1 extension) - RESOLVED.** Decision: the explicit-
   `calibration_set` branch is caller-owned and does NOT floor-filter

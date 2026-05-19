@@ -797,7 +797,15 @@ all-below-floor explicit set still calibrates; contrasts the
 internal-split branch's empty-fold raise). ruff + pyright clean.
 implementation_plan Deferred entry marked RESOLVED.
 
-Deferral 1 (the two calibration bands) remains the only open item:
-a multi-seed measurement under the corrected regime + a quality-bar
-decision (the band constant is review-grade; not unilaterally
-picked).
+Deferral 1 (the two calibration bands) RESOLVED. 5-seed sweep
+(42, 137, 9999, 7, 2024) under the corrected regime: temperature
+ECE mean 0.047 / max 0.061; conformal coverage 0.825-0.856
+(conservative over-coverage, 80% nominal). User-directed re-pin:
+`temperature` ECE 0.05 -> 0.07 (= existing platt/isotonic band);
+`conformal` coverage (0.75, 0.85) -> (0.75, 0.88) (= existing
+isotonic_quantile upper band). The two `xfail(strict=False)` cases
+and `_PS_REFACTOR_BAND_XFAIL` removed; hard assertions restored and
+green at seed 42. Per the user's no-unilateral-weakening rule the
+quality-gate constant change is gated on a Claude /review round
+(code + qa) before commit. Both deferrals now closed; nothing
+outstanding except the (separate) merge-to-main decision.
