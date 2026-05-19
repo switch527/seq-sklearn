@@ -26,12 +26,12 @@ ONNX_SAFE_OPS: frozenset[str] = frozenset(
     {
         "Add", "Sub", "Mul", "Div", "Pow", "Sqrt", "MatMul", "Gemm",
         "LSTM", "Softmax", "Sigmoid", "Tanh", "Elu", "Erf", "ReduceMean",
-        "ReduceSum", "LayerNormalization", "Gather", "GatherElements",
-        "ScatterElements", "ArgMax", "Range", "Greater", "GreaterOrEqual",
+        "ReduceSum", "LayerNormalization", "Gather", "GatherND",
+        "GatherElements", "ArgMax", "Range", "Greater", "GreaterOrEqual",
         "Less", "Where", "Expand", "Cast", "Concat", "Slice", "Reshape",
         "Transpose", "Squeeze", "Unsqueeze", "Shape", "Constant",
         "ConstantOfShape", "Identity", "Flip", "Neg", "Equal", "And",
-        "Not", "IsNaN", "IsInf", "Mod", "Split", "GatherND",
+        "Not", "IsNaN", "IsInf", "Mod", "Split",
     }
 )  # fmt: skip
 
@@ -101,3 +101,20 @@ def test_exported_graph_uses_only_safe_ops(
         f"{sorted(extra)}. If intentional, update docs/architecture.md "
         f"A21 AND ONNX_SAFE_OPS here in one reviewed edit."
     )
+
+
+def test_collect_op_types_recurses_subgraphs() -> None:
+    """The control-flow recursion in _collect_op_types is reachable and
+    correct WITHOUT requiring the production export to emit If/Loop
+    (which it must not). A synthetic If node with a Gemm in its
+    then_branch must surface both 'If' and 'Gemm'."""
+    from onnx import helper
+
+    inner = helper.make_node("Gemm", ["a", "b"], ["c"])
+    then_g = helper.make_graph([inner], "then", [], [])
+    else_g = helper.make_graph([], "else", [], [])
+    if_node = helper.make_node("If", ["cond"], ["out"], then_branch=then_g, else_branch=else_g)
+    top = helper.make_node("Add", ["x", "y"], ["cond"])
+    g = helper.make_graph([top, if_node], "g", [], [])
+    ops = _collect_op_types(g)
+    assert {"Add", "If", "Gemm"} <= ops

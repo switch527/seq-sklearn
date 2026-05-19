@@ -596,9 +596,12 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
 
         The graph trusts its inputs: the eager input-validation guards
         (non-finite, embedding-index bounds, left-pad contract,
-        all-padding row) are erased by the strict=False export, since
-        ONNX has no exception mechanism. Validation remains the
-        responsibility of the eager ``predict`` path and the caller.
+        all-padding row) are SKIPPED on the export path via the
+        backbone's ``onnx_export`` flag (toggled by ``_OnnxForward``
+        for the trace, restored after), since ONNX has no exception
+        mechanism. Validation remains the responsibility of the eager
+        ``predict`` path (where the flag is False and every guard
+        runs) and the caller.
 
         Dynamic batch ``B`` is supported; the time dimension is the
         fit-time constant ``lookback``. ``X`` is required (a fitted

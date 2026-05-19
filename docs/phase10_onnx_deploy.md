@@ -520,3 +520,63 @@ DELIBERATELY-EXCLUDED dangerous ops (`ScaledDotProductAttention`,
 `Attention`, `Loop`, `If`, `Scan`, `NonZero`) are still absent from
 the export, so the R2 guard's purpose holds. The op-surface test is
 green against the reconciled set.
+
+## S7 review ledger (R1 addressed)
+
+S7-R1 dual-model swarm: code-opus/sonnet APPROVE, arch-opus APPROVE,
+qa-sonnet APPROVE, style-sonnet APPROVE, qa-opus REQUEST_CHANGES;
+ZERO CRITICAL (the modular-roll == stable-argsort equivalence was
+independently verified by hand-algebra across lengths 0..L by
+code-opus; all invariants confirmed). Addressed:
+
+- arch-opus I1 (false docstring): `export_onnx` docstring said the
+  guards are "erased by the strict=False export" - corrected to
+  state they are SKIPPED via the backbone `onnx_export` flag
+  (matching S6 finding 1).
+- arch-opus I2 (placement reconciliation): the export-vs-eager
+  override (guard-skip + modular roll + pack-free LSTM) lives in
+  `TFTBackbone` gated by `onnx_export`, with `_OnnxForward` as the
+  transient toggler; the consensus'd plan said it "lives in
+  `_OnnxForward`". Relocating the `pack_padded_sequence`
+  substitution into the wrapper would duplicate `_run_lstm`; the
+  flag-gated split keeps one source of truth and the invariant
+  (eager forward untouched, flag default False, restored in
+  `finally`) holds. Recorded here as the reconciliation note.
+- code-opus I1 + qa: binary parity now parametrized `keep in {1,2}`
+  (T=1 max-left-pad roll boundary + multi-valid); multiclass and
+  quantile parity gained the (a) `_predict_raw[0]` roll-vs-packed
+  oracle (was ort==wrapper + shape only).
+- qa-opus I2 / qa-sonnet I-2: added
+  `test_export_onnx_wraps_lowering_failure` (monkeypatch
+  `torch.export.export` to raise; assert `OnnxExportError` +
+  `RuntimeError` `__cause__`).
+- qa-sonnet I-1: (d) now asserts the calibrated proba differs from
+  the raw sigmoid (`not np.allclose`) so (c) is non-vacuous,
+  instead of only `calibrator_ is not None`.
+- code-sonnet I1 + code/arch NITPICKs: stale `GatherElements` /
+  `ScatterElements` removed from `ONNX_SAFE_OPS` AND A21 (rank-3
+  gather lowers to `GatherND`; keeping the unused entries hollowed
+  the R2 guard); duplicate `ArgMax` in the A21 set literal removed.
+- qa-opus I4 / qa-sonnet I-4: added
+  `test_collect_op_types_recurses_subgraphs` (synthetic If/
+  then_branch Gemm) so the guard-on-a-guard recursion is itself
+  pinned.
+- qa-opus I3 / qa-sonnet I-3 (coverage artifact): scoped
+  `--cov-report=term-missing` verbatim for the changed modules
+  (the full gate also ran `--cov`, 1940 passed):
+
+      src/seq_sklearn/errors.py                 9   0   0   0  100%
+      src/seq_sklearn/inference/onnx.py        19   0   0   0  100%
+      src/seq_sklearn/models/_base.py         224  25  32   8   86%
+      src/seq_sklearn/models/transformer/tft/backbone.py
+                                              179  10  44   9   91%
+
+  errors.py + inference/onnx.py 100%; the _base.py / backbone.py
+  uncovered lines are pre-existing paths exercised by the full
+  suite (the scoped subset is not the authoritative coverage; the
+  full green gate is). Coverage delta non-negative (new covered
+  code + tests, no test removed).
+
+NITPICK not actioned: the `## Step N - ` / mid-sentence hyphen in
+the A21 prose is the accepted house-style baseline (style-sonnet
+flagged and self-dismissed it).

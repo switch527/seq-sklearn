@@ -80,13 +80,19 @@ _COMMON: dict[str, object] = {
 
 
 def _short_entity_panel(
-    gen: SyntheticPanelGenerator,
+    gen: SyntheticPanelGenerator, keep: int = 2
 ) -> tuple[pd.DataFrame, np.ndarray, object]:
-    """Panel with a left-padded short entity (one entity truncated to 2 rows)."""
+    """Panel with one entity truncated to ``keep`` rows.
+
+    ``keep`` parametrizes the modular-roll boundary: keep=1 is the
+    T=1 / max-left-pad case (roll = lookback - 1, the most
+    adversarial for the gather/inverse permutation), keep=2 a
+    multi-valid case; the panel's other entities are full-length.
+    """
     panel, y = gen.generate(seed=42)
     short_id = panel[gen.id_col].iloc[-1]
     block = panel[panel[gen.id_col] == short_id].index
-    drop = list(block[2:])
+    drop = list(block[keep:])
     panel = panel.drop(index=drop).reset_index(drop=True)
     y = np.delete(y, drop)
     return panel, y, short_id
@@ -110,10 +116,16 @@ def _ort_run(path: str, args: tuple[torch.Tensor, ...]) -> np.ndarray:
     return sess.run(None, feed)[0]
 
 
-def test_export_onnx_parity_binary(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
+@pytest.mark.parametrize("keep", [1, 2])
+def test_export_onnx_parity_binary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object, keep: int
+) -> None:
     _force_cpu(monkeypatch)
     gen = _gen("binary")
-    panel, y, short_id = _short_entity_panel(gen)
+    # keep=1 -> T=1 entity (roll = lookback-1, the modular-roll
+    # boundary); keep=2 -> multi-valid. Both exercise the gather/
+    # inverse permutation at its edges against the packed oracle.
+    panel, y, short_id = _short_entity_panel(gen, keep=keep)
     est = TFTClassifier(
         task_type="binary",
         tabular_config=_tab(gen, min_periods_predict=4),
@@ -148,9 +160,12 @@ def test_export_onnx_parity_binary(monkeypatch: pytest.MonkeyPatch, tmp_path: ob
     order_ort = np.argsort(ort_p1[af])
     np.testing.assert_array_equal(order_proba, order_ort)
 
-    # (d) the calibrator is non-trivial, so (c) is sensitive to
-    # calibration being OUTSIDE the graph.
+    # (d) the calibrator is non-trivial: the calibrated proba must
+    # differ from the raw sigmoid, so (c) genuinely proves
+    # calibration is OUTSIDE the graph (a vacuous identity calibrator
+    # would make (c) pass even if calibration were in the graph).
     assert est.calibrator_ is not None
+    assert not np.allclose(proba[af, 1], ort_p1[af], atol=1e-3)
 
 
 def test_export_onnx_parity_loaded_estimator(
@@ -195,6 +210,8 @@ def test_export_onnx_parity_multiclass(monkeypatch: pytest.MonkeyPatch, tmp_path
     backbone, head = est._predict_module()
     wrapper_out = _OnnxForward(backbone, head)(*args).cpu().numpy()
     assert wrapper_out.shape == (len(panel), est.n_classes_)
+    # (a) roll-vs-packed proof for the multiclass head too.
+    np.testing.assert_allclose(wrapper_out, est._predict_raw(panel)[0].cpu().numpy(), atol=1e-6)
     np.testing.assert_allclose(_ort_run(out, args), wrapper_out, atol=1e-4, rtol=1e-4)
 
 
@@ -216,6 +233,8 @@ def test_export_onnx_parity_regressor_quantile(
     backbone, head = est._predict_module()
     wrapper_out = _OnnxForward(backbone, head)(*args).cpu().numpy()
     assert wrapper_out.shape == (len(panel), 3)
+    # (a) roll-vs-packed proof for the quantile head too.
+    np.testing.assert_allclose(wrapper_out, est._predict_raw(panel)[0].cpu().numpy(), atol=1e-6)
     np.testing.assert_allclose(_ort_run(out, args), wrapper_out, atol=1e-4, rtol=1e-4)
 
 

@@ -2489,16 +2489,17 @@ Permitted ONNX op_types:
 
 `{Add, Sub, Mul, Div, Pow, Sqrt, MatMul, Gemm, LSTM, Softmax,
 Sigmoid, Tanh, Elu, Erf, ReduceMean, ReduceSum,
-LayerNormalization, Gather, GatherElements, ScatterElements,
+LayerNormalization, Gather, GatherND, GatherElements,
 ArgMax, Range, Greater, GreaterOrEqual, Less, Where, Expand, Cast,
 Concat, Slice, Reshape, Transpose, Squeeze, Unsqueeze, Shape,
 Constant, ConstantOfShape, Identity, Flip, Neg, Equal, And, Not,
-IsNaN, IsInf, Mod, Split, GatherND, ArgMax}`
+IsNaN, IsInf, Mod, Split}`
 
 Per-op static-analysis provenance (so each entry is auditable;
 verified against the actual exported graph in Phase 10 - the static
 guess mis-named some ONNX ops, e.g. `chunk` lowers to `Split` not
-`Slice`, the rank-3 `gather` to `GatherND` not `GatherElements`,
+`Slice`, and the rank-3 `gather`/scatter lowers to BOTH `GatherND`
+and `GatherElements` (form-dependent) but never `ScatterElements`,
 which is the kind of discrepancy the deploy test is designed to
 surface and which is reconciled here, NOT by silently widening to
 an unknown op):
@@ -2517,7 +2518,7 @@ an unknown op):
 - `_run_lstm` export path (no `argsort`/`sort`: the F3 left-pad
   stable valid-first permutation is the modular ROLL
   `(arange + (L - lengths)) % L`) -> `Range`/`Add`/`Sub`/`Mod`,
-  rank-3 `gather`/scatter -> `GatherND`, `Not`/`Cast`
+  rank-3 `gather`/scatter -> `GatherND`/`GatherElements`, `Not`/`Cast`
   (`~mask`/`.int`), `ReduceSum` (`lengths`).
 - `_readout` -> `Flip` (`valid.flip`), `ArgMax`, `Gather`,
   `ReduceSum`/`Div` (mean_pool).

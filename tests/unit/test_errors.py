@@ -131,3 +131,59 @@ def test_export_onnx_raises_without_extra(monkeypatch: pytest.MonkeyPatch) -> No
     with pytest.raises(OnnxExportError, match=r"pip install seq-sklearn\[onnx\]") as ei:
         est.export_onnx("/tmp/should_not_be_written.onnx", panel)
     assert isinstance(ei.value.__cause__, ImportError)
+
+
+def test_export_onnx_wraps_lowering_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """The export try/except wraps a torch.export/onnx failure as
+    OnnxExportError with the original exception chained as __cause__.
+    Needs the [onnx] extra (the import guard runs first)."""
+    pytest.importorskip("onnx")
+    pytest.importorskip("onnxruntime")
+    import torch
+
+    from seq_sklearn.hardware import HardwareTier
+
+    monkeypatch.setattr("seq_sklearn.training.trainer.detect", lambda: HardwareTier.CPU)
+    from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
+    from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
+    from seq_sklearn.models.transformer.tft.classifier import TFTClassifier
+
+    gen = SyntheticPanelGenerator(
+        target_kind="binary", num_entities=4, periods_per_entity=6, lookback=3, seed=0
+    )
+    panel, y = gen.generate(seed=0)
+    est = TFTClassifier(
+        task_type="binary",
+        tabular_config=TabularConfigParams(
+            id_col=gen.id_col,
+            time_col=gen.time_col,
+            static_categorical_cols=tuple(gen.static_categorical_cols),
+            static_real_cols=tuple(gen.static_real_cols),
+            time_varying_real_cols=tuple(gen.time_varying_real_cols),
+            time_varying_categorical_cols=tuple(gen.time_varying_categorical_cols),
+            lookback=gen.lookback,
+            min_periods=1,
+            min_periods_predict=1,
+            max_categorical_cardinality=10_000,
+        ),
+        scheduler=SchedulerParams(name="constant", warmup_steps=0),
+        hidden_size=8,
+        attention_heads=2,
+        max_epochs=1,
+        batch_size=16,
+        val_fraction=0.25,
+        cal_fraction=0.0,
+        precision="32-true",
+        seed=0,
+        verbose=False,
+    ).fit(panel, y)
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise RuntimeError("synthetic trace failure")
+
+    monkeypatch.setattr(torch.export, "export", _boom)
+    with pytest.raises(OnnxExportError, match="failed during lowering") as ei:
+        est.export_onnx(str(tmp_path / "x.onnx"), panel)  # type: ignore[operator]
+    assert isinstance(ei.value.__cause__, RuntimeError)
