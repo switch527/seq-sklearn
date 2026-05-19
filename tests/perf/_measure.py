@@ -10,20 +10,27 @@ torch via `_workload`, so this module is perf-path only (PC.1a).
 import logging
 import multiprocessing as mp
 import os
+import queue as _queue
 import resource
 import time
 import tracemalloc
 from typing import Any
 
-from tests.perf._gate import percentile_linear
-from tests.perf._workload import (
+from tests.perf._constants import (
     BENCH_MIN_ROUNDS,
     INFERENCE_BATCH,
     INFERENCE_REPEATS,
     INFERENCE_WARMUP,
     PEAK_MEM_CHILD_TIMEOUT_S,
-    build_proxy_estimator_and_panel,
 )
+from tests.perf._gate import percentile_linear
+
+# `_workload` (torch + TFTClassifier) is imported lazily inside each
+# function body, NOT at module scope, so `import tests.perf._measure`
+# stays torch-free. `tests.perf.capture` imports this module at its
+# module scope; PG.6 monkeypatches the `measure_*` functions, so the
+# fast-suite capture-CLI test never triggers the lazy torch import
+# (post-Gemini code-review C1/C2: keep the fast PR suite torch-free).
 
 __all__ = [
     "device_name",
@@ -50,6 +57,8 @@ def one_train_step() -> None:
     in PB.1: on CPU this is dominated by Lightning init overhead, which
     is acceptable for a RELATIVE gate because it is identical
     run-to-run and the baseline captures it too."""
+    from tests.perf._workload import build_proxy_estimator_and_panel
+
     est, panel, y = build_proxy_estimator_and_panel()
     est.fit(panel, y)
 
@@ -72,6 +81,8 @@ def _peak_memory_child(queue: "mp.Queue[dict[str, Any]]") -> None:
     alone, not contaminated by prior pytest activity (Gemini-C3)."""
     try:
         import torch
+
+        from tests.perf._workload import build_proxy_estimator_and_panel
 
         tracemalloc.start()
         cuda = torch.cuda.is_available()
@@ -114,12 +125,20 @@ def measure_peak_memory() -> dict[str, Any]:
     proc.start()
     try:
         record = queue.get(timeout=PEAK_MEM_CHILD_TIMEOUT_S)
-    except Exception as exc:
+    except _queue.Empty as exc:
         proc.terminate()
         proc.join(10)
-        raise RuntimeError(f"peak-memory child did not return: {exc}") from exc
+        raise RuntimeError(
+            f"peak-memory child did not return within {PEAK_MEM_CHILD_TIMEOUT_S}s"
+        ) from exc
     proc.join(10)
-    if proc.exitcode not in (0, None):
+    if proc.exitcode is None:
+        # Returned a record but the process is wedged in teardown:
+        # surface it, never leave a zombie or trust a half-exit (code-I2).
+        proc.kill()
+        proc.join(10)
+        raise RuntimeError("peak-memory child wedged after returning its record")
+    if proc.exitcode != 0:
         raise RuntimeError(f"peak-memory child exited with code {proc.exitcode}")
     if "error" in record:
         raise RuntimeError(f"peak-memory child failed: {record['error']}")
@@ -131,6 +150,8 @@ def measure_peak_memory() -> dict[str, Any]:
 def measure_inference_latency() -> tuple[float, float]:
     """Per-sample inference latency over `INFERENCE_REPEATS` timed
     predicts on `INFERENCE_BATCH` windows, warm-ups excluded."""
+    from tests.perf._workload import build_proxy_estimator_and_panel
+
     est, panel, y = build_proxy_estimator_and_panel()
     est.fit(panel, y)
     batch = panel.head(min(INFERENCE_BATCH, len(panel)))

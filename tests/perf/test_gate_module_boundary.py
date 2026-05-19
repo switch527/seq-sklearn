@@ -38,6 +38,37 @@ def test_gate_module_has_no_heavy_imports(imp: str) -> None:
     assert "OK" in proc.stdout
 
 
+@pytest.mark.parametrize(
+    "imp",
+    [
+        "import tests.perf._constants",
+        "import tests.perf._measure",
+        "import tests.perf.capture",
+        "import tests.perf.test_gate_logic",
+        "import tests.perf.test_baseline_schema",
+        "import tests.perf.test_gate_module_boundary",
+        "import tests.perf.test_workload",
+        "import tests.perf.test_capture_cli",
+        "import tests.perf.test_check_perf_baselines_script",
+    ],
+)
+def test_fast_suite_modules_have_no_heavy_imports(imp: str) -> None:
+    """Post-Gemini code-review C1/C2 + I1: EVERY module the fast
+    (non-`perf`) suite collects must be torch/seq_sklearn-free at
+    import. PG.3 (a)/(b) only guarded `_gate`/`conftest`; a
+    module-scope `_workload`/`capture` import in a test file silently
+    reintroduced the boundary violation. This whole-suite guard makes
+    that class of regression impossible to land unnoticed."""
+    proc = subprocess.run(
+        [sys.executable, "-c", _BOUNDARY_SNIPPET.format(imp=imp)],
+        capture_output=True,
+        text=True,
+        cwd=_repo_root(),
+    )
+    assert proc.returncode == 0, f"{imp!r}: {proc.stdout}\n{proc.stderr}"
+    assert "OK" in proc.stdout
+
+
 def _repo_root() -> str:
     from pathlib import Path
 
@@ -70,10 +101,14 @@ def test_cell_resolver_branch_logic(monkeypatch: pytest.MonkeyPatch) -> None:
 
     for tier in ("PASCAL", "AMPERE_ADA", "HOPPER", "BLACKWELL"):
         monkeypatch.setattr(hw, "detect", lambda t=tier: getattr(hw.HardwareTier, t))
-        monkeypatch.setattr(torch.cuda, "get_device_name", lambda _i=0, t=tier: f"dev-{t}")
+        # Device string deliberately does NOT contain the tier name, so
+        # asserting both proves PC.2's "tier AND device" skip reason is
+        # specific, not coincidental (arch-NIT / qa-NIT-1).
+        monkeypatch.setattr(torch.cuda, "get_device_name", lambda _i=0: "GPU-XYZ-9000")
         with pytest.raises(pytest.skip.Exception) as ei:
             resolve_cell()
         assert tier in str(ei.value)
+        assert "GPU-XYZ-9000" in str(ei.value)
 
 
 def test_perf_fixture_not_autouse() -> None:

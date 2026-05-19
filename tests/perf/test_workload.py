@@ -11,7 +11,7 @@ import textwrap
 
 import pytest
 
-from tests.perf._workload import (
+from tests.perf._constants import (
     BENCH_MIN_ROUNDS,
     PROXY_ATTENTION_HEADS,
     PROXY_BUILD_TIMEOUT_S,
@@ -96,3 +96,16 @@ def test_bench_min_rounds_applied() -> None:
     assert "rounds=BENCH_MIN_ROUNDS" in src
     assert isinstance(BENCH_MIN_ROUNDS, int)
     assert BENCH_MIN_ROUNDS >= 1
+
+
+def test_inference_warmup_and_repeats_applied() -> None:
+    """PG.8 / qa-IMPROVEMENT-2 / qa-N1: the named INFERENCE_WARMUP and
+    INFERENCE_REPEATS constants are actually applied in `_measure`, not
+    hardcoded, mirroring `test_bench_min_rounds_applied`."""
+    from pathlib import Path
+
+    import tests.perf._measure as mod
+
+    src = Path(mod.__file__).read_text() if mod.__file__ else ""
+    assert "range(INFERENCE_WARMUP)" in src
+    assert "range(INFERENCE_REPEATS)" in src

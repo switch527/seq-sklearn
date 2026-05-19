@@ -143,3 +143,12 @@ def test_p95_matches_numpy(q: float) -> None:
     assert percentile_linear(data, q) == pytest.approx(
         float(np.percentile(data, q, method="linear"))
     )
+
+
+def test_percentile_linear_edges() -> None:
+    """style-N1/code-N2: the empty-data guard and single-element
+    branches (used if a measurement returned <2 samples)."""
+    with pytest.raises(ValueError, match="empty data"):
+        percentile_linear([], 95)
+    assert percentile_linear([7.0], 95) == 7.0
+    assert percentile_linear([7.0], 0) == 7.0

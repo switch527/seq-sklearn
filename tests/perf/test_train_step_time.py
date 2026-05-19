@@ -18,8 +18,8 @@ def test_train_step_time_within_baseline(benchmark: object, perf_determinism: No
         placeholder_measured,
         resolve_cell,
     )
+    from tests.perf._constants import BENCH_MIN_ROUNDS
     from tests.perf._measure import one_train_step
-    from tests.perf._workload import BENCH_MIN_ROUNDS
 
     cell = resolve_cell()
     benchmark.pedantic(  # type: ignore[attr-defined]

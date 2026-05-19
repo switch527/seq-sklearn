@@ -9,6 +9,7 @@ offline.
 """
 
 import argparse
+import importlib.metadata
 import platform
 import subprocess
 import sys
@@ -33,9 +34,10 @@ def _git_sha() -> str:
 
 def capture(cell: str, *, provisional: bool = False) -> PerfBaseline:
     """Measure and return the `PerfBaseline` for ``cell`` (also written
-    to ``_baselines/<cell>.json``)."""
-    import torch
-
+    to ``_baselines/<cell>.json``). `torch_version` is read from
+    installed-distribution metadata (stdlib `importlib.metadata`), NOT
+    by importing torch, so the monkeypatched PG.6 path stays torch-free
+    (post-Gemini code-review C1)."""
     step_median, step_p95 = _measure.measure_train_step()
     mem = _measure.measure_peak_memory()
     lat_median, lat_p95 = _measure.measure_inference_latency()
@@ -43,7 +45,7 @@ def capture(cell: str, *, provisional: bool = False) -> PerfBaseline:
     baseline = PerfBaseline(
         cell=cell,  # type: ignore[arg-type]
         captured_git_sha=_git_sha(),
-        torch_version=torch.__version__,
+        torch_version=importlib.metadata.version("torch"),
         python_version=platform.python_version(),
         device_name=mem["device_name"],
         provisional=provisional,

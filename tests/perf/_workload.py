@@ -13,43 +13,19 @@ from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
 from seq_sklearn.models.transformer.tft.classifier import TFTClassifier
 
-__all__ = [
-    "BENCH_MIN_ROUNDS",
-    "INFERENCE_BATCH",
-    "INFERENCE_REPEATS",
-    "INFERENCE_WARMUP",
-    "PEAK_MEM_CHILD_TIMEOUT_S",
-    "PROXY_ATTENTION_HEADS",
-    "PROXY_BUILD_TIMEOUT_S",
-    "PROXY_HIDDEN_SIZE",
-    "PROXY_L",
-    "PROXY_N",
-    "PROXY_P",
-    "PROXY_SEED",
-    "build_proxy_estimator_and_panel",
-]
+# Constants live in the torch-free `_constants` module (PC.1a); only
+# the heavy builder lives here. Anything that needs only a constant
+# imports `_constants`, never this module.
+from tests.perf._constants import (
+    PROXY_ATTENTION_HEADS,
+    PROXY_HIDDEN_SIZE,
+    PROXY_L,
+    PROXY_N,
+    PROXY_P,
+    PROXY_SEED,
+)
 
-# Proxy size (PA.1): L matches the N7 reference lookback; N/P scaled
-# for a CPU nightly envelope. Changing any of these invalidates the
-# checked-in baselines and is a PERF_BASELINE_REVIEWED: change.
-PROXY_N = 256
-PROXY_P = 24
-PROXY_L = 12
-PROXY_SEED = 11
-PROXY_HIDDEN_SIZE = 128  # N7 reference architecture
-PROXY_ATTENTION_HEADS = 4  # N7 reference architecture
-
-# Named tuning constants (PD.3 / arch R3-N; PG.8 asserts they are
-# the values actually passed through).
-BENCH_MIN_ROUNDS = 5
-INFERENCE_WARMUP = 3
-INFERENCE_REPEATS = 20
-INFERENCE_BATCH = 1024  # N7 latency reference size
-
-# Subprocess timeouts (qa-I1 / R1): an oversized proxy or a
-# crashed/OOM-killed child must fail loudly, never hang.
-PROXY_BUILD_TIMEOUT_S = 180
-PEAK_MEM_CHILD_TIMEOUT_S = 240
+__all__ = ["build_proxy_estimator_and_panel"]
 
 
 def build_proxy_estimator_and_panel() -> tuple[TFTClassifier, pd.DataFrame, np.ndarray]:

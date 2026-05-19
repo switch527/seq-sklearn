@@ -66,3 +66,15 @@ def test_capture_writes_device_name_cpu(tmp_path: Path, monkeypatch: pytest.Monk
     _patch_measures(monkeypatch, tmp_path)
     baseline = capture.capture("cpu-x86")
     assert baseline.device_name == "cpu"
+
+
+def test_capture_main_argparse_and_provisional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """code-I3: exercise the argparse CLI entrypoint (`main`) and the
+    `--provisional` flag, not just the in-process `capture()` call."""
+    _patch_measures(monkeypatch, tmp_path)
+    rc = capture.main(["--cell", "cpu-x86", "--provisional"])
+    assert rc == 0
+    written = PerfBaseline.model_validate_json((tmp_path / "cpu-x86.json").read_text())
+    assert written.provisional is True
