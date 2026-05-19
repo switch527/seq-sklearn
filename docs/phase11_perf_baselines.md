@@ -376,8 +376,14 @@ and the gate's correctness offline, deterministic, and fast.
     `import torch` moved to the top of the resolver OR inside the
     `if VOLTA_TURING` branch, not only a bare function-top import; the
     resolver's own lazy `torch.cuda` call is patched out so the branch
-    runs without a GPU and without importing torch). Pins PC.1a /
-    arch-C3 so the fast PR suite cannot regress into pulling torch.
+    runs without a GPU and without importing torch). The V100 sub-case
+    resolves to "no baseline" (PC.2), which calls `pytest.skip`; the
+    subprocess script wraps the resolver call in
+    `try/except _pytest.outcomes.Skipped: pass` (qa confirming-I1) so
+    the `sys.modules` snapshot is taken AFTER the CUDA branch executes
+    regardless of the skip, otherwise the skip exception would abort
+    the subprocess before the assertion. Pins PC.1a / arch-C3 so the
+    fast PR suite cannot regress into pulling torch.
   - `test_cell_resolver_mapping`: monkeypatch `detect()` and
     `torch.cuda.get_device_name` => `CPU` resolves `cpu-x86`;
     `VOLTA_TURING` + device name containing `"T4"` resolves `t4`;
@@ -668,5 +674,21 @@ resolved in-doc above (a confirming qa pass verifies closure). Two
 NITPICKs (PG.3 subprocess-monkeypatch mechanism unstated; NG1 prose
 density) remain, permitted by the consensus rule.
 
-Gemini final pass: not yet run (runs after the confirming qa pass
-verifies the round-4 CRITICAL is closed).
+Confirming qa pass (after the round-4 follow-up): qa
+0C/1I/0N APPROVE. All round-4 CRITICAL + IMPROVEMENTs verified
+genuinely closed. The single new IMPROVEMENT (PG.3 V100 sub-case:
+the resolver's `pytest.skip` would abort the subprocess before the
+`sys.modules` snapshot) is addressed: PG.3 now specifies the
+subprocess wraps the resolver call in
+`try/except _pytest.outcomes.Skipped`.
+
+CONSENSUS REACHED: architecture-reviewer APPROVE (0C/0I), style-
+reviewer APPROVE (0/0/0), qa-test-coverage APPROVE (0C/0I after this
+fix). Every CRITICAL resolved, every IMPROVEMENT resolved or
+deferred-with-reason (D1-D4; arch R3-N2 NG1-density cosmetic
+deferral). NITPICKs permitted to remain per the consensus rule. The
+plan is eligible for the Gemini design final-pass.
+
+Gemini final pass: pending (user deferred any GPU/CPU-heavy work;
+Gemini design-review is doc-only and capacity-gated, run when the
+user clears it).
