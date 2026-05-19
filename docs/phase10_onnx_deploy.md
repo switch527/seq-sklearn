@@ -465,3 +465,58 @@ sdpa_kernel as no-op defense-in-depth, op-surface test as
 enforcement, three-site doc reconcile in Step 7b) is the one
 surfaced design choice, swarm-confirmed. Cleared to implement
 (Steps 0..8), then code `/review` consensus, then Gemini final-pass.
+
+## S6 implementation outcome (gate result + plan refinements)
+
+All Steps 0-8 implemented. ruff + pyright clean (0 errors). Full
+`pytest -m "not gpu" --cov` gate: 1940 passed, 2 deselected (gpu),
+293 xfailed, 0 failed (~16 min, includes the new slow ONNX parity
+tests). New code coverage: `errors.py` and `inference/onnx.py`
+100%; `export_onnx` + the backbone `onnx_export` branches covered by
+the 9 targeted ONNX tests; coverage delta non-negative. The 9
+targeted tests pass: parity (binary/multiclass/quantile/loaded/
+dynamic-batch), op-surface, wheel-install, the env-independent
+import guard.
+
+Three implementation findings REFINED the consensus'd plan's
+MECHANISM while preserving every stated INVARIANT (validated by the
+green parity tests; surfaced here for S7, not silent):
+
+1. `strict=False` does NOT erase the data-dependent eager guards
+   (the plan's central Export-mechanism assumption was wrong:
+   `feat.numel()` under a dynamic batch is symbolic, so
+   `if feat.numel() and not bool(torch.isfinite(...).all())` raised
+   `GuardOnDataDependentSymNode: Eq(u0,1)` even with strict=False).
+   Fix: the three eager input-validation guards (non-finite,
+   embedding-bounds, all-pad) and the `_run_lstm` F3 left-pad guard
+   are now explicitly SKIPPED on the export path via the
+   `onnx_export` flag. This is the faithful, explicit realization of
+   the plan's invariant "the exported graph trusts its inputs; the
+   eager validation guards are erased"; the invariant holds, only
+   the mechanism (explicit flag-skip vs tracer specialization)
+   changed. Eager `predict` keeps full validation (flag default
+   False).
+2. `aten.sort.stable` (`torch.argsort(stable=True)`) has NO ONNX
+   lowering (`DispatchError`). Fix: on the export path the stable
+   valid-first permutation is computed as the modular ROLL
+   `order = (arange(L) + (L - lengths)) % L`,
+   `inverse = (arange(L) - (L - lengths)) % L`. For the F3-
+   guaranteed left-padded contiguous block this is provably
+   identical to the stable-argsort permutation (verified by the
+   `atol=1e-6` wrapper-vs-`_predict_raw` parity on binary/loaded/
+   multiclass/quantile). The gather-preserving LSTM invariant holds;
+   only the permutation computation changed (no `sort` op).
+3. `torch.onnx.export(dynamo=True)` requires `onnxscript`, missing
+   from the `[onnx]` extra. Fix: added `onnxscript>=0.6` to the
+   `[onnx]` extra.
+
+A21 / `ONNX_SAFE_OPS` reconciled to the ACTUAL exported op set: the
+static enumeration mis-named some ops (`chunk`->`Split` not `Slice`,
+rank-3 `gather`->`GatherND` not `GatherElements`, `nan_to_num`
+emits `IsInf` too, the roll adds `Mod`); `argsort`->`TopK` removed
+(no longer on the export path). This is the deliberate reviewed edit
+the op-surface test prescribes, NOT silent widening: the
+DELIBERATELY-EXCLUDED dangerous ops (`ScaledDotProductAttention`,
+`Attention`, `Loop`, `If`, `Scan`, `NonZero`) are still absent from
+the export, so the R2 guard's purpose holds. The op-surface test is
+green against the reconciled set.

@@ -13,6 +13,7 @@ __all__ = [
     "ConfigError",
     "DataContractError",
     "NotFittedError",
+    "OnnxExportError",
     "PredictionError",
     "SeqSklearnError",
     "TrainingError",
@@ -40,6 +41,11 @@ class TrainingError(SeqSklearnError):
 class PredictionError(SeqSklearnError):
     """Predict-time failure: shape mismatch, schema-version mismatch on
     load, missing migration path, etc."""
+
+
+class OnnxExportError(SeqSklearnError):
+    """ONNX export failure: the optional ``[onnx]`` extra is absent, or
+    `torch.onnx.export` / `torch.export` could not lower the model."""
 
 
 class NotFittedError(SeqSklearnError, sk_exc.NotFittedError):

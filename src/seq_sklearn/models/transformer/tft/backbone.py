@@ -67,6 +67,13 @@ class TFTBackbone(BaseBackbone):
         hidden = config.hidden_size
         self.hidden_size = hidden
         self.prediction_readout = config.prediction_readout
+        # ONNX-export-only: when True, _run_lstm uses the pack-free
+        # gather-preserving path (no pack_padded_sequence, which does
+        # not lower under torch.onnx.export(dynamo=True)). Default
+        # False so the trained eager forward is untouched;
+        # BaseSequenceEstimator.export_onnx toggles it transiently
+        # and restores it in a finally (Phase 10 plan Step 1/2).
+        self.onnx_export = False
 
         self.static_cat_embeddings = nn.ModuleList(
             make_embedding(card + 1, hidden) for card in static_cat_cardinalities
@@ -146,30 +153,62 @@ class TFTBackbone(BaseBackbone):
         # or leading-valid padding would make the argsort gather
         # silently reorder timesteps, so reject it rather than corrupt
         # the LSTM with a wrong sequence order.
-        positions = torch.arange(seq_len, device=mask.device)
-        expected = positions[None, :] >= (seq_len - lengths)[:, None]  # (B, L)
-        if not bool((valid == expected).all()):
-            raise PredictionError(
-                "padding_mask is not a contiguous leading block; the F3 "
-                "left-pad contract is required for the packed LSTM"
+        if not self.onnx_export:
+            # Data-dependent eager guard; skipped on the export path
+            # (the graph trusts its inputs, and `bool(...)` here would
+            # raise GuardOnDataDependentSymNode under torch.export).
+            positions = torch.arange(seq_len, device=mask.device)
+            expected = positions[None, :] >= (seq_len - lengths)[:, None]  # (B, L)
+            if not bool((valid == expected).all()):
+                raise PredictionError(
+                    "padding_mask is not a contiguous leading block; the F3 "
+                    "left-pad contract is required for the packed LSTM"
+                )
+        if self.onnx_export:
+            # `aten.sort.stable` (torch.argsort(stable=True)) has no
+            # ONNX lowering. For the F3-guaranteed left-padded
+            # contiguous block the stable valid-first permutation is
+            # exactly a per-row modular ROLL by (seq_len - lengths):
+            # new index j maps to old index (j + roll) % seq_len, which
+            # places the trailing valid suffix first (in order) then
+            # the leading pad block (in order). Identical to the
+            # stable-argsort result on left-padded input; only Range/
+            # Add/Sub/Mod ops, all ONNX-safe.
+            roll = (seq_len - lengths).to(torch.int64)  # (B,)
+            pos = torch.arange(seq_len, device=mask.device)  # (L,)
+            order = (pos[None, :] + roll[:, None]) % seq_len  # (B, L)
+            inverse = (pos[None, :] - roll[:, None]) % seq_len  # (B, L)
+        else:
+            order = torch.argsort(  # (B, L); valid first, original order kept
+                (~valid).int(), dim=1, stable=True
             )
-        order = torch.argsort(  # (B, L); valid indices first, original order kept
-            (~valid).int(), dim=1, stable=True
-        )
+            inverse = torch.argsort(order, dim=1)  # maps back to original
         gathered = torch.gather(
             vsn_out, 1, order[:, :, None].expand(-1, -1, vsn_out.shape[2])
         )  # (B, L, hidden); valid steps left-justified
-        packed = pack_padded_sequence(
-            gathered, lengths.cpu(), batch_first=True, enforce_sorted=False
-        )
         # nn.LSTM init state is (h_0, c_0); A6 names these (c_h, c_c).
         h_0 = c_h.unsqueeze(0)  # (1, B, hidden)
         c_0 = c_c.unsqueeze(0)  # (1, B, hidden)
-        packed_out, _ = self.lstm(packed, (h_0, c_0))
-        lstm_left, _ = pad_packed_sequence(
-            packed_out, batch_first=True, total_length=seq_len
-        )  # (B, L, hidden); valid-first layout
-        inverse = torch.argsort(order, dim=1)  # (B, L); maps back to original positions
+        if self.onnx_export:
+            # ONNX-export-only (Phase 10): pack_padded_sequence does not
+            # lower under torch.onnx.export(dynamo=True). Run the LSTM
+            # directly over the valid-first `gathered` sequence. This is
+            # numerically identical to the packed path at every VALID
+            # position: the LSTM is causal, the valid steps are a
+            # contiguous prefix of `gathered`, so trailing-pad steps
+            # cannot affect the recurrent state of earlier valid steps
+            # (pack_padded_sequence merely stops the recurrence early).
+            # The trailing-pad outputs land, via the `inverse` scatter,
+            # at masked positions both readouts ignore.
+            lstm_left, _ = self.lstm(gathered, (h_0, c_0))  # (B, L, hidden)
+        else:
+            packed = pack_padded_sequence(
+                gathered, lengths.cpu(), batch_first=True, enforce_sorted=False
+            )
+            packed_out, _ = self.lstm(packed, (h_0, c_0))
+            lstm_left, _ = pad_packed_sequence(
+                packed_out, batch_first=True, total_length=seq_len
+            )  # (B, L, hidden); valid-first layout
         return torch.gather(
             lstm_left, 1, inverse[:, :, None].expand(-1, -1, lstm_left.shape[2])
         )  # (B, L, hidden)
@@ -196,36 +235,51 @@ class TFTBackbone(BaseBackbone):
                 checked up front since the packed LSTM rejects a
                 zero-length sequence).
         """
-        for name in ("time_varying_real", "static_real"):
-            feat = batch[name]
-            if feat.numel() and not bool(torch.isfinite(feat).all()):
-                raise PredictionError(f"{name} contains NaN or inf; clean or impute before predict")
-        for name, embeddings in (
-            ("static_categorical", self.static_cat_embeddings),
-            ("time_varying_categorical", self.tv_cat_embeddings),
-        ):
-            codes = batch[name]
-            # Range only, not column order: ordering correctness between
-            # the cardinality list and the encoder columns is the Phase 4
-            # estimator's responsibility (it owns the fitted
-            # TabularToSequence). This guard just prevents an opaque
-            # embedding-kernel abort for a direct caller.
-            for i, module in enumerate(embeddings):
-                emb = cast(nn.Embedding, module)
-                col = codes[..., i]
-                if not bool(((col >= 0) & (col < emb.num_embeddings)).all()):
+        # These three blocks are eager input-validation guards. ONNX
+        # has no exception mechanism and a serialized inference graph
+        # trusts its inputs (validation stays the responsibility of the
+        # eager `predict` path and the serving layer), so they are
+        # SKIPPED on the export path. They are also data-dependent
+        # (`feat.numel()` is symbolic under a dynamic batch dim,
+        # `.all()`/`nonzero` are unbacked), so leaving them in would
+        # raise GuardOnDataDependentSymNode under torch.export even
+        # with strict=False; skipping them is the explicit realization
+        # of the Phase 10 "graph trusts its inputs" invariant.
+        if not self.onnx_export:
+            for name in ("time_varying_real", "static_real"):
+                feat = batch[name]
+                if feat.numel() and not bool(torch.isfinite(feat).all()):
                     raise PredictionError(
-                        f"{name} column {i} has an index outside "
-                        f"[0, {emb.num_embeddings}); fit and transform via "
-                        "TabularToSequence before predict"
+                        f"{name} contains NaN or inf; clean or impute before predict"
                     )
+            for name, embeddings in (
+                ("static_categorical", self.static_cat_embeddings),
+                ("time_varying_categorical", self.tv_cat_embeddings),
+            ):
+                codes = batch[name]
+                # Range only, not column order: ordering correctness
+                # between the cardinality list and the encoder columns
+                # is the Phase 4 estimator's responsibility (it owns
+                # the fitted TabularToSequence). This guard just
+                # prevents an opaque embedding-kernel abort for a
+                # direct caller.
+                for i, module in enumerate(embeddings):
+                    emb = cast(nn.Embedding, module)
+                    col = codes[..., i]
+                    if not bool(((col >= 0) & (col < emb.num_embeddings)).all()):
+                        raise PredictionError(
+                            f"{name} column {i} has an index outside "
+                            f"[0, {emb.num_embeddings}); fit and transform via "
+                            "TabularToSequence before predict"
+                        )
         mask = batch["padding_mask"]  # (B, L); True = padding
-        all_pad = (~mask).any(dim=1).logical_not()  # (B,); True where row is all padding
-        if bool(all_pad.any()):
-            bad_rows = [int(r) for r in torch.nonzero(all_pad, as_tuple=False).flatten()]
-            raise PredictionError(
-                f"window had zero valid timesteps after preprocessing (rows {bad_rows})"
-            )
+        if not self.onnx_export:
+            all_pad = (~mask).any(dim=1).logical_not()  # (B,); True where row all padding
+            if bool(all_pad.any()):
+                bad_rows = [int(r) for r in torch.nonzero(all_pad, as_tuple=False).flatten()]
+                raise PredictionError(
+                    f"window had zero valid timesteps after preprocessing (rows {bad_rows})"
+                )
 
         static_vars = self._encode_static(batch)  # (B, n_static_vars, hidden)
         static_selected, static_weights = self.static_vsn(static_vars)

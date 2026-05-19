@@ -1396,14 +1396,19 @@ The phases above lock contracts that v2 and v3 inherit unchanged:
   pickle. If the pattern proves unworkable, the fallback is the
   flatten-into-dict pattern from the Gemini-rejected A4 v1, taking
   the rework hit before any concrete estimator is written.
-- **R2: SDPA backend control in ONNX export** (Phase 10). PyTorch
-  2.12's `torch.nn.attention.sdpa_kernel(SDPBackend.MATH)` is the
-  modern API but the math backend may still produce ONNX ops
-  outside the documented surface. Mitigation: Phase 10's
-  restricted-op-surface test enumerates the legal ops; failures
-  there expose the issue before release. A20 item 3 tracks the
-  native ONNX `Attention` op (opset 23, PyTorch issue #149662) as
-  the long-term fix.
+- **R2: ONNX op surface (Phase 10) - RESOLVED by design.** The TFT
+  backbone's predict/export forward uses the interpretable
+  manual-softmax attention, NOT `F.scaled_dot_product_attention`, so
+  the SDPA-backend export hazard does not apply to the exported
+  graph; `sdpa_kernel(SDPBackend.MATH)` is retained around the
+  export only as a no-op defense-in-depth. The real guard is the
+  architecture A21 restricted-op-surface allowlist (enumerated by
+  static analysis, not back-derived) plus the deploy test
+  `tests/deploy/test_restricted_op_surface.py`, which fails at first
+  pin on any op outside the surface (e.g. a future
+  `ScaledDotProductAttention`/`Loop`). A20 item 3 tracks the native
+  ONNX `Attention` op (opset 23, PyTorch issue #149662) as a future
+  optimization, not a correctness dependency.
 - **R3: Lightning 2.6 yanked-version policy churn** (Phase 0).
   `lightning>=2.6.1,<2.7` skips the 2.6.2 / 2.6.3 PyPI compromise.
   If 2.6.4 reverses behavior, the pin holds; a CHANGELOG entry

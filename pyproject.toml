@@ -45,6 +45,7 @@ dependencies = [
 onnx = [
     "onnx>=1.18",
     "onnxruntime>=1.21",
+    "onnxscript>=0.6",
 ]
 mlflow = ["mlflow>=2.18"]
 wandb = ["wandb>=0.19"]
@@ -66,6 +67,7 @@ dev = [
     "pytest-benchmark>=5.0",
     "hypothesis>=6.120",
     "pre-commit>=4.0",
+    "build>=1.2",
 ]
 
 [project.urls]
