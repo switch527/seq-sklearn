@@ -12,13 +12,13 @@ pytestmark = pytest.mark.perf
 
 
 def test_train_step_time_within_baseline(benchmark: object, perf_determinism: None) -> None:
+    from tests.perf._constants import BENCH_MIN_ROUNDS
     from tests.perf._gate import (
         assert_within_baseline,
         percentile_linear,
         placeholder_measured,
         resolve_cell,
     )
-    from tests.perf._constants import BENCH_MIN_ROUNDS
     from tests.perf._measure import one_train_step
 
     cell = resolve_cell()

@@ -69,6 +69,51 @@ def test_proxy_builds_within_cpu_budget() -> None:
     assert "OK" in proc.stdout
 
 
+def test_measure_peak_memory_wedged_child_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """qa R2-I1: the zombie-child path (child returned a record but
+    `exitcode is None`) must raise loudly, never silently pass. Fast
+    mock, no real subprocess/torch (the lazy `_workload` import in the
+    child target never runs because the fake Process is not started for
+    real)."""
+    from tests.perf import _measure
+
+    record: dict[str, object] = {
+        "value": 1.0,
+        "peak_memory_metric": "ru_maxrss_kb",
+        "device_name": "cpu",
+        "tracemalloc_peak_bytes": 0,
+        "pid": 999999,
+        "start_method": "spawn",
+    }
+
+    class _FakeQueue:
+        def get(self, timeout: float | None = None) -> dict[str, object]:
+            return record
+
+    class _FakeProc:
+        exitcode = None  # never exits cleanly -> wedged
+
+        def __init__(self, *a: object, **k: object) -> None: ...
+        def start(self) -> None: ...
+        def join(self, _t: float | None = None) -> None: ...
+        def terminate(self) -> None: ...
+        def kill(self) -> None: ...
+
+    class _FakeCtx:
+        def Queue(self) -> _FakeQueue:  # noqa: N802 - mp API shape
+            return _FakeQueue()
+
+        def Process(self, *a: object, **k: object) -> _FakeProc:  # noqa: N802
+            return _FakeProc()
+
+    def _fake_get_context(_method: str) -> _FakeCtx:
+        return _FakeCtx()
+
+    monkeypatch.setattr(_measure.mp, "get_context", _fake_get_context)
+    with pytest.raises(RuntimeError, match="wedged"):
+        _measure.measure_peak_memory()
+
+
 @pytest.mark.perf
 def test_peak_memory_payload_runs_in_child_process(perf_determinism: None) -> None:
     """Gemini-C3 / qa-I1: the ru_maxrss payload must run in a SPAWNED

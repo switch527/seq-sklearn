@@ -38,20 +38,59 @@ def test_gate_module_has_no_heavy_imports(imp: str) -> None:
     assert "OK" in proc.stdout
 
 
-@pytest.mark.parametrize(
-    "imp",
-    [
-        "import tests.perf._constants",
-        "import tests.perf._measure",
-        "import tests.perf.capture",
-        "import tests.perf.test_gate_logic",
-        "import tests.perf.test_baseline_schema",
-        "import tests.perf.test_gate_module_boundary",
-        "import tests.perf.test_workload",
-        "import tests.perf.test_capture_cli",
-        "import tests.perf.test_check_perf_baselines_script",
-    ],
-)
+# Helper modules the fast suite imports plus every non-perf test
+# module. `test_boundary_guard_list_is_exhaustive` pins that this
+# list stays in sync with what pytest actually collects, so a new
+# fast test file or a dropped `@pytest.mark.perf` cannot silently
+# re-open the R1 torch-bleed class (arch R2-I1).
+_FAST_SUITE_MODULES = [
+    "tests.perf._constants",
+    "tests.perf._measure",
+    "tests.perf.capture",
+    "tests.perf.test_gate_logic",
+    "tests.perf.test_baseline_schema",
+    "tests.perf.test_gate_module_boundary",
+    "tests.perf.test_workload",
+    "tests.perf.test_capture_cli",
+    "tests.perf.test_check_perf_baselines_script",
+]
+
+
+def test_boundary_guard_list_is_exhaustive() -> None:
+    """arch R2-I1: the hand-maintained `_FAST_SUITE_MODULES` must cover
+    every test module pytest actually collects in the fast
+    (not perf/slow/gpu) suite. Adding a new fast test file without
+    adding it here fails THIS test, so the torch-bleed guard cannot
+    drift out of date."""
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-m",
+            "not perf and not slow and not gpu",
+            "tests/perf/",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=_repo_root(),
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    collected = {
+        "tests.perf." + line.split("/")[2].split("::")[0].removesuffix(".py")
+        for line in proc.stdout.splitlines()
+        if line.startswith("tests/perf/") and "::" in line
+    }
+    missing = collected - set(_FAST_SUITE_MODULES)
+    assert not missing, (
+        f"fast-suite test modules not in the no-heavy-import guard list: "
+        f"{sorted(missing)}; add them to _FAST_SUITE_MODULES"
+    )
+
+
+@pytest.mark.parametrize("imp", [f"import {m}" for m in _FAST_SUITE_MODULES])
 def test_fast_suite_modules_have_no_heavy_imports(imp: str) -> None:
     """Post-Gemini code-review C1/C2 + I1: EVERY module the fast
     (non-`perf`) suite collects must be torch/seq_sklearn-free at

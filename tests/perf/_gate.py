@@ -10,7 +10,6 @@ boundary). :func:`resolve_cell` therefore imports ``detect`` and
 from ``perf``-marked benchmark tests at run time.
 """
 
-import json
 import logging
 import os
 from pathlib import Path
@@ -186,7 +185,7 @@ def assert_within_baseline(
     # (0) load+validate; missing/corrupt -> PD.1c (never a silent pass).
     try:
         baseline = _load_baseline(cell, directory)
-    except (OSError, json.JSONDecodeError, ValidationError) as exc:
+    except (OSError, ValueError, ValidationError) as exc:
         msg = f"baseline for cell {cell} missing or invalid: {exc}"
         if mode == "enforce":
             raise PerfRegressionError(msg) from exc
