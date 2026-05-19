@@ -95,7 +95,10 @@ def test_grad_scaler_watchdog_mock_scaler_decrease(
     diverged = [r for r in caplog.records if r.event == Event.TRAIN_MIXED_PRECISION_DIVERGED]
     assert len(diverged) == 1
     assert diverged[0].levelno == logging.ERROR
-    assert diverged[0].payload["batch_idx"] == 3
+    # F11 payload schema: {step, precision, consecutive_skipped, reason}.
+    assert set(diverged[0].payload) == {"step", "precision", "consecutive_skipped", "reason"}
+    assert diverged[0].payload["step"] == 3
+    assert diverged[0].payload["consecutive_skipped"] == 3
 
 
 def test_grad_scaler_watchdog_increase_resets(module: _ScaffoldModule) -> None:

@@ -38,7 +38,6 @@ def test_synth_panel_through_tft_backbone_shapes(readout: str) -> None:
         target_kind="binary",
         num_entities=40,
         periods_per_entity=(1, 30),
-        prediction_step=0,
         lookback=10,
         seed=42,
     )
@@ -104,7 +103,6 @@ def test_unseen_category_stays_within_embedding_table() -> None:
         target_kind="binary",
         num_entities=20,
         periods_per_entity=(5, 20),
-        prediction_step=0,
         lookback=8,
         seed=7,
     )

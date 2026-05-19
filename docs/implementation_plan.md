@@ -1737,6 +1737,203 @@ Round 3 (design-review swarm):
   this plan IS the checklist; the Phase 9 PR description
   references this plan's phase entries to confirm every item is
   implemented."
+- **Phase 9 root-cause: `prediction_step` default `1` -> `0`
+  (cross-phase, assumption changed since Phase 1).** The Phase 9
+  accuracy assertions surfaced that the v1 TFT learned nothing on
+  F6 (~0.68 AUC). Deep-dive root cause: `TabularToSequenceConfig`'s
+  default `prediction_step=1` re-aligned the already-contemporaneous
+  F6 panel into a 1-step forecast, contradicting the library's
+  classification identity. Fix: default `0` (contemporaneous);
+  `>0` opt-in forecast. With it, TFT reaches ~0.94 AUC (baseline
+  ~0.98), so N1 thresholds hold unchanged (no `dgp_version` bump,
+  no Phase 7 model change). Secondary: `predict` must return rows
+  in input order, not the internal `(id, time)` sort order (F1
+  contract). requirements F3/item-8/F6/N1 and architecture
+  A4/A5/Phase-9-ledger are revised in sync with this entry. Because
+  this changes a Phase-1 assumption it runs the full governance
+  pipeline: doc revision -> Claude design-review consensus ->
+  Gemini design consensus -> point-for-point refactor plan ->
+  Claude consensus -> code -> Claude /review consensus -> Gemini
+  code consensus. The Phase 9 quickstart / acceptance `xfail`s lift
+  in the code stage once the fix lands.
+  - **Mandatory tests the S4 refactor plan and S6 code stage MUST
+    include (named here so they are not skipped):**
+    1. `test_default_prediction_step_is_contemporaneous`
+       (`tests/unit/data/test_tabular_to_sequence.py`): assert
+       `TabularToSequenceConfig().prediction_step == 0` AND that the
+       default transform's emitted target for a window ending at row
+       `t` equals `label[t]`, not `label[t+1]`, on a fixed
+       ground-truth 3-entity panel.
+    2. Default-is-0 guard at BOTH layers:
+       `TabularToSequenceConfig().prediction_step == 0` and the
+       `TabularConfigParams` adapter default == 0. The named existing
+       functions asserting the old default `1` -
+       `test_tabular.py::test_tabular_to_sequence_config_defaults` and
+       `test_adapters.py::test_tabular_config_params_defaults` (or the
+       specific default-asserting functions/params the S4 grep
+       identifies) - are updated in place, not parametrized-around or
+       silently left.
+    3. `tests/integration/test_predict_row_order.py::test_predict_output_row_order_shuffled_panel`
+       (concrete new file): a multi-entity panel with **string** entity
+       ids AND row-shuffled input; assert `predict` / `predict_proba` /
+       `predict_quantiles` each align element-wise to `X.index` (the
+       int-id synthetic panels coincidentally hide the bug, so this
+       adversarial case is mandatory).
+    4. Fast (<30s) signal-reachability integration test
+       `tests/integration/test_contemporaneous_signal_reachable.py::test_signal_reachable_default_config_floor`:
+       default-config `TFTClassifier` on a small F6 binary panel clears
+       a loose floor (provisional `>=0.70`; S4 pins the exact floor and
+       panel size against a measured run) so a regression to
+       `prediction_step=1` is caught in the inner loop, not only the
+       nightly slow e2e, before the quickstart xfail is lifted.
+    5. `tests/unit/data/test_tabular_to_sequence.py::test_prediction_step_horizon_edge_clamp`:
+       with `prediction_step>0`, a window whose target row would fall
+       past the entity's last period has its target row clamped to
+       `min(window_end+prediction_step, n_rows-1)` and is NOT dropped,
+       so the one-window-per-row count holds for `prediction_step>0`
+       too (verifies the F3 horizon-edge contract). S4/S5 DECISION
+       (refactor_prediction_step.md Step 6): the F6 generator's
+       vestigial `prediction_step` skip-guard is REMOVED entirely
+       (not reworked into forecast-aligned emission), so the prior
+       "parity with generator forecast mode" clause is MOOT and
+       dropped. Test #5 therefore pins ONLY the kept forecasting path
+       (`TabularToSequence.prediction_step>0` horizon-edge clamp). The
+       generator-removal completeness + tail-trim count assertion is
+       NOT bundled here; it is the dedicated test #12, decoupled
+       (S5 R2) so neither test can be silently omitted while the
+       other is written.
+    6. `tests/integration/test_predict_row_order.py::test_below_min_periods_predict_entity_nan_filled_preserves_count`:
+       a panel with one sub-`min_periods_predict` entity (N>1 rows) and
+       one above-floor entity; assert `len(predict(X)) == len(X)`,
+       every row of the sub-floor entity is NaN (N NaN rows, not a
+       single collapsed row, not dropped), the above-floor rows are
+       finite, all `X.index`-aligned, and exactly one aggregated breach
+       warning fired. This pins the F1 per-row NaN-fill cardinality
+       invariant (req `min_periods_predict` per-row clause) that a
+       drop-the-entity regression would otherwise break silently while
+       still passing the row-order test #3.
+    7. `tests/integration/test_predict_row_order.py::test_calibration_fold_alignment_unsorted_x_cal`
+       (Gemini S3 G-C2): the fixture MUST be mispairing-SENSITIVE, NOT
+       a separable fold (separability masks a label mispairing). Use a
+       `calibration_set=(X_cal, y_cal)` with string entity ids in a
+       NON-`(id_col,time_col)` order so the internal sort is a
+       non-identity permutation, and a fold where the calibrated
+       output depends on correct (prediction,label) pairing
+       (e.g. labels constructed so the correctly-paired temperature/
+       Platt fit is numerically distinct from the mispaired fit).
+       Assert BOTH: (a) the correctly-paired calibrator/threshold
+       equals an independently computed oracle (concrete form: the
+       fitted binary `decision_threshold_` is within 1e-6 of the
+       oracle threshold, or post-calibration ECE <= the N1 band); AND
+       (b) it differs measurably from the result the sorted-vs-caller
+       mispairing would produce (assert the two are NOT close), so the
+       test fails if `_calibration_fold` pairs `transform(x_cal)`-
+       sorted outputs with caller-order `y_cal`.
+    8. `tests/integration/test_predict_row_order.py::test_predict_with_attention_row_order_shuffled_panel`
+       (Gemini S3 G-C3): shuffled string-id panel; assert
+       `predict_with_attention` / `predict_with_states` returns a
+       dataclass whose EVERY per-row field is aligned to `X.index`,
+       enumerated with no ellipsis - `AttentionOutput`: `predictions`,
+       `probabilities`, `logits`, `var_selection_weights`,
+       `static_var_selection_weights`, `attention_weights`,
+       `padding_mask`, `entity_id`; `RegressionAttentionOutput`:
+       `predictions`, `var_selection_weights`,
+       `static_var_selection_weights`, `attention_weights`,
+       `padding_mask`, `entity_id`. Separately assert
+       `RegressionAttentionOutput.quantiles_used` is shuffle-INVARIANT
+       (identical regardless of input row order; it is fit-time
+       metadata, never permuted). Same `input_row_order` permutation
+       as the array predict surfaces.
+    9. `tests/unit/data/test_tabular_to_sequence.py::test_transform_input_row_order_is_stateless`
+       (Gemini S3 G-C1 structural invariant + S5 R1 value-oracle):
+       three assertions. (a) VALUE ORACLE: on a small KNOWN string-id
+       panel deliberately NOT in `(id_col,time_col)` order (hand-built,
+       e.g. ids `["b","a","b","a"]` with explicit time values), assert
+       the returned `input_row_order` tensor equals a hand-computed
+       expected permutation (compute the post-sort emission order on
+       paper, then the inverse via argsort, and hardcode that exact
+       index vector in the test) AND that indexing the emission-order
+       `entity_id`/`target` arrays by `input_row_order` reproduces the
+       original caller row order. This is a direct unit oracle on the
+       permutation itself, not only the downstream array/below-floor
+       checks of #3/#6 (which would pass even for a subtly wrong but
+       self-consistent permutation). (b) STATELESS: `transform` sets NO
+       `input_row_order`* attribute on the transformer instance -
+       snapshot `set(vars(tts))` (and `getattr(tts, "__dict__", {})`)
+       before and after two successive `transform` calls on
+       different-order panels; the attribute set is unchanged. (c) NO
+       CROSS-CALL LEAK: the two calls' returned `input_row_order`
+       tensors are independent, so a stateful `self.input_row_order_`
+       implementation (which would race under concurrent predict)
+       fails this even in serial execution. (d) ERROR PATHS (S5 R2,
+       testing.md one-error-path-per-public-function): two
+       `pytest.raises(DataContractError)` cases in the same file -
+       (d1) a DIRECT unit call to the module-private
+       `_restore_permutation(emitted_pos, n)` helper (the Step 2c
+       TESTABILITY SEAM) with a deliberately short `emitted_pos`
+       (e.g. `_restore_permutation([0, 1], 3)`) so the
+       `len != n` `DataContractError` raise is exercised by a real
+       call rather than an unconstructable data path (the raise is
+       unreachable through `transform()` on the real predict path by
+       Step 2c's own argument, so a data-driven test would be
+       vacuous); (d2) a caller `X` already containing the private
+       `_POS` sentinel column triggers the Step 2d collision raise
+       BEFORE the sort/assign. Both new raises are the only safety
+       net for the row-order contract and must be exercised by a
+       call that actually triggers them, not assumed.
+    10. Phase-1-8 re-validation obligation: audit every test/usage
+       constructing `TabularToSequenceConfig` / `TabularConfigParams`
+       WITHOUT an explicit `prediction_step` (grep across `tests/` and
+       `src/`); any that implicitly relied on the old `=1` windowing
+       (target alignment, below-floor counts, sentinel positions,
+       synth->tensor shapes) is reviewed and updated. The full
+       Phases 1-9 gate (+3 randomized) must stay green post-change.
+       CLOSED only when the commit body records the verbatim grep hit
+       count AND a per-hit affected/not-affected classification for
+       every hit (no unclassified hit; refactor_prediction_step.md
+       Step 8 completeness done-criterion).
+    11. `tests/integration/test_predict_row_order.py::test_calibration_fold_internal_split_sorted_consistent`
+       (S5 R2, Gemini G-C2 sibling path): the DEFAULT calibration
+       path - fit with `cal_fraction>0` and NO explicit
+       `calibration_set` on a shuffled non-`(id_col,time_col)`-order
+       string-id panel - exercises the internal-split branch
+       `_base.py:359-379`, where `_raw_outputs(batch)` and
+       `batch["target"]` are both indexed by the same sorted-space
+       `keep` (`keep = cal_idx[~_below_floor_mask(batch)[cal_idx]]`,
+       `_base.py:369`; `keep` is the below-floor-filtered subset of
+       the sorted-space `cal_idx`). FIXTURE MUST BE NON-DEGENERATE
+       (sensitivity clause, mirrors test #7): a binary +
+       threshold-tuning panel with at least two distinct per-entity
+       class-label patterns so the fitted `decision_threshold_` is
+       non-trivial (assert it is neither 0.0 nor 1.0); a degenerate
+       single-class or all-zero-feature fixture would yield identical
+       calibrators under BOTH the correct and the regressed
+       implementation and pass vacuously. Then assert the fitted
+       calibrator/`decision_threshold_` (or post-calibration ECE) on
+       the shuffled panel is IDENTICAL (within 1e-6) to fitting the
+       same model on the same panel pre-sorted by `(id_col,
+       time_col)`, proving the internal-split branch never has
+       `input_row_order` applied and stays sorted-space
+       self-consistent. This pins the branch test #7 does not reach
+       (test #7 uses an explicit `calibration_set`, so it exercises
+       only `_base.py:355-358`); a regression that threads
+       `input_row_order` through the internal-split branch would
+       silently mis-pair the most common calibration path while
+       #1-#10 stay green.
+    12. `tests/unit/data/test_synthetic_generator.py::test_generator_has_no_prediction_step_and_emits_n_periods`
+       (S5 R2, decoupled from #5): a DEDICATED test, separate from
+       the `TabularToSequence` clamp test #5, so neither can be
+       silently omitted while the other is written. Assert
+       `"prediction_step"` is absent from
+       `inspect.signature(SyntheticPanelGenerator).parameters`, that
+       constructing with `prediction_step=` raises `TypeError`, and
+       that generation on a fixed panel emits exactly `n_periods`
+       (not `n_periods - 1`) windows per entity, including that a
+       single-period entity now appears (entity-id SET change, not
+       just count; refactor_prediction_step.md Step 6b consequence
+       (ii)). Test #5 retains ONLY the
+       `TabularToSequence.prediction_step>0` horizon-edge clamp; its
+       prior bundled generator-removal companion clause is moved here.
 
 ## Deferred
 
@@ -2043,3 +2240,70 @@ Gemini three-doc final pass:
   the strict type hints matching architecture A16. The N1 Phase 8
   carve-out now names both the `test_suggest_params_*` trio AND the
   `test_config_to_estimator_kwargs_*` pair.
+
+S5 refactor-plan consensus (refactor_prediction_step.md Step 6):
+
+- **Forecast-aligned synthetic emission deferred.** The considered
+  alternative to removing the F6 generator's vestigial
+  `prediction_step` (make `generator.prediction_step>0` emit
+  genuinely forecast-aligned targets so forecast-mode synthetic data
+  exists) is deferred: it is net-new functionality outside v1 scope,
+  not required by any N1 threshold, and the kept forecasting path is
+  `TabularToSequence.prediction_step>0` (test #5). Revisit only if a
+  future requirement needs forecast-mode synthetic panels.
+
+S7 code-review (S6 implementation, deferred items):
+
+- **Two calibration bands re-derivation - RESOLVED (post-pipeline,
+  user-directed, Claude /review-gated).** The `temperature` ECE and
+  `conformal` coverage bands were pinned against the buggy
+  `prediction_step=1` seed-42 value. Re-derived against the corrected
+  contemporaneous regime via a 5-seed sweep (42, 137, 9999, 7, 2024):
+  temperature ECE = [0.061, 0.034, 0.035, 0.050, 0.057] (mean 0.047,
+  max 0.061); conformal coverage = [0.856, 0.831, 0.825, 0.850,
+  0.842] (min 0.825, max 0.856; conservative over-coverage on an 80%
+  nominal interval). Re-pinned: `_CLF_ECE_BANDS["temperature"]`
+  0.05 -> 0.07; `_REG_COVERAGE_BANDS["conformal"]` (0.75, 0.85) ->
+  (0.75, 0.88). Both new constants EQUAL this file's existing
+  `platt`/`isotonic` ECE band (0.07) and `isotonic_quantile` upper
+  coverage band (0.88) respectively - temperature/conformal are now
+  held to the same bar the project already accepts for the adjacent
+  strategies, with headroom over the measured 5-seed extremes. The
+  two `xfail(strict=False)` cases and the `_PS_REFACTOR_BAND_XFAIL`
+  constant were removed; both are hard assertions again and pass at
+  seed 42. The user directed this re-pin and required a Claude
+  /review round on the quality-gate constant change before commit
+  (no unilateral weakening). The /review round reached consensus
+  (code-opus/sonnet + qa-opus/sonnet all APPROVE, 0 CRITICAL): the
+  bands still catch a genuinely broken model (near-random ECE
+  0.12-0.20 >> the 0.07 ceiling) and the safety-critical conformal
+  LOWER bound 0.75 is unchanged (under-coverage still caught; only
+  the benign over-coverage ceiling moved).
+- **Calibration ECE/coverage measured in-sample + thin temperature
+  headroom (deferred IMPROVEMENT).** The /review qa pass noted ECE
+  and coverage are evaluated on the training panel (an in-sample
+  proxy) and the temperature band has ~0.009 headroom over the
+  5-seed max. Both are PRE-EXISTING properties shared by ALL five
+  band-sensitive cases (platt, isotonic, conformal,
+  isotonic_quantile too), NOT introduced by this re-pin, and neither
+  creates false-pass risk (a broken model fails in-sample too).
+  Deferred: a holdout-split calibration evaluation + headroom review
+  is a separate calibration-methodology improvement, out of scope
+  for closing the prediction_step deferral.
+- **Explicit `calibration_set` below-floor exclusion (Gemini S8 +
+  arch-opus R3-I1 extension) - RESOLVED.** Decision: the explicit-
+  `calibration_set` branch is caller-owned and does NOT floor-filter
+  short-history (`< min_periods_predict`) entities; this is the
+  final v1 contract, not a gap. Rationale: the targets are the
+  caller's real `y_cal` (not `transform` sentinels, so no sentinel-
+  label hazard), and the recomputed-fold drop is correctly scoped to
+  the internal-split branch. The deliberate asymmetry is now pinned
+  by `test_explicit_calibration_set_keeps_below_floor_entity` (an
+  all-below-floor explicit set still calibrates, unlike the
+  internal-split branch which raises). The related fail-fast
+  `len(x_cal) == len(y_cal)` guard is IMPLEMENTED in
+  `_calibration_fold` (raises `DataContractError` before transform
+  instead of failing late in the calibrator/tuner fit), pinned by
+  `test_explicit_calibration_set_length_mismatch_raises`. The
+  `_calibration_fold` docstring states the explicit-vs-recomputed
+  asymmetry explicitly.

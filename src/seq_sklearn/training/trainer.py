@@ -43,6 +43,7 @@ from seq_sklearn.data.splits import (
 from seq_sklearn.data.tabular_to_sequence import TabularToSequence
 from seq_sklearn.errors import ConfigError
 from seq_sklearn.hardware import detect
+from seq_sklearn.logging import Event, emit
 from seq_sklearn.training._determinism import enable_strict_mode
 from seq_sklearn.training._lightning_module import _LightningModule
 from seq_sklearn.training._precision import resolve_precision
@@ -111,8 +112,24 @@ class Trainer:
         self._val_metric_name = "val_loss"
 
     def _resolve_precision(self) -> str:
-        """Resolve the concrete Lightning precision string (A11 / N5)."""
-        return resolve_precision(detect(), self.config.precision)
+        """Resolve the concrete Lightning precision string (A11 / N5).
+
+        Emits the F11 ``hardware.detect`` record (one per fit, at
+        trainer setup) with the detected tier, the CUDA compute
+        capability (``None`` on CPU), and the selected precision.
+        """
+        tier = detect()
+        selected = resolve_precision(tier, self.config.precision)
+        capability = torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None
+        emit(
+            logger,
+            Event.HARDWARE_DETECT,
+            level=logging.INFO,
+            tier=tier.name,
+            cuda_compute_capability=capability,
+            selected_precision=selected,
+        )
+        return selected
 
     def _deterministic(self, precision: str) -> bool:
         """A7 gate: deterministic only on ``32-true`` with a set seed.
@@ -395,6 +412,13 @@ class Trainer:
             )
 
         class_weights = self._class_weights(train_idx, batch["target"])
+
+        # input_row_order is a predict-time caller-order restore artifact
+        # (F1) with no training meaning; drop it so it does not leak into
+        # the per-window training batch via the key-agnostic
+        # _TensorDictDataset. pop(default) keeps fit correct even if a
+        # future transform variant omits the key.
+        batch.pop("input_row_order", None)
 
         dataset = _TensorDictDataset(batch)
         loader_kwargs = self._dataloader_kwargs()

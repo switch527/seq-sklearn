@@ -36,7 +36,6 @@ def test_synth_panel_to_tensor_dict_shapes(target_kind: str) -> None:
         target_kind=target_kind,  # type: ignore[arg-type]
         num_entities=80,
         periods_per_entity=(1, 60),
-        prediction_step=0,
         seed=42,
     )
     panel, y = gen.generate()
@@ -82,7 +81,6 @@ def test_variable_history_one_and_full_lookback_in_one_call() -> None:
         target_kind="binary",
         num_entities=200,
         periods_per_entity=(1, 60),
-        prediction_step=0,
         lookback=12,
         seed=137,
     )
@@ -108,7 +106,6 @@ def test_inverse_transform_recovers_feature_frame() -> None:
     gen = SyntheticPanelGenerator(
         num_entities=30,
         periods_per_entity=20,
-        prediction_step=0,
         seed=9999,
     )
     panel, y = gen.generate()
@@ -137,7 +134,6 @@ def test_three_way_split_against_real_transform_output() -> None:
     gen = SyntheticPanelGenerator(
         num_entities=60,
         periods_per_entity=(2, 40),
-        prediction_step=0,
         lookback=12,
         seed=42,
     )

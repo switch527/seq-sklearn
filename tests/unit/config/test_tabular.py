@@ -13,7 +13,7 @@ def _minimal(**overrides: object) -> TabularToSequenceConfig:
 def test_minimal_construction_uses_documented_defaults() -> None:
     cfg = _minimal()
     assert cfg.lookback == 12
-    assert cfg.prediction_step == 1
+    assert cfg.prediction_step == 0
     assert cfg.min_periods == 1
     assert cfg.scaling_real == "standard"
 

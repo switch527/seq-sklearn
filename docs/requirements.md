@@ -159,9 +159,11 @@ core contribution in v1.
    parameters) do not require distributed training; if a future model
    class outgrows single-device, that is a later-version discussion.
 8. **Multi-horizon forecasting in the regression head.** Each window
-   predicts one target value at one configurable `prediction_step`,
-   matching the classifier's contract. Multi-step output is a separate
-   axis that fits the forecasting libraries above better than this one.
+   predicts one target value at one configurable `prediction_step`
+   (default `0`, contemporaneous: the label of the window itself;
+   forecasting is opt-in via `prediction_step>0`), matching the
+   classifier's contract. Multi-step output is a separate axis that
+   fits the forecasting libraries above better than this one.
 
 ## Roadmap
 
@@ -318,6 +320,64 @@ All classifier and regressor classes expose the same methods:
   `get_params` / `set_params` / `save` / `load`.
 - `predict(X)` returning class predictions (classifier) or point
   predictions (regressor).
+- **Output row-order contract (predict-time).** Scope: this contract
+  governs `predict` / `predict_proba` / `predict_quantiles` output
+  relative to the `X` passed to *that predict call*. It is independent
+  of fit-time `min_periods` (which drops sub-floor entities at `fit`
+  and never produces predictions for them; that is the F2 fit gate,
+  not an output-alignment claim). F3 emits exactly one *sliding* window
+  terminating at each row of the predict `X` (one window per row, not a
+  tumbling reduction; see F3 step 2). The `min_periods_predict` gate is
+  per *entity*: every row of an entity below that floor is NaN-filled
+  (not dropped), so an N-row entity still yields N NaN predictions and
+  the one-prediction-per-input-row count is preserved (F2
+  NaN-in-output). Therefore `predict` / `predict_proba` /
+  `predict_quantiles` return exactly one prediction per row of the
+  predict `X`, each keyed to its window's terminal row (the row at
+  `window_end`). `TabularToSequence` sorts internally by
+  `(id_col, time_col)`. The inverse (caller-order restore) permutation
+  is emitted as a per-call tensor key in the dict returned by
+  `transform()` (e.g. `batch["input_row_order"]`); it is NOT stored on
+  the transformer instance. Storing it on `self` would make
+  `transform()` stateful and race under concurrent `predict` calls on
+  one fitted estimator (sklearn transformers must be stateless within
+  `transform`); the per-call dict tensor is the only sanctioned
+  mechanism. Every caller-facing prediction surface restores caller
+  input-row order from that tensor before returning:
+  - `predict` / `predict_proba` / `predict_quantiles` (the arrays);
+  - `predict_with_attention` / `predict_with_states`: EVERY per-row
+    (axis-0 length N) field of the returned dataclass is reordered
+    identically by the same permutation, enumerated with NO open
+    ellipsis. `AttentionOutput` (all 8 fields are per-row):
+    `predictions`, `probabilities`, `logits`, `var_selection_weights`,
+    `static_var_selection_weights`, `attention_weights`,
+    `padding_mask`, `entity_id`. `RegressionAttentionOutput` (6 per-row
+    fields): `predictions`, `var_selection_weights`,
+    `static_var_selection_weights`, `attention_weights`,
+    `padding_mask`, `entity_id`. The ONLY non-per-row field is
+    `RegressionAttentionOutput.quantiles_used` (a fit-time
+    `tuple[float, ...] | None`): it is scalar metadata, NOT indexed by
+    row, and MUST be left shuffle-invariant (never permuted). Adding a
+    new per-row field to either dataclass in a future MINOR obligates
+    adding it to this enumeration and to mandatory test #8.
+  So every such output aligns positionally with the predict `X` /
+  `X.index`. The internal sort is not observable to the caller.
+- **Calibration-fold alignment (F2).** The same permutation governs an
+  explicit `calibration_set=(X_cal, y_cal)`: the fold pairs
+  `transform(X_cal)`-order model outputs with `y_cal`. `y_cal` is in
+  the caller's row order, so the fold MUST reorder the model outputs
+  (or `y_cal`) by the per-call `input_row_order` before pairing, or the
+  calibrator / threshold tuner fits on mismatched (prediction, label)
+  pairs whenever `X_cal` is not already `(id_col, time_col)`-sorted.
+  This is part of the F1/F2 contract, not only the predict surface.
+  (At `fit` the per-row `y` is consumed at the one-label-per-window
+  grain for rows surviving the `min_periods` gate; that training
+  contract is separate from the predict-output and calibration-fold
+  contracts above.) (Hard sklearn-contract requirement; the Phase 9
+  audit found the v1 code returns the internal sorted order and the
+  calibration fold pairs sorted outputs with unsorted `y_cal`, masked
+  on int-id synthetic panels where the orders coincide; tracked in the
+  Phase 9 ledger.)
 - `score(X, y)` returning accuracy by default for classifiers and R² for
   regressors, with a `scoring` argument for a callable scorer.
 - `get_params(deep=True)` and `set_params(**params)` so every estimator
@@ -548,13 +608,31 @@ batched tensors every sequence model expects. Shared across all model
 families. For each entity it:
 
 1. Sorts the entity's rows by `time_col`.
-2. Builds a sliding window of length `lookback` over the sorted rows.
+2. Builds a sliding window of length `lookback` over the sorted rows,
+   emitting exactly **one window terminating at each row** of the
+   entity (sliding, one window per row, not a tumbling reduction; this
+   is the cardinality the F1 output row-order contract relies on).
    Default `lookback=12`. Configurable. If an entity has more history
-   than `lookback`, only the most recent `lookback` periods are used.
+   than `lookback`, only the most recent `lookback` periods are used;
+   if it has fewer, the window is left-padded (the `padding_mask` in
+   step 4 marks the pad positions).
 3. Aligns the target to a configurable `prediction_step` relative to
-   the end of the window. Default `prediction_step=1` (predict the
-   period immediately after the lookback). Any non-negative integer is
-   accepted, capped at the available horizon.
+   the end of the window. Default `prediction_step=0`: the target is
+   the label of the window's final period (contemporaneous), which is
+   the natural contract for classification / regression *of a sequence*
+   and the task this library exists for. `prediction_step>0` is opt-in
+   forecasting: the target is the period that many steps after the
+   window end. Any non-negative integer is accepted. Horizon-edge
+   semantics (`prediction_step>0`): a window whose target row would
+   fall past the entity's last period is **not dropped**; its target
+   row is clamped to the entity's final period
+   (`target_pos = min(window_end + prediction_step, n_rows - 1)`), so
+   the one-window-per-row count (F1 output row-order contract) holds
+   for every `prediction_step`. (Historical note: the default was `1`
+   through the
+   Phase 1-8 specs; that silently turned every estimator into a 1-step
+   forecaster, contradicting the library's stated classification
+   identity, and is corrected to `0` here.)
 4. Emits per-window tensors: `static_categorical` (one set per window),
    `static_real`, `time_varying_real`, `time_varying_categorical`, the
    target, and a per-timestep boolean `padding_mask` marking positions
@@ -582,9 +660,14 @@ Two configuration knobs control the strict edge:
 
 - `min_periods` (default 1): entities with fewer than this many real
   rows are dropped at `fit` time.
-- `min_periods_predict` (default 1): same gate at `predict` time;
-  entities below the floor get a `NaN` prediction with one aggregated
-  log warning per `predict()` call (not one per entity).
+- `min_periods_predict` (default 1): same gate at `predict` time, but
+  applied per *row*, not by dropping the entity: **every row** of an
+  entity below the floor gets a `NaN` prediction, so an N-row
+  below-floor entity yields N NaN rows and the
+  one-prediction-per-input-row count of the F1 output row-order
+  contract is preserved (the entity is NOT dropped at predict; only
+  fit-time `min_periods` drops entities). One aggregated log warning
+  fires per `predict()` call (not one per entity, not one per row).
 
 **Categorical encoding.** Categorical columns are encoded via a fitted
 dictionary. Unseen categories at `predict` time map to a learned
@@ -961,6 +1044,27 @@ contract.
      `y ~ Categorical(softmax(z))`. `class_distribution` shifts the
      per-class biases to hit the requested marginal in expectation.
    - `regression_*`: `y = target_scale * z + N(0, target_noise)`.
+
+The emitted target is **contemporaneous** with the window: steps 7-9
+compute it from `phi(window)`, so the label is a function of the window
+ending at `window_end` and is paired in the emitted panel row with that
+window's features and timestamp. The DGP therefore aligns with
+`TabularToSequence`'s default `prediction_step=0`. The F6 *spec* has
+no horizon shift. The generator *code* historically declared a
+`prediction_step` parameter (default `1`) used ONLY as a vestigial
+tail-window skip-guard that never shifted the label (the label is
+always `phi(window)` per steps 7-9). The Phase 9 / S6 refactor
+RESOLVED that drift by removing the parameter and the skip-guard
+entirely (the S5-consensus'd Step 6 decision; the forecast-aligned
+alternative was deferred, see implementation_plan Deferred). The
+generator is now unconditionally contemporaneous and emits one
+`(features, target)` row per window, so an `n`-period entity yields
+`n` rows (single-period entities now appear). The DGP signal is
+unchanged by the Phase 9 `prediction_step`
+default correction, so the N1 thresholds below are NOT re-tuned and
+`dgp_version` is NOT bumped: the prior `prediction_step=1` default had
+merely prevented those thresholds from ever being measured on the task
+they were defined for (contemporaneous).
 
 The DGP version is stamped into `generator.dgp_version` and bumped on
 any change. Acceptance thresholds in N1 are pinned to a specific
@@ -1505,6 +1609,14 @@ three-seed median, full lookback of 12):
 - Conformal-calibrated regressor: empirical coverage in [0.75, 0.85].
 - Isotonic-quantile regressor: empirical coverage in [0.72, 0.88]
   (wider band; non-parametric is more variance-prone on n=2000).
+
+These thresholds assume the default contemporaneous alignment
+(`prediction_step=0`); they were defined against the F6 contemporaneous
+task and remain valid unchanged (a gradient-boosting baseline on the
+per-window features reaches ~0.98 AUC and the v1 TFT ~0.94 AUC on the
+binary task once aligned, so >=0.75 is comfortably achievable). The
+Phase 9 `prediction_step` default correction is not a `dgp_version`
+change and does not re-tune these numbers.
 
 Acceptance thresholds are pinned to `dgp_version`. Bumping
 `dgp_version` requires re-running these tests and updating the

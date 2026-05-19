@@ -101,12 +101,19 @@ class GradScalerWatchdog(Callback):
             self._consecutive_decreases = 0
         self._prev_scale = scale
         if self._consecutive_decreases >= _SCALE_DECREASE_LIMIT:
+            # F11 payload schema: step / precision / consecutive_skipped
+            # / reason (a GradScaler scale decrease is an overflow-driven
+            # skipped step). The raw scale float is folded into `reason`.
             self._emitter.emit(
                 Event.TRAIN_MIXED_PRECISION_DIVERGED,
                 level=logging.ERROR,
-                batch_idx=batch_idx,
-                scale=scale,
-                consecutive_decreases=self._consecutive_decreases,
+                step=batch_idx,
+                precision=str(getattr(plugin, "precision", "")),
+                consecutive_skipped=self._consecutive_decreases,
+                reason=(
+                    f"{_SCALE_DECREASE_LIMIT} consecutive GradScaler scale "
+                    f"decreases (scale={scale})"
+                ),
             )
             raise TrainingError(
                 f"{_SCALE_DECREASE_LIMIT} consecutive GradScaler scale "

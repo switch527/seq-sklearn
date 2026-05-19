@@ -35,10 +35,41 @@ TaskType = Literal["binary", "multiclass", "regression_point", "regression_quant
 
 _CLASSIFICATION_TASKS = ("binary", "multiclass")
 
+# Private positional-index column attached before the (id, time) sort so
+# the caller's original X row order can be restored at predict time. The
+# name is namespaced to avoid colliding with a user column; transform()
+# raises DataContractError if a caller X already carries it.
+_POS = "__seq_sklearn_input_pos__"
+
 
 def _embedding_dim(cardinality: int) -> int:
     """fastai embedding-size heuristic ``min(50, round(1.6 * card**0.56))``."""
     return min(50, round(1.6 * cardinality**0.56))
+
+
+def _restore_permutation(emitted_pos: list[int] | np.ndarray, n: int) -> np.ndarray:
+    """Inverse permutation that restores caller ``X`` row order.
+
+    ``emitted_pos[k]`` is the caller-``X`` positional index of the
+    ``k``-th emitted window. ``transform()`` emits exactly one window
+    per input row and drops none, so ``emitted_pos`` is a dense
+    permutation of ``0..n-1``; ``np.argsort`` of a dense permutation is
+    its inverse, so indexing any emission-order array by the result
+    restores caller order. The length check is the sole safety net for
+    that precondition (factored here so it is exercised by a direct
+    unit call, not only an unconstructable data path).
+
+    Raises:
+        DataContractError: ``len(emitted_pos) != n`` (the
+            one-window-per-row precondition was violated).
+    """
+    arr = np.asarray(emitted_pos)
+    if len(arr) != n:
+        raise DataContractError(
+            f"row-order restore precondition violated: emitted {len(arr)} "
+            f"windows for {n} input rows (expected exactly one per row)"
+        )
+    return np.argsort(arr, kind="stable")
 
 
 class TabularToSequence:
@@ -331,7 +362,19 @@ class TabularToSequence:
         self._check_tz_consistency(X)
         check_columns(X, id_col=cfg.id_col, time_col=cfg.time_col, required=required)
 
-        ordered = X.sort_values([cfg.id_col, cfg.time_col]).reset_index(drop=True)
+        if _POS in X.columns:
+            raise DataContractError(
+                f"input column name {_POS!r} collides with the private "
+                "row-order restore key; rename the offending column"
+            )
+        # Attach the original caller-X positional index BEFORE the sort so
+        # it survives into emission order; reading it back per window lets
+        # predict restore the caller's input X row order (F1).
+        ordered = (
+            X.assign(**{_POS: np.arange(len(X))})
+            .sort_values([cfg.id_col, cfg.time_col], kind="stable")
+            .reset_index(drop=True)
+        )
         lookback = cfg.lookback
         n_tv_real = len(cfg.time_varying_real_cols)
         n_tv_cat = len(cfg.time_varying_categorical_cols)
@@ -345,6 +388,7 @@ class TabularToSequence:
         mask_rows: list[np.ndarray] = []
         target_rows: list[float] = []
         entity_rows: list[int] = []
+        emitted_pos: list[int] = []
         below_floor = 0
 
         for entity_code, (_, group) in enumerate(ordered.groupby(cfg.id_col, sort=True)):
@@ -352,6 +396,9 @@ class TabularToSequence:
             below = n_rows < cfg.min_periods_predict
             if below:
                 below_floor += 1
+            # _POS values for this group, in the sorted (id, time) order
+            # the window loop iterates; group-local window_end indexes it.
+            group_pos = group[_POS].to_numpy()
 
             entity_tv_real = (
                 self.real_scaler_.transform(
@@ -429,13 +476,15 @@ class TabularToSequence:
                 mask_rows.append(mask)
                 target_rows.append(target)
                 entity_rows.append(entity_code)
+                emitted_pos.append(int(group_pos[window_end]))
 
         if below_floor > 0:
             emit(
                 logger,
-                Event.DATA_MIN_PERIODS_PREDICT_BREACH,
+                Event.DATA_DUPLICATE_FLOOR_BREACH_COUNT,
                 level=logging.WARNING,
                 count=below_floor,
+                min_periods_predict=cfg.min_periods_predict,
             )
 
         target_dtype = torch.long if self.task_type in _CLASSIFICATION_TASKS else torch.float32
@@ -446,6 +495,8 @@ class TabularToSequence:
             )
         else:
             target_tensor = torch.as_tensor(target_np, dtype=torch.float32)
+
+        input_row_order = _restore_permutation(emitted_pos, len(X))
 
         batch = len(entity_rows)
         return {
@@ -471,6 +522,11 @@ class TabularToSequence:
             ),
             "target": target_tensor.to(target_dtype),
             "entity_id": torch.as_tensor(np.asarray(entity_rows, dtype=np.int64), dtype=torch.long),
+            # Per-call, stateless (I-B): indexing any emission-order array
+            # by this restores the caller's input X row order (F1).
+            # _restore_permutation returns an int64 argsort result, so a
+            # direct as_tensor (no re-copy) is sufficient.
+            "input_row_order": torch.as_tensor(input_row_order, dtype=torch.long),
         }
 
     def fit_transform(self, X: pd.DataFrame, y: object) -> dict[str, torch.Tensor]:  # noqa: N803

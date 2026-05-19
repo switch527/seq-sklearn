@@ -89,7 +89,7 @@ class TabularConfigParams(BaseEstimator):
         time_varying_real_cols: tuple[str, ...] = (),
         time_varying_categorical_cols: tuple[str, ...] = (),
         lookback: int = 12,
-        prediction_step: int = 1,
+        prediction_step: int = 0,
         min_periods: int = 1,
         min_periods_predict: int = 1,
         scaling_real: Literal["standard", "robust", "quantile_uniform", "none"] = "standard",

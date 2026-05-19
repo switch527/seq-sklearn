@@ -582,7 +582,7 @@ class TabularToSequenceConfig(BaseModel):
     time_varying_real_cols: tuple[str, ...] = ()
     time_varying_categorical_cols: tuple[str, ...] = ()
     lookback: int = 12
-    prediction_step: int = 1
+    prediction_step: int = 0  # 0 = contemporaneous (default); >0 = opt-in forecast (F3)
     min_periods: int = 1
     min_periods_predict: int = 1
     scaling_real: Literal["standard", "robust", "quantile_uniform", "none"] = "standard"
@@ -687,9 +687,21 @@ TabularToSequence.fit(X: pd.DataFrame, y: ArrayLike) -> TabularToSequence
   8. Mark fitted.
 
 TabularToSequence.transform(X: pd.DataFrame) -> dict[str, Tensor]
-  1. Sort by (id_col, time_col).
+  1. Sort by (id_col, time_col); emit the caller-order restore
+     permutation (the inverse of this sort) as a per-call tensor in
+     the returned batch dict, `batch["input_row_order"]` - NOT stored
+     on the transformer instance (stateless `transform`; storing on
+     `self` races under concurrent `predict`), and NOT to be conflated
+     with any model-internal pack_padded valid-first permutation. The
+     family `predict` / `predict_proba` / `predict_quantiles` /
+     `predict_with_attention` read this tensor and restore caller input
+     row order for the predictions AND every per-row AttentionOutput
+     introspection tensor; the calibration fold uses it too (F1/F2
+     output row-order + calibration-fold contract).
   2. Per entity, slide a window of length lookback over sorted rows.
   3. Align target to prediction_step relative to the window end.
+     Default prediction_step=0 = contemporaneous (the window's own
+     final-period label, F3); >0 = opt-in forecast.
   4. Encode categoricals (unseen -> <unk> at index 0).
   5. Scale reals, clip if configured.
   6. Pad short entities to lookback length with mask.
@@ -4009,3 +4021,193 @@ Phase 8 (CPU/CUDA parity boundary check, post-consensus):
   re-confirm Phase 7's already-passed result and needlessly occupy the
   GPU. The v1 CPU+CUDA equal-support requirement remains validated by
   the Phase 7 parity boundary check; Metal/ROCm stay out of v1 scope.
+
+Phase 9 (check_estimator + N1 roster; F11 reconciliation):
+
+The Phase 9 inner-loop gate (coverage 99.97% line / 99.84% branch,
+ruff/pyright clean) surfaced genuine cross-phase conformance defects
+the prior phases had deferred ("the Phase 9 F11-table conformance test
+owns a single systematic pass", Phase 8 ledger). Reconciliation
+direction: align code to the authoritative public contract (the
+requirements F11 table and this A15 enum), since the spec was already
+canonical and the code had drifted.
+
+Addressed:
+
+- **F11 `data.*` breach event name + payload.** Code emitted a
+  spec-absent `DATA_MIN_PERIODS_PREDICT_BREACH` with payload `{count}`;
+  the F11 table + A15 enum canonical event is
+  `data.duplicate_floor_breach_count` with `{count,
+  min_periods_predict}`. Removed the extra enum member;
+  `tabular_to_sequence` now emits the canonical event with both keys.
+  The Phase-1-8 `test_below_floor_marked` was updated.
+- **F11 `train.mixed_precision_diverged` payload.** Emitted
+  `{batch_idx, scale, consecutive_decreases}`; F11 schema is `{step,
+  precision, consecutive_skipped, reason}`. `GradScalerWatchdog` now
+  emits the F11 keys (scale folded into `reason`). The Phase-1-8
+  `test_grad_scaler_watchdog_mock_scaler_decrease` was updated.
+- **F11 `hardware.detect` never emitted.** Defined in the enum + F11
+  table but absent from v1 code. `Trainer._resolve_precision` now emits
+  it once per fit with `{tier, cuda_compute_capability,
+  selected_precision}`.
+- **Phase 9 N1 roster delivered**: conftest (EXPECTED_FAILED/PASSING,
+  hypothesis profiles, snapshot fixture), check_estimator,
+  fit_state_attributes, structured_log conformance, quickstart,
+  acceptance/calibration/imbalance e2e (slow), TFT snapshots; plus the
+  runnable `examples/quickstart.py`.
+
+Deferred (routed to design-review, NOT silently resolved):
+
+- **F1.1 / sklearn-tags conflict.** With `two_d_array=False` and no
+  `InputTags` true, sklearn 1.6 skips its entire estimator-check suite
+  (only `check_estimator_cloneable` is collected), so F1.1's
+  documented `EXPECTED_PASSING_CHECKS` baseline is unrealizable as
+  written. `test_documented_passing_check_is_collected` is marked
+  xfail-strict so the gap stays explicit in CI. The architecture
+  decision (set an input tag and xfail the panel-incompatible checks,
+  or rewrite the F1.1 passing baseline to what sklearn actually
+  collects) is for `/design-review`, not a Phase 9 test edit.
+- **Phase 9 gate target.** Per the implementation plan, Phase 9's
+  done-when is the inner-loop profile at >=85% line / >=80% branch
+  (the slow acceptance/calibration/snapshot e2e run nightly), a
+  deliberate divergence from the 100% bar of code phases.
+
+TFT learnability vs N1 acceptance: RESOLVED (root cause found and
+fixed in the Phase 9 / S6 refactor).
+
+- **Root cause: the `prediction_step=1` default re-aligned the
+  already-contemporaneous F6 panel into a 1-step forecast.** Evidence
+  from the controlled deep-dive: on the same F6 data a GBDT baseline
+  scored ~0.98 AUC while the TFT scored ~0.68 at `prediction_step=1`
+  vs ~0.94 at `prediction_step=0`; the quickstart scored ~0.59-0.62
+  on its own training data only because candidate (1) (a
+  predict-to-`y` / windowing alignment defect) was real: F6 is
+  contemporaneous by steps 7-9, so a forecast-shifted target made the
+  task near-unlearnable. It was latent because no pre-Phase-9 test
+  asserted predictive accuracy. NOT model inadequacy and NOT a
+  DGP/threshold mis-calibration (candidates 2 and 3 ruled out: the
+  same model clears the bar at `prediction_step=0`). A secondary
+  sklearn-contract bug surfaced in the same investigation (predict
+  returned internal `(id, time)` sorted order, not caller `X` row
+  order; masked by int-id panels) and was fixed under the same F1
+  contract.
+- **Fix (full governance pipeline S1-S8).** `prediction_step` default
+  `1 -> 0` (contemporaneous; `>0` is opt-in forecast with a horizon-
+  edge clamp) plus the F1 caller-row-order restore contract. A14 was
+  NOT weakened: the quickstart `>=0.75` assertion is unchanged and
+  the TFT-learnability `xfail` was REMOVED in S6 (the test now passes
+  hard: ~0.59-0.62 pre-fix -> >=0.75 post-fix). The slow
+  `tests/e2e/test_acceptance_thresholds.py` N1 thresholds stand and
+  pass. Mandatory test #4 pins the contemporaneous-default signal
+  floor so a regression to `prediction_step=1` is caught in the inner
+  loop.
+
+Root cause RESOLVED (deep-dive outcome; pending the staged
+doc/code consensus pipeline):
+
+- **`TabularToSequenceConfig.prediction_step` default `1` -> `0`.** The
+  deep-dive proved the TFT model is correct: with contemporaneous
+  alignment it reaches train AUC ~0.94 (a gradient-boosting baseline on
+  the per-window features reaches ~0.98), versus AUC ~0.68 under the
+  old default. F6 emits a contemporaneous target by spec (steps 7-9
+  compute it from `phi(window)`). The F6 spec has no horizon shift;
+  the generator code historically declared a vestigial
+  `prediction_step=1` skip-guard that never shifted the label,
+  removed in S6 per the S5-consensus'd Step 6 decision (see the
+  RESOLVED ledger entry below). The sole defect: `TabularToSequence`'s
+  default
+  `prediction_step=1` re-aligned the already-contemporaneous panel to a
+  1-step forecast, destroying the signal for the classification /
+  regression task the library exists for. This contradicted the
+  library's own positioning (requirements item 8, "matching the
+  classifier's contract"; "not a forecasting library"). Fix: default
+  becomes `0` (contemporaneous); `prediction_step>0` stays as opt-in
+  forecasting. NOT a Phase 7 model change, NOT a DGP change, NOT a
+  `dgp_version` bump, NOT an N1 threshold re-tune (the thresholds were
+  defined for the contemporaneous task and were merely unmeasurable
+  under the old default). requirements F3 / item 8 / F1 output
+  row-order contract / F6 / N1 and architecture A4 (config snippet) /
+  A5 (transform step) / this Phase 9 ledger are revised in sync.
+- **Secondary: output row order (F1/F2 contract), stateless mechanism,
+  3 surfaces.** The v1 code returns the internal `(id_col, time_col)`
+  sort order, a silent sklearn-contract violation for an unsorted real
+  panel (masked on int-id synthetic panels where orders coincide).
+  Mechanism: `transform()` emits the inverse permutation as a per-call
+  `batch["input_row_order"]` tensor (NOT a transformer-instance
+  attribute - that would race under concurrent `predict`, sklearn
+  transformers are stateless within `transform`). It is applied at
+  THREE surfaces the same-family swarm missed: (1) `predict` /
+  `predict_proba` / `predict_quantiles` arrays; (2)
+  `predict_with_attention` -> every per-row tensor in
+  `AttentionOutput`/`RegressionAttentionOutput` (predictions, logits/
+  probabilities, attention_weights, var_selection_weights,
+  padding_mask, entity_id); (3) the explicit-`calibration_set` fold in
+  `models/_base._calibration_fold`, which currently pairs
+  `transform(x_cal)`-sorted outputs with caller-order `y_cal` and must
+  reorder by the per-call permutation before pairing (F2). Specified
+  in F1 and the A5 transform step above.
+- **F6 generator vestigial `prediction_step` skip-guard (RESOLVED in
+  S6).** `generator.py`'s old `target_idx = window_end +
+  prediction_step; if target_idx >= n_periods: continue` only trimmed
+  tail windows; it never shifted the label (F6 is contemporaneous by
+  steps 7-9). The S5-consensus'd refactor plan Step 6 decided to
+  REMOVE the parameter and the skip-guard entirely (the forecast-
+  aligned alternative was deferred, implementation_plan Deferred);
+  S6 implemented the removal. The generator is now unconditionally
+  contemporaneous (one row per window; `n`-period entity yields `n`
+  rows; single-period entities now appear), pinned by mandatory
+  test #12.
+- **Governance**: this is an assumption changed since Phase 1, so it
+  goes through the full pipeline: req/arch/impl-plan revision -> Claude
+  design-review consensus -> Gemini design consensus -> point-for-point
+  refactor plan -> Claude consensus -> code change -> Claude /review
+  consensus -> Gemini code consensus.
+  The quickstart / acceptance `xfail`s are removed in the code stage
+  once the fix lands and the thresholds are met.
+- **S2 status: Claude design-review consensus REACHED after 4 rounds**
+  (all 6 dual-model reviewers APPROVE; 0 CRITICAL / 0 IMPROVEMENT on
+  the final round). R1-R3 CRITICALs (F1 vs per-window/per-entity grain;
+  prediction_step>0 horizon-edge contract untested; placeholder test
+  paths) were resolved by the F1 predict-time scoping rewrite, the
+  per-row `min_periods_predict` knob, the F3 step-2 cardinality anchor,
+  and the concrete mandatory tests (10 after the S3/R5 additions).
+  Deferred NITPICKs (non-blocking,
+  recorded so the Gemini pass and S4 see them): (a) `requirements.md`
+  uses opposing italic emphasis on "per *entity*" (gate trigger) vs
+  "per *row*" (NaN-fill) within cross-referenced lines, both correct in
+  context; optional clarifier. (b) An older Phase-prior F11 ledger
+  entry still cites the pre-rename `min_periods_predict_breach` string
+  as a historical record (legitimate, like prior backtick-literal
+  precedents; test #6 asserts the breach-warning count, not the key).
+  (c) The mandatory signal-reachability floor is intentionally
+  provisional (`>=0.70`) and S4-pinned against a measured run, by
+  design, not a gap. Next: S3 Gemini design final-pass.
+- **S3 Gemini design final-pass: 3 CRITICAL + 1 IMPROVEMENT, all
+  VERIFIED valid against code, Claude perspective AGREED, all
+  addressed.** Gemini found what the same-family swarm (which converged
+  on F1/F3 grain) systematically missed: (G-C1) the
+  `input_row_order_`-on-instance wording made `transform` stateful and
+  race under concurrent `predict` - rewritten to a per-call
+  `batch["input_row_order"]` tensor, stateless; (G-C2)
+  `models/_base._calibration_fold:357-358` pairs `transform(x_cal)`-
+  sorted outputs with caller-order `y_cal` (F2 break for unsorted
+  `x_cal`) - F1/F2 contract extended to the calibration fold; (G-C3)
+  `predict_with_attention` -> `AttentionOutput` introspection tensors
+  were outside the F1 contract - now explicitly in scope; (G-I1) the
+  "F6 has no `prediction_step`" prose conflated the F6 *spec* with the
+  generator *code* (which declares a vestigial `prediction_step=1`
+  skip-guard) - reworded for precision in F6 and this ledger. Per the
+  gemini-final-pass protocol a valid new CRITICAL invalidates the S2
+  consensus: the F1 contract, A5 step, and this ledger are revised and
+  three mandatory tests are added - #7 calibration-fold alignment
+  under unsorted `x_cal` (mispairing-sensitive, not separable); #8
+  `predict_with_attention`/`AttentionOutput` row-order under a shuffled
+  string-id panel (complete per-row field enumeration, no ellipsis,
+  `quantiles_used` shuffle-invariant); #9 the G-C1 statelessness
+  structural invariant (`transform` sets no `input_row_order`
+  instance attribute) - the Phase-1-8 re-validation obligation is
+  renumbered #10. Claude design-review re-consensus reached after
+  R5->R6 (R5 qa-opus 2 CRITICAL on test #7 separability-masking and
+  test #8 field-completeness were resolved; R6 all 6 APPROVE, 0C/0I).
+  Post-Gemini design consensus is REACHED; cleared for S4 (the
+  point-for-point code refactor plan).

@@ -95,7 +95,6 @@ def test_ragged_periods_includes_one_row_entity() -> None:
     gen = SyntheticPanelGenerator(
         num_entities=200,
         periods_per_entity=(1, 60),
-        prediction_step=0,
         seed=42,
     )
     panel, _ = gen.generate()
@@ -108,7 +107,6 @@ def test_callable_periods_per_entity() -> None:
     gen = SyntheticPanelGenerator(
         num_entities=5,
         periods_per_entity=lambda rng: int(rng.integers(5, 8)),
-        prediction_step=0,
         seed=3,
     )
     panel, _ = gen.generate()
@@ -276,8 +274,6 @@ def test_invalid_config_raises() -> None:
         SyntheticPanelGenerator(signal_strength=1.5)
     with pytest.raises(ValueError, match="lookback"):
         SyntheticPanelGenerator(lookback=0)
-    with pytest.raises(ValueError, match="prediction_step"):
-        SyntheticPanelGenerator(prediction_step=-1)
     with pytest.raises(ValueError, match="categorical_cardinality"):
         SyntheticPanelGenerator(categorical_cardinality=0)
     with pytest.raises(ValueError, match="categorical_embed_dim"):
@@ -368,3 +364,34 @@ def test_class_distribution_zero_entry_raises() -> None:
             class_distribution=(0.0, 1.0),
             seed=1,
         )
+
+
+def test_generator_has_no_prediction_step_and_emits_n_periods() -> None:
+    """#12: F6 generator is unconditionally contemporaneous.
+
+    Decoupled from the TabularToSequence clamp test #5 so neither can
+    be silently omitted while the other is written.
+    """
+    import inspect
+
+    sig = inspect.signature(SyntheticPanelGenerator.__init__)
+    assert "prediction_step" not in sig.parameters
+    with pytest.raises(TypeError):
+        SyntheticPanelGenerator(prediction_step=1)  # type: ignore[call-arg]
+
+    # One row per period per entity (n_periods, NOT n_periods - 1): the
+    # old prediction_step=1 skip-guard would have dropped each entity's
+    # final window. Fixed period count makes the count exact.
+    gen = SyntheticPanelGenerator(num_entities=7, periods_per_entity=10, seed=42)
+    panel, y = gen.generate(seed=42)
+    per_entity = panel.groupby(gen.id_col).size()
+    assert (per_entity == 10).all()
+    assert len(panel) == 7 * 10
+    assert len(y) == len(panel)
+
+    # Single-period entities now APPEAR (entity-id SET change, not just
+    # a count delta): the old skip-guard emitted zero rows for them.
+    ragged = SyntheticPanelGenerator(num_entities=150, periods_per_entity=(1, 40), seed=7)
+    rpanel, _ = ragged.generate(seed=7)
+    rcounts = rpanel.groupby(ragged.id_col).size()
+    assert rcounts.min() == 1

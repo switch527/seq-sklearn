@@ -45,6 +45,11 @@ def test_tabular_config_params_default_construction_mirrors_pydantic_defaults() 
     assert adapter.id_col == "id"
     assert adapter.time_col == "time"
     assert adapter.lookback == 12
+    # F3 / mandatory test #2: contemporaneous default at the adapter
+    # layer too (dual-layer default-is-0 guard); and it must survive
+    # the to_pydantic() round-trip.
+    assert adapter.prediction_step == 0
+    assert adapter.to_pydantic().prediction_step == 0
     assert adapter.scaling_real == "standard"
 
 

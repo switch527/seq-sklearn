@@ -121,10 +121,13 @@ class BaseSequenceClassifier(ClassifierMixin, BaseSequenceEstimator):
         contract; the aggregated breach WARNING fires once per call
         inside ``transform``.
         """
-        raw, below = self._predict_raw(X)
+        raw, below, input_row_order = self._predict_raw(X)
         proba = self._proba_from_raw(raw)
+        # below is in sorted (transform) space, same as raw: NaN-fill
+        # FIRST, while proba is still sorted, THEN restore caller order.
+        # Reordering before the fill would NaN the wrong rows (F1).
         proba[below] = np.nan
-        return proba
+        return proba[input_row_order]
 
     def _index_from_proba(self, proba: np.ndarray) -> np.ndarray:
         """Class-index vector from a probability matrix.

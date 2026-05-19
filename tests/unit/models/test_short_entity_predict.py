@@ -2,7 +2,7 @@
 
 Entities below ``min_periods_predict`` get NaN-filled `predict_proba`
 rows of the correct shape (never zero / scalar), and exactly one
-aggregated ``data.min_periods_predict_breach`` WARNING fires per
+aggregated ``data.duplicate_floor_breach_count`` WARNING fires per
 ``predict`` call regardless of how many entities are below the floor
 (requirements F NaN-in-output / short-entity warning + shape).
 """
@@ -93,7 +93,7 @@ def test_short_entity_predict_proba_nan_rows_and_single_breach_log(
     breaches = [
         r
         for r in caplog.records
-        if getattr(r, "event", None) == Event.DATA_MIN_PERIODS_PREDICT_BREACH
+        if getattr(r, "event", None) == Event.DATA_DUPLICATE_FLOOR_BREACH_COUNT
     ]
     assert len(breaches) == 1
     assert breaches[0].payload["count"] == 3
@@ -144,7 +144,7 @@ def test_regressor_short_entity_predict_nan_rows_and_single_breach_log(
     breaches = [
         r
         for r in caplog.records
-        if getattr(r, "event", None) == Event.DATA_MIN_PERIODS_PREDICT_BREACH
+        if getattr(r, "event", None) == Event.DATA_DUPLICATE_FLOOR_BREACH_COUNT
     ]
     # One aggregated breach per transform; predict + predict_quantiles
     # each transform once.
