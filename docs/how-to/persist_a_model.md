@@ -33,7 +33,7 @@ weights into the rebuilt model.
 **Never load untrusted pickles.** A pickle file is arbitrary Python
 code; loading one runs that code. Bad actors regularly use pickle
 files to ship malware. The safetensors + JSON format the library
-ships is data-only — there is no executable payload.
+ships is data-only; there is no executable payload.
 ```
 
 `joblib.dump`/`joblib.load` (sklearn's traditional persistence) is

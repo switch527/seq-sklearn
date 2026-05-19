@@ -20,7 +20,19 @@ _PATTERN = re.compile(r"mkdocs|mkdocstrings|griffe-pydantic", re.IGNORECASE)
 
 # Allowlist anchors (case-insensitive) for legitimate residual
 # mentions. A hit is allowed when the hit line OR an adjacent line
-# (±2-line window) contains any of these substrings.
+# (±2-line window) contains any of these substrings. Each anchor is
+# load-bearing prose somewhere in the spec docs; removing one because
+# it "looks unused" may silently regress this gate. Categories:
+#
+#   - Decision-history terms: name an explicit supersession event.
+#     "superseded", "overturn", "reconcil", "ratified", "interim",
+#     "earlier mkdocs", "prior mkdocs".
+#   - Mechanical alternatives: name the sphinx analog of an mkdocs
+#     feature. "not mkdocs", "sphinx analog", "resolved to sphinx".
+#   - Version-pin context: mkdocs version comparisons in commentary.
+#     "mkdocs<2", "the 2.0".
+#   - Tool-state framing: an explicit "still hostile" / "remains
+#     hostile" caveat in the historical brief. "hostile".
 _ANCHORS = (
     "superseded",
     "overturn",

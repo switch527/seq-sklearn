@@ -1,7 +1,7 @@
 # Extract attention and variable-selection weights
 
-TFT's two interpretable surfaces — variable selection and temporal
-attention — are returned as a typed dataclass, not computed by a
+TFT's two interpretable surfaces (variable selection and temporal
+attention) are returned as a typed dataclass, not computed by a
 separate analysis step.
 
 ## Variable selection
@@ -21,7 +21,7 @@ out.predictions               # ndarray of class predictions
 out.probabilities             # ndarray of class probabilities
 out.var_selection_weights     # (n_rows, lookback, n_features) softmax weights
 out.static_var_selection_weights  # (n_rows, n_static_features) softmax weights
-out.attention_weights         # (n_rows, lookback, n_heads) temporal attention
+out.attention_weights         # (n_rows, n_heads, lookback, lookback) per-head attention
 ```
 
 The column ordering inside `var_selection_weights` matches
@@ -31,18 +31,22 @@ The column ordering inside `var_selection_weights` matches
 
 ## Temporal attention
 
-`out.attention_weights` is the multi-head attention weight per
-historical timestep. A simple "which timesteps mattered" summary is
-the mean over heads:
+`out.attention_weights` is the per-head self-attention map over the
+lookback window, shape `(n_rows, n_heads, lookback, lookback)`. The
+last query position is the most-recent timestep; reading its row out
+of the attention map gives the per-head distribution of attention
+the prediction placed onto past timesteps. A simple "which timesteps
+mattered" summary is that row averaged over heads:
 
 ```python
-import numpy as np
-per_step_importance = out.attention_weights.mean(axis=-1)
+per_step_importance = out.attention_weights[:, :, -1, :].mean(axis=1)
 # shape (n_rows, lookback)
 ```
 
 For a single observation `i`, `per_step_importance[i, t]` is how
-much the prediction depended on `t` steps ago (0 is the most recent).
+much the final-timestep prediction attended to past position `t`,
+averaged over heads. Index `t = lookback - 1` is the most-recent
+timestep; `t = 0` is the oldest.
 
 ## A common confusion
 

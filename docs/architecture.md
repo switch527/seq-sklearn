@@ -226,6 +226,10 @@ from seq_sklearn.data.tabular_to_sequence import TabularToSequence
 from seq_sklearn.model_selection.split import EntityTimeSeriesSplit
 from seq_sklearn.config.tft import TFTConfig
 from seq_sklearn.config.tabular import TabularToSequenceConfig
+from seq_sklearn.config.adapters import (
+    TabularConfigParams, OptimizerParams, SchedulerParams,
+    LossParams, SamplerParams, TFTAdvancedParams,
+)
 from seq_sklearn.hardware import HardwareTier, detect
 from seq_sklearn.errors import (
     SeqSklearnError, ConfigError, DataContractError,
@@ -241,6 +245,8 @@ __all__ = [
     "TFTClassifier", "TFTRegressor",
     "TabularToSequence", "TabularToSequenceConfig",
     "TFTConfig",
+    "TabularConfigParams", "OptimizerParams", "SchedulerParams",
+    "LossParams", "SamplerParams", "TFTAdvancedParams",
     "EntityTimeSeriesSplit",
     "HardwareTier", "detect",
     "SeqSklearnError", "ConfigError", "DataContractError",
@@ -250,11 +256,18 @@ __all__ = [
 ]
 ```
 
-Everything else is INTERNAL per the requirements stability rules.
-The `RecurrentSequenceEstimator` class and
-`RecurrentSequenceEstimatorConfig` (A6.1) are INTERNAL-tier in v1 by
-design and are absent from this re-export list; v3 promotes both to
-STABLE.
+The six `*Params` adapter classes are the sklearn-compatible
+nested-config surface (A4 step 3) and are STABLE in v1: they are the
+only way to construct a configured estimator (`tabular_config=...`
+etc.), so they MUST be on the public-API surface. Their module was
+renamed `_adapters.py` → `adapters.py` in Phase 12 R1 to reflect
+that. Everything else (the family pydantic sub-configs at
+`seq_sklearn.config.{optimizer,scheduler,loss,sampler}`, anything
+reachable only via an underscore-prefixed module) is INTERNAL per
+the requirements stability rules. The `RecurrentSequenceEstimator`
+class and `RecurrentSequenceEstimatorConfig` (A6.1) are INTERNAL-tier
+in v1 by design and are absent from this re-export list; v3 promotes
+both to STABLE.
 
 ## A4: Configuration schemas
 
@@ -310,7 +323,7 @@ estimator. The canonical pattern derived for seq-sklearn:
    silently MAJOR-breaking).
 
    ```python
-   # src/seq_sklearn/config/_adapters.py
+   # src/seq_sklearn/config/adapters.py
    class TabularConfigParams(BaseEstimator):
        def __init__(
            self,
@@ -1503,16 +1516,13 @@ docs = [
 ]
 ```
 
-This is the POST-Phase-12 TARGET `[project.optional-dependencies]
-docs` extra. The LIVE `pyproject.toml` (A18) currently carries the
-six base Sphinx pins (`sphinx`, `pydata-sphinx-theme`, `numpydoc`,
-`myst-parser`, `sphinx-copybutton`, `sphinx-sitemap`); Phase 12
-PA.2 ADDS exactly the two remaining (`sphinx-gallery`,
-`autodoc-pydantic`). It is intentionally NOT byte-identical to the
-live file until PA.2 lands; the Phase 12 plan's
-`test_docs_extra_is_target_or_live` guards that this list equals
-the live pyproject extra OR the live-plus-the-two-PA.2-pins, so the
-divergence stays an enumerated intentional state, not drift.
+This is the v1.0.0 `[project.optional-dependencies] docs` extra.
+Phase 12 PA.2 added `sphinx-gallery`, `autodoc-pydantic`, and
+`matplotlib` (the last is sphinx-gallery's plot-rendering
+dependency); the block above is byte-identical to the live
+`pyproject.toml` (A18). The `test_docs_extra_matches_live` gate
+asserts the equality on every PR, so a future stray edit that drops
+a pin from one of the two sources is caught.
 
 **Pydantic v2 rendering** uses `autodoc-pydantic` (the Sphinx analog
 of griffe-pydantic): dedicated field tables with type / default /

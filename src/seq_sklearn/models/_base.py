@@ -30,7 +30,7 @@ from torch import Tensor, nn
 
 import seq_sklearn
 from seq_sklearn.calibration._protocol import _Calibrator
-from seq_sklearn.config._adapters import (
+from seq_sklearn.config.adapters import (
     LossParams,
     OptimizerParams,
     SamplerParams,

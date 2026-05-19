@@ -140,14 +140,22 @@ def test_nonexecutable_block_ratio_bounded() -> None:
 def test_n7_absolute_test_present_and_unskipped() -> None:
     """Criterion 9 (N7 absolute budgets) has a real release-checklist
     artifact (`tests/perf/test_n7_absolute.py`), not just an
-    enumerated line."""
+    enumerated line.
+
+    The skip-detection rule: a top-of-line `@pytest.mark.skip` marker
+    (bare or parameterised) on a test function is an unconditional
+    skip and fails the gate. A `pytest.skip(...)` call inside a test
+    body is conditional and is allowed (the N7 artifact skips
+    conditionally on CUDA availability, which is fine).
+    """
     path = _ROOT / "tests" / "perf" / "test_n7_absolute.py"
     assert path.exists(), f"missing {path.relative_to(_ROOT)}"
     text = path.read_text()
     assert "def test_" in text, "no test function in test_n7_absolute.py"
-    assert "pytest.mark.skip" not in text or "skip(" not in text or "@pytest.mark.skip" not in text, (
-        "test_n7_absolute.py carries an unconditional pytest.mark.skip; "
-        "the release-checklist artifact is degenerate"
+    unconditional = re.search(r"^\s*@pytest\.mark\.skip\b", text, re.MULTILINE)
+    assert unconditional is None, (
+        "test_n7_absolute.py carries an unconditional `@pytest.mark.skip` "
+        "decorator; the release-checklist artifact is degenerate"
     )
 
 

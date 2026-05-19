@@ -17,7 +17,7 @@ from typing import Any, cast
 import pytest
 from sklearn.utils.estimator_checks import parametrize_with_checks
 
-from seq_sklearn.config._adapters import TabularConfigParams
+from seq_sklearn.config.adapters import TabularConfigParams
 from seq_sklearn.models.transformer.tft.classifier import TFTClassifier
 from seq_sklearn.models.transformer.tft.regressor import TFTRegressor
 from tests.conftest import EXPECTED_FAILED_CHECKS, EXPECTED_PASSING_CHECKS

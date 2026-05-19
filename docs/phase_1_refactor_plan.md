@@ -683,7 +683,7 @@ end-state lint / format / pyright residue.
 | Test parametrize IDs change | Medium | The validity-matrix parametrize tuple stays 4 strings; only the test body changes | The `check_combo` signature is unchanged, so the 4-string parametrize tuple (and the pytest cache) stays stable across the refactor |
 | Hashability regression on nested configs | Low | Every sub-config is `frozen=True` with `extra: ExtraDict` (a sorted tuple, hashable); pydantic's default hash should compose | Add `hash(cfg)` assertion to one test per nested-config layer if pyright signals trouble |
 | Coverage drops below 85% | Low | Every new src module ships with a 1:1 test module (the Phase 1 module/test pairing); net additions: ~700 lines src + ~600 lines tests | `pytest --cov` at commits 1, 2, 4, 5 to catch drift early |
-| Import cycle when adapters reference family configs | Low | Each adapter imports its specific pydantic config; family configs do not import adapters. Acyclic | Verify with `python -c "import seq_sklearn.config._adapters"` at commit 5 |
+| Import cycle when adapters reference family configs | Low | Each adapter imports its specific pydantic config; family configs do not import adapters. Acyclic | Verify with `python -c "import seq_sklearn.config.adapters"` at commit 5 |
 | `_DEFAULT_LOSS_FOR_TASK` injection misplaced | NA in Phase 1 | The map and injection logic live in Phase 6a's `models/_base.py`, not Phase 1. `LossConfig.strategy` shipping with no default is by design; callers must pass `loss=LossConfig(strategy=...)` until Phase 6a lands the estimator-side injection | Out of scope for Phase 1; the test `test_construction_requires_strategy` pins the no-default contract |
 
 ## Validation matrix

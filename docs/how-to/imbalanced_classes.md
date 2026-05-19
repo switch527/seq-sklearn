@@ -56,7 +56,7 @@ typically want both.
 ## What about up-sampling / SMOTE?
 
 seq-sklearn does not ship a per-row up-sampler because rows in a
-panel are not independent samples — duplicating a row changes the
+panel are not independent samples; duplicating a row changes the
 sequence, not the marginal. Class-balanced batch sampling is the
 panel-correct analog. If you have very few positive entities (not
 just positive rows), the right move is to weight the loss; future
@@ -70,7 +70,7 @@ versions may ship a `pos_weight` config field.
 - [ ] Tune the decision threshold post-hoc on a held-out set.
 
 ```{testcode}
-from seq_sklearn.config._adapters import SamplerParams
+from seq_sklearn.config.adapters import SamplerParams
 
 sampler = SamplerParams(strategy="balanced_by_class")
 assert sampler.strategy == "balanced_by_class"

@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 import torch
 
-from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
+from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
 from seq_sklearn.models.transformer.tft.classifier import TFTClassifier
 from seq_sklearn.models.transformer.tft.regressor import TFTRegressor

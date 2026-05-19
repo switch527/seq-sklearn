@@ -82,6 +82,7 @@ jobs:
 
   docs:
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # qa R1-I1: a hung sphinx-build or doctest is bounded.
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4

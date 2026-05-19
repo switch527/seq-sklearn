@@ -37,7 +37,7 @@ The full per-symbol tier table is in `docs/requirements.md`
 
 - **MAJOR** bump on any breaking change to a STABLE public symbol.
 - **MINOR** bump on a backwards-compatible addition (new public
-  symbol, new BETA field, new default that changes behavior — the
+  symbol, new BETA field, new default that changes behavior; the
   CHANGELOG entry calls it out explicitly).
 - **PATCH** bump on a bug fix that does not change behavior beyond
   fixing the bug.

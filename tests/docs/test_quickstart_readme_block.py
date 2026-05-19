@@ -2,7 +2,7 @@
 
 Closes the qa R3-C1 gap: the README is at the repo root, outside
 `docs/`, so neither `sphinx.ext.doctest` nor `pytest --doctest-modules
-src/` reaches it. This is R3 mechanism (d) — the README block is
+src/` reaches it. This is R3 mechanism (d). The README block is
 extracted, parsed, and `exec`d with the same CPU monkeypatches the
 e2e quickstart test uses.
 """
@@ -42,25 +42,37 @@ def test_quickstart_block_parses() -> None:
 
 
 def test_quickstart_block_imports_real_public_symbols() -> None:
-    """The block imports the same public symbols as `examples/quickstart.py`,
-    via the `seq_sklearn` façade. A non-vacuous structural pin layered on
-    the execution check below."""
+    """Every `from <mod> import <name>` in the README quickstart resolves
+    to a live attribute on the imported module.
+
+    Catches a rename inside any imported module (façade, adapter,
+    synthetic generator) at parse time, before the slower exec test
+    has to detect it via a runtime AttributeError. Validates EVERY
+    `ImportFrom` node, not just the `seq_sklearn` façade.
+    """
     block = _quickstart_block(_README.read_text())
     tree = ast.parse(block)
-    names_imported = set()
+    facade_imports: set[str] = set()
+    unresolved: list[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "seq_sklearn":
-            for alias in node.names:
-                names_imported.add(alias.name)
+        if not isinstance(node, ast.ImportFrom) or node.module is None:
+            continue
+        mod = importlib.import_module(node.module)
+        for alias in node.names:
+            if not hasattr(mod, alias.name):
+                unresolved.append(f"{node.module}.{alias.name}")
+            if node.module == "seq_sklearn":
+                facade_imports.add(alias.name)
+    assert not unresolved, (
+        f"README quickstart imports symbols that don't exist on the "
+        f"target module (rename or removal): {unresolved}"
+    )
     # The README quickstart should use the public façade for the
     # estimator (PE.0); at minimum TFTClassifier from the façade.
-    assert "TFTClassifier" in names_imported, (
+    assert "TFTClassifier" in facade_imports, (
         "README quickstart should import TFTClassifier from seq_sklearn "
-        f"(the public façade); got imports from seq_sklearn: {names_imported}"
+        f"(the public façade); got façade imports: {facade_imports}"
     )
-    # TFTClassifier resolves to a real class on `seq_sklearn`.
-    seq_sklearn = importlib.import_module("seq_sklearn")
-    assert hasattr(seq_sklearn, "TFTClassifier")
 
 
 def test_quickstart_block_executes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,6 +105,4 @@ def test_quickstart_block_executes(monkeypatch: pytest.MonkeyPatch) -> None:
     block = re.sub(r"num_entities=\d+", "num_entities=32", block)
     block = re.sub(r"periods_per_entity=\d+", "periods_per_entity=6", block)
     namespace: dict[str, object] = {}
-    exec(  # noqa: S102 - executing trusted README content under monkeypatch
-        compile(block, "<README ## Quickstart>", "exec"), namespace
-    )
+    exec(compile(block, "<README ## Quickstart>", "exec"), namespace)

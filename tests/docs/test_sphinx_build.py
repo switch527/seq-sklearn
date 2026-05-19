@@ -77,8 +77,10 @@ def test_autodoc_pydantic_field_tables_rendered(tmp_path: Path) -> None:
 
 
 def test_doc_snippet_suite_fast(tmp_path: Path) -> None:
-    """The `-b doctest` build wall-clock stays inside the PR budget.
-    A single hanging TFT-fit doctest block cannot blow the budget."""
+    """The `-b doctest` build wall-clock stays inside the PR budget
+    (`DOCS_DOCTEST_BUDGET_S = 240` seconds; the typical run takes
+    ~20-40 s, so the budget is generous, not tight). A single hanging
+    TFT-fit doctest block cannot blow the budget."""
     import time
 
     out = tmp_path / "doctest"

@@ -11,6 +11,7 @@ import importlib
 import re
 import subprocess
 import sys
+import types
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -31,15 +32,23 @@ _INTERNAL_TIER_FORBIDDEN: frozenset[str] = frozenset(
 def _spec_public_api() -> set[str]:
     """Extract the literal A3 `__all__` from docs/architecture.md.
 
-    Regex tolerates whitespace around `=` and `[`, so future spec-block
-    formatting edits cannot silently empty the set.
+    Anchored to the `## A3:` heading so a future doc edit that adds an
+    illustrative `__all__` block earlier in the file (e.g. a migration
+    template, a stability-tier discussion) cannot silently re-anchor
+    the test against the wrong block.
     """
     text = _ARCH_DOC.read_text()
-    match = re.search(r"__all__\s*=\s*\[(.*?)\]", text, re.DOTALL)
+    a3_heading = re.search(r"^##\s+A3:", text, re.MULTILINE)
+    if a3_heading is None:
+        pytest.fail(f"could not locate `## A3:` heading in {_ARCH_DOC}")
+    next_heading = re.search(r"^##\s+A\d", text[a3_heading.end() :], re.MULTILINE)
+    end = a3_heading.end() + next_heading.start() if next_heading else len(text)
+    a3_slice = text[a3_heading.start() : end]
+    match = re.search(r"__all__\s*=\s*\[(.*?)\]", a3_slice, re.DOTALL)
     if match is None:
         pytest.fail(
-            f"could not locate the `__all__ = [...]` block in {_ARCH_DOC}; "
-            f"the A3 public-API source has moved or been removed"
+            f"could not locate the `__all__ = [...]` block under `## A3:` "
+            f"in {_ARCH_DOC}; the A3 public-API source has moved or been removed"
         )
     body = match.group(1)
     names = re.findall(r'"([^"]+)"', body)
@@ -64,6 +73,12 @@ def test_public_api_names_resolve_to_deep_path_objects() -> None:
         "TabularToSequence": ("seq_sklearn.data.tabular_to_sequence", "TabularToSequence"),
         "TabularToSequenceConfig": ("seq_sklearn.config.tabular", "TabularToSequenceConfig"),
         "TFTConfig": ("seq_sklearn.config.tft", "TFTConfig"),
+        "TabularConfigParams": ("seq_sklearn.config.adapters", "TabularConfigParams"),
+        "OptimizerParams": ("seq_sklearn.config.adapters", "OptimizerParams"),
+        "SchedulerParams": ("seq_sklearn.config.adapters", "SchedulerParams"),
+        "LossParams": ("seq_sklearn.config.adapters", "LossParams"),
+        "SamplerParams": ("seq_sklearn.config.adapters", "SamplerParams"),
+        "TFTAdvancedParams": ("seq_sklearn.config.adapters", "TFTAdvancedParams"),
         "EntityTimeSeriesSplit": ("seq_sklearn.model_selection.split", "EntityTimeSeriesSplit"),
         "HardwareTier": ("seq_sklearn.hardware", "HardwareTier"),
         "detect": ("seq_sklearn.hardware", "detect"),
@@ -135,8 +150,6 @@ def test_public_api_no_namespace_leakage() -> None:
     # Filter to non-module objects (submodules can show up after a child
     # import and are NOT part of the public surface per the A3 contract;
     # they remain importable as fully-qualified paths).
-    import types
-
     leaked = [n for n in leaked if not isinstance(getattr(seq_sklearn, n), types.ModuleType)]
     assert not leaked, (
         f"namespace leakage on `seq_sklearn`: non-underscore attrs not in __all__: {leaked}"

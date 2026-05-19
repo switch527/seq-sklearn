@@ -14,7 +14,7 @@ their own entry; the helper itself never changes.
 
 from sklearn.base import BaseEstimator
 
-from seq_sklearn.config._adapters import (
+from seq_sklearn.config.adapters import (
     LossParams,
     OptimizerParams,
     SamplerParams,

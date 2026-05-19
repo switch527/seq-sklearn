@@ -207,9 +207,10 @@ module (`_adapters.py`).
   (`attention_heads divides hidden_size`) live here. The base-
   class validators (`quantiles strictly increasing in (0, 1)`,
   validity-matrix check) live on `BaseModelConfig`.
-- `src/seq_sklearn/config/_adapters.py` (renamed from
-  `_params_adapter.py` per architecture A4): six BaseEstimator
-  adapters, one per nested pydantic sub-config. Every adapter
+- `src/seq_sklearn/config/adapters.py` (renamed from
+  `_params_adapter.py` per architecture A4, then un-underscored in
+  Phase 12 R1 once A3 promoted the six adapters to STABLE): six
+  BaseEstimator adapters, one per nested pydantic sub-config. Every adapter
   `__init__` carries the `*` keyword-only marker (mandatory per A4;
   without it the ALPHA → BETA promotion path silently breaks
   positional callers).

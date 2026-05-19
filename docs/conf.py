@@ -101,7 +101,7 @@ sphinx_gallery_conf = {
     "ignore_pattern": r"__init__\.py$",
     "remove_config_comments": True,
     "show_memory": False,
-    "plot_gallery": "True",
+    "plot_gallery": True,
     "abort_on_example_error": True,
     "expected_failing_examples": [],
     "min_reported_time": 0,

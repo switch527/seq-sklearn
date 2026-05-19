@@ -13,7 +13,7 @@ dataclass. This example shows how to read them.
 import numpy as np
 
 from seq_sklearn import TFTClassifier
-from seq_sklearn.config._adapters import TabularConfigParams
+from seq_sklearn.config.adapters import TabularConfigParams
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
 
 gen = SyntheticPanelGenerator(
@@ -62,8 +62,12 @@ print("Static VSN weights:", out.static_var_selection_weights.shape)
 print("attention weights:", out.attention_weights.shape)
 
 # %%
-# Per-step importance is the mean over heads
-# ------------------------------------------
-per_step = out.attention_weights.mean(axis=-1)
+# Per-step importance: final-query row averaged over heads
+# --------------------------------------------------------
+# `attention_weights` is the per-head self-attention map with shape
+# (n_rows, n_heads, lookback, lookback). The final query position is
+# the most-recent timestep; its row averaged over heads is a one-line
+# "which past timesteps did the prediction attend to" summary.
+per_step = out.attention_weights[:, :, -1, :].mean(axis=1)
 print("per-step importance shape:", per_step.shape)
-print("row 0 importance (most-recent is index 0):", np.round(per_step[0], 3))
+print("row 0 importance (index lookback-1 is most-recent):", np.round(per_step[0], 3))

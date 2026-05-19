@@ -24,7 +24,7 @@ timestep, the model relied on feature X with weight 0.45".
 Two important properties:
 
 - **Per-timestep, per-row.** Two rows of the same entity can have
-  very different VSN weights at the same timestep — the weight is
+  very different VSN weights at the same timestep; the weight is
   computed from the row's actual feature values, not a global
   per-feature importance.
 - **Operates BEFORE the LSTM.** VSN runs at the input stage; the
@@ -46,16 +46,18 @@ across heads, so the per-head attention weights are directly
 comparable and interpretable as "how much did each head rely on
 each timestep".
 
-`attention_weights` shape is `(n_rows, lookback, n_heads)`. A simple
-"which timesteps mattered" summary is the mean over heads:
+`attention_weights` shape is `(n_rows, n_heads, lookback, lookback)`
+(the full per-head self-attention map). A simple "which past timesteps
+mattered" summary is the final-query row averaged over heads:
 
 ```python
-per_step_importance = out.attention_weights.mean(axis=-1)
+per_step_importance = out.attention_weights[:, :, -1, :].mean(axis=1)
 ```
 
 That gives shape `(n_rows, lookback)`. For row `i`,
-`per_step_importance[i, t]` is the average attention placed on
-`t` steps ago (smaller `t` = more recent).
+`per_step_importance[i, t]` is the attention the final-timestep
+prediction placed on past position `t` (larger `t` = more recent;
+`lookback - 1` is the most-recent step).
 
 ## What the surfaces are good for
 

@@ -246,6 +246,7 @@ attribute is **internal** and not covered by the stability guarantee.
 | STABLE | `TabularToSequence`: fit/transform/inverse_transform | |
 | STABLE | `seq_sklearn.hardware.detect`, `HardwareTier` | enum values may be added; existing values stable |
 | STABLE | `seq_sklearn.model_selection.EntityTimeSeriesSplit` | |
+| STABLE | `seq_sklearn.config.adapters.{TabularConfigParams, OptimizerParams, SchedulerParams, LossParams, SamplerParams, TFTAdvancedParams}` | the sklearn-compatible nested-config adapters (A4 step 3); the only way to construct a configured estimator, so on the public surface. Field additions follow the F7 ALPHA→BETA→STABLE promotion path |
 | BETA | `TFTClassifier.export_onnx`, `TFTRegressor.export_onnx` | dependency on `[onnx]` extra; export shape may evolve |
 | BETA | `predict_with_attention`, `AttentionOutput`, `RegressionAttentionOutput` | fields may be added in MINOR releases; consult attribute access, not tuple position |
 | ALPHA | `seq_sklearn.tuning.suggest_params` default search space | search-space defaults may change without MINOR bump; pass an explicit search space for stable behavior |

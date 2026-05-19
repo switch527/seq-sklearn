@@ -84,7 +84,7 @@ imports and gates in CI, so this snippet cannot rot.
 from sklearn.metrics import accuracy_score
 
 from seq_sklearn import TFTClassifier
-from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
+from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
 
 # 1. A small synthetic panel (real data slots in here unchanged).

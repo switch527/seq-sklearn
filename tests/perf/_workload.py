@@ -9,7 +9,7 @@ the capture CLI, never at `_gate.py` import time (PC.1a).
 import numpy as np
 import pandas as pd
 
-from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
+from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
 from seq_sklearn.models.transformer.tft.classifier import TFTClassifier
 

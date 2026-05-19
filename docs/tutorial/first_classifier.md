@@ -4,7 +4,7 @@ This is the linear, finishable spine: a working binary classifier on
 a bundled synthetic panel, evaluated with sklearn's accuracy score,
 ending with the variable-selection weights the model used. Every line
 below is the literal content of `examples/quickstart.py`, which the
-N1 quickstart-in-CI test imports and the README mirrors — there is
+N1 quickstart-in-CI test imports and the README mirrors. There is
 ONE executable source, never two.
 
 ## Setup
@@ -42,7 +42,7 @@ pip install seq-sklearn
   selection, attention, gated residuals) come from Lim et al. 2021.
 - **`run_quickstart` returning accuracy**: the function is what the
   e2e test imports and asserts on, which is also why the README and
-  the docs site can mirror its body — the executable form is the
+  the docs site can mirror its body; the executable form is the
   single source.
 
 ## What to do next

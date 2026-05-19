@@ -19,7 +19,7 @@ import pandas as pd
 import pytest
 import torch
 
-from seq_sklearn.config._adapters import (
+from seq_sklearn.config.adapters import (
     OptimizerParams,
     SchedulerParams,
     TabularConfigParams,

@@ -81,7 +81,7 @@ optional; they are the price of adoption.
 ## Domain-specific pages the generic frameworks do not name
 
 From the DL / time-series pass. These address seq-sklearn's exact
-user-confusion points and are higher-leverage than generic polish:
+user-confusion points and are higher-impact than generic polish:
 
 - **D-A Data-format contract page (top priority).** Exact panel shape,
   WHY consecutive rows are treated as consecutive periods regardless of
@@ -158,7 +158,7 @@ user-confusion points and are higher-leverage than generic polish:
 
 ## Phase 12 priority (what to build now) vs deferred (v1.1+)
 
-**Build in Phase 12 (ranked by adoption leverage):**
+**Build in Phase 12 (ranked by adoption impact):**
 
 1. C2 every snippet CI-tested (doctest-modules + a Markdown-snippet
    runner) as a required gate, plus `mkdocs build --strict`.

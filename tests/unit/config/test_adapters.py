@@ -12,7 +12,7 @@ import pytest
 import sklearn.base
 from pydantic import ValidationError
 
-from seq_sklearn.config._adapters import (
+from seq_sklearn.config.adapters import (
     LossParams,
     OptimizerParams,
     SamplerParams,

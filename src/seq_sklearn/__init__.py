@@ -20,6 +20,14 @@ try:
 except _PackageNotFoundError:  # pragma: no cover - source-checkout w/o install
     __version__ = "0.0.0+unknown"
 
+from seq_sklearn.config.adapters import (
+    LossParams,
+    OptimizerParams,
+    SamplerParams,
+    SchedulerParams,
+    TabularConfigParams,
+    TFTAdvancedParams,
+)
 from seq_sklearn.config.tabular import TabularToSequenceConfig
 from seq_sklearn.config.tft import TFTConfig
 from seq_sklearn.data.tabular_to_sequence import TabularToSequence
@@ -45,13 +53,19 @@ __all__ = [
     "DataContractError",
     "EntityTimeSeriesSplit",
     "HardwareTier",
+    "LossParams",
     "NotFittedError",
+    "OptimizerParams",
     "PredictionError",
     "RegressionAttentionOutput",
+    "SamplerParams",
+    "SchedulerParams",
     "SeqSklearnError",
+    "TFTAdvancedParams",
     "TFTClassifier",
     "TFTConfig",
     "TFTRegressor",
+    "TabularConfigParams",
     "TabularToSequence",
     "TabularToSequenceConfig",
     "TrainingError",

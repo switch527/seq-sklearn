@@ -14,7 +14,7 @@ import pytest
 import sklearn.base
 import torch
 
-from seq_sklearn.config._adapters import (
+from seq_sklearn.config.adapters import (
     LossParams,
     SamplerParams,
     SchedulerParams,

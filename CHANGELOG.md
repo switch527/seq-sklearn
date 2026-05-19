@@ -80,10 +80,12 @@ for the criteria 1-11 release procedure.
 
 ### N7 absolute-budget validation (criterion 9)
 
-The four N7 numbers below are recorded at release time from a
-manual run of
+The four N7 numbers below are recorded at release time from two
+manual runs per [the release checklist](release_checklist.md):
 `pytest -m "gpu and slow" tests/perf/test_n7_absolute.py` on an
-A100/T4/4090 per [the release checklist](release_checklist.md).
+A100/T4/4090 for the three GPU/training numbers, and
+`pytest -m slow tests/perf/test_n7_absolute.py::test_n7_cpu_inference_latency`
+on the release-reference CPU for the inference-latency number.
 
 - GPU peak memory: TBD (target `< 8 GB`)
 - Training wall-clock: TBD (target `< 30 min`)

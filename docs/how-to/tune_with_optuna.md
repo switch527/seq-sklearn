@@ -61,7 +61,7 @@ all `max_epochs`, which saves a large fraction of the search budget.
 The library does NOT use Optuna's
 `PyTorchLightningPruningCallback`; the native hook is shipped to
 preserve Lightning 2.6 lifecycle events. You don't have to do
-anything to opt in — passing `optuna_trial` is enough.
+anything to opt in; passing `optuna_trial` is enough.
 
 ## The `optuna_trial_guard` context
 
