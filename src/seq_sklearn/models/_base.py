@@ -597,8 +597,9 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
         The graph trusts its inputs: the eager input-validation guards
         (non-finite, embedding-index bounds, left-pad contract,
         all-padding row) are SKIPPED on the export path via the
-        backbone's ``onnx_export`` flag (toggled by ``_OnnxForward``
-        for the trace, restored after), since ONNX has no exception
+        backbone's ``onnx_export`` flag (set ``True`` only on
+        ``_OnnxForward``'s private deepcopy of the backbone, never on
+        the shared instance), since ONNX has no exception
         mechanism. Validation remains the responsibility of the eager
         ``predict`` path (where the flag is False and every guard
         runs) and the caller.
@@ -648,10 +649,10 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
             batch["time_varying_categorical"],
             batch["padding_mask"],
         )
-        # _OnnxForward owns the pack-free LSTM toggle (it sets/restores
-        # backbone.onnx_export around its own forward), so the trace
-        # captures the gather-preserving path and the shared backbone
-        # the estimator predicts with is untouched afterward.
+        # _OnnxForward deepcopies backbone/head and sets onnx_export
+        # only on its private clone, so the trace captures the
+        # gather-preserving path while the shared backbone the
+        # estimator predicts with is never mutated (thread-safe).
         module = _OnnxForward(backbone, head)
         batch_dim = torch.export.Dim("batch")
         dynamic_shapes = ({0: batch_dim},) * 5

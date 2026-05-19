@@ -14,10 +14,11 @@ the family ``predict`` / ``predict_proba`` and are deliberately NOT in
 the ONNX graph (the same torch/numpy seam ``_predict_raw`` draws).
 
 The gather-preserving pack-free LSTM path is selected by the
-backbone's ``onnx_export`` flag, which
-:meth:`BaseSequenceEstimator.export_onnx` toggles transiently around
-the export and restores in a ``finally`` (the trained eager forward
-is untouched).
+backbone's ``onnx_export`` flag. :class:`_OnnxForward` ``deepcopy``\\ s
+the backbone/head and sets the flag ``True`` only on its private
+clone, so the shared backbone the fitted estimator predicts with is
+never mutated (the sklearn read-only post-fit thread-safety contract;
+Phase 9 G-C1 class). No toggle of shared state, no try/finally.
 """
 
 import copy

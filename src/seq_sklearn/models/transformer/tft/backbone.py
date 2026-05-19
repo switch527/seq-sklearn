@@ -70,9 +70,10 @@ class TFTBackbone(BaseBackbone):
         # ONNX-export-only: when True, _run_lstm uses the pack-free
         # gather-preserving path (no pack_padded_sequence, which does
         # not lower under torch.onnx.export(dynamo=True)). Default
-        # False so the trained eager forward is untouched;
-        # BaseSequenceEstimator.export_onnx toggles it transiently
-        # and restores it in a finally (Phase 10 plan Step 1/2).
+        # False so the trained eager forward is untouched; _OnnxForward
+        # sets it True only on its private deepcopy of this backbone
+        # for the export trace, never on the shared instance the
+        # fitted estimator predicts with (Phase 10 plan Step 1/2).
         self.onnx_export = False
 
         self.static_cat_embeddings = nn.ModuleList(

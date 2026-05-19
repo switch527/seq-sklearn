@@ -256,6 +256,34 @@ def test_export_onnx_dynamic_batch(monkeypatch: pytest.MonkeyPatch, tmp_path: ob
     np.testing.assert_allclose(_ort_run(out, args2), wrapper2, atol=1e-4, rtol=1e-4)
 
 
+def test_export_onnx_leaves_shared_backbone_unmutated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """End-to-end pin for the S8 thread-safety fix: a real
+    ``export_onnx`` must NOT flip the shared ``_predict_module()``
+    backbone's ``onnx_export`` flag, and a subsequent ``predict_proba``
+    must still run the validated packed path. Mutation-sensitive:
+    reverting the ``_OnnxForward`` deepcopy to a shared alias leaves
+    the flag True here and routes the post-export predict through the
+    guard-skipped trace path -> fails."""
+    _force_cpu(monkeypatch)
+    gen = _gen("binary")
+    panel, y = gen.generate(seed=42)
+    est = TFTClassifier(task_type="binary", tabular_config=_tab(gen), **_COMMON).fit(panel, y)
+    backbone, _ = est._predict_module()
+    assert backbone.onnx_export is False
+
+    est.export_onnx(str(tmp_path / "u.onnx"), panel)  # type: ignore[operator]
+
+    # Shared backbone identity + flag are untouched by the export.
+    assert est._predict_module()[0] is backbone
+    assert backbone.onnx_export is False
+    # The post-export predict still runs (the validated packed path,
+    # flag False); a leaked True would silently skip the eager guards.
+    proba = est.predict_proba(panel)
+    assert proba.shape == (len(panel), 2)
+
+
 def test_export_onnx_raises_not_fitted(tmp_path: object) -> None:
     gen = _gen("binary")
     panel, _ = gen.generate(seed=42)

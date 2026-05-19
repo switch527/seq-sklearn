@@ -645,3 +645,36 @@ present). Tally: CRITICAL 1 · IMPROVEMENT 0 · NITPICK 1.
 Per the gemini-final-pass protocol a NEW valid CRITICAL invalidates
 the S7 consensus: one more Claude `/review` round on the deepcopy
 fix is required before Phase 10 closes (run next).
+
+## S8 post-Gemini Claude `/review` round (deepcopy fix)
+
+R1 verdict on the deepcopy fix: code-opus APPROVE (0C/1I/1N),
+arch-opus APPROVE (0C/3I/2N), qa-opus REQUEST_CHANGES (1C/2I/1N),
+style-sonnet APPROVE (0/0/0).
+
+- qa-opus CRITICAL (VALID, ADDRESSED): the thread-safety/deepcopy fix
+  was NOT pinned by any test. Mentally reverting
+  `copy.deepcopy(backbone)` to a bare `backbone` alias left all five
+  parity tests green, because the post-export `_predict_raw` oracle
+  itself flips to the pack-free path under the mutation, so the
+  `atol=1e-6` compare still matches (mutation-blind oracle).
+  Resolution: added mutation-sensitive pins.
+  - `tests/unit/inference/test_onnx.py` (NEW, no onnx extra needed):
+    `test_onnxforward_does_not_mutate_shared_backbone` (shared flag
+    stays False, clone is a distinct object set True) and
+    `test_onnxforward_clone_params_are_distinct_objects` (deepcopy,
+    not a shallow alias).
+  - `tests/integration/test_onnx_parity.py::test_export_onnx_leaves_shared_backbone_unmutated`
+    (onnx-gated end-to-end): after a real `export_onnx` the shared
+    `_predict_module()` backbone identity + `onnx_export=False` are
+    untouched and a subsequent `predict_proba` still runs.
+  Empirically verified mutation-sensitive: reverting the deepcopy to
+  an alias fails all three; restoring passes all three.
+- IMPROVEMENTs (code-opus/arch-opus/qa-opus, ADDRESSED): doc-drift.
+  The deepcopy fix had regressed four toggle/finally docstring/comment
+  sites that S7-R1 fixed. Doc-synced to the deepcopy mechanism:
+  `inference/onnx.py` module docstring, `_base.py` `export_onnx`
+  docstring + the `module = _OnnxForward(...)` comment,
+  `backbone.py` `self.onnx_export = False` comment.
+
+NITPICKs: optional, not blocking.
