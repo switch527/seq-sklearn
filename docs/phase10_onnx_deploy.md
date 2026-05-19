@@ -580,3 +580,13 @@ code-opus; all invariants confirmed). Addressed:
 NITPICK not actioned: the `## Step N - ` / mid-sentence hyphen in
 the A21 prose is the accepted house-style baseline (style-sonnet
 flagged and self-dismissed it).
+
+S7-R2 (confirming): ALL 4 reviewers APPROVE, ZERO CRITICAL
+(qa-opus R1 REQUEST_CHANGES lifted; arch-opus/code-opus 0/0/0;
+style accepted-baseline NITPICK). The lone qa-opus R2 NITPICK
+(recursion test covered the GRAPH branch but not GRAPHS) was closed:
+`test_collect_op_types_recurses_subgraphs` now also asserts a
+GRAPHS-plural subgraph attribute is recursed (synthetic `Sqrt`
+surfaced only via that path). S7 Claude code-review consensus
+REACHED: zero CRITICAL, every IMPROVEMENT resolved, NITPICKs
+optional/closed. Cleared for the S8 Gemini final pass.

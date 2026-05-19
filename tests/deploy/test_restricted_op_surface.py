@@ -110,11 +110,17 @@ def test_collect_op_types_recurses_subgraphs() -> None:
     then_branch must surface both 'If' and 'Gemm'."""
     from onnx import helper
 
+    # GRAPH (singular) branch: an If node carrying then/else subgraphs.
     inner = helper.make_node("Gemm", ["a", "b"], ["c"])
     then_g = helper.make_graph([inner], "then", [], [])
     else_g = helper.make_graph([], "else", [], [])
     if_node = helper.make_node("If", ["cond"], ["out"], then_branch=then_g, else_branch=else_g)
+    # GRAPHS (plural) branch: a node with a repeated-graph attribute.
+    sub = helper.make_node("Sqrt", ["s"], ["t"])
+    sub_g = helper.make_graph([sub], "sub", [], [])
+    loopish = helper.make_node("If", ["c2"], ["o2"])
+    loopish.attribute.append(helper.make_attribute("bodies", [sub_g]))
     top = helper.make_node("Add", ["x", "y"], ["cond"])
-    g = helper.make_graph([top, if_node], "g", [], [])
+    g = helper.make_graph([top, if_node, loopish], "g", [], [])
     ops = _collect_op_types(g)
-    assert {"Add", "If", "Gemm"} <= ops
+    assert {"Add", "If", "Gemm", "Sqrt"} <= ops  # Sqrt only via the GRAPHS path
