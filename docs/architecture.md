@@ -2469,6 +2469,65 @@ architecture phase:
    the `build_sampler` dispatch entry in A4 is the 4b Trainer's
    responsibility, not a standalone 4a factory.
 
+## A21: ONNX restricted op surface (Phase 10)
+
+requirements.md N1 (ONNX parity) delegates to the architecture
+phase: "The architecture phase enumerates the restricted PyTorch op
+surface the backbone is allowed to use; ops outside the surface are
+caught by a static-analysis check in the deploy job." This
+discharges that forward reference. The set below is derived by
+STATIC ANALYSIS of the modules the exported graph traces (the
+two-step `torch.export(strict=False)` + `torch.onnx.export(
+dynamo=True, opset_version=20)` of `_OnnxForward`, i.e.
+`head(backbone(batch))`), NOT by running an export. Phase 10's
+`tests/deploy/test_restricted_op_surface.py` copies this set
+verbatim into `ONNX_SAFE_OPS` and asserts the exported graph's
+op_type set (recursing subgraphs) is a subset; growth requires a
+deliberate edit here and in that test.
+
+Permitted ONNX op_types:
+
+`{Add, Sub, Mul, Div, Pow, Sqrt, MatMul, Gemm, LSTM, Softmax,
+Sigmoid, Tanh, Elu, Erf, ReduceMean, ReduceSum,
+LayerNormalization, Gather, GatherND, GatherElements,
+ArgMax, Range, Greater, GreaterOrEqual, Less, Where, Expand, Cast,
+Concat, Slice, Reshape, Transpose, Squeeze, Unsqueeze, Shape,
+Constant, ConstantOfShape, Identity, Flip, Neg, Equal, And, Not,
+IsNaN, IsInf, Mod, Split}`
+
+Per-op static-analysis provenance (so each entry is auditable;
+verified against the actual exported graph in Phase 10 - the static
+guess mis-named some ONNX ops, e.g. `chunk` lowers to `Split` not
+`Slice`, and the rank-3 `gather`/scatter lowers to BOTH `GatherND`
+and `GatherElements` (form-dependent) but never `ScatterElements`,
+which is the kind of discrepancy the deploy test is designed to
+surface and which is reconciled here, NOT by silently widening to
+an unknown op):
+- `nn.Linear` -> `Gemm`/`MatMul`/`Add`; `nn.LayerNorm` ->
+  `LayerNormalization`; `nn.Embedding` -> `Gather`; `nn.LSTM` ->
+  `LSTM` (the gather-preserving export path keeps the eager
+  `nn.LSTM`, only the `pack_padded_sequence` wrapper is dropped).
+- GLU/GRN/VSN/AddNorm blocks -> `Sigmoid`/`Tanh`/`Elu`/`Mul`/
+  `Add`/`Split`(`chunk`)/`Softmax`/`ReduceSum`/`Reshape`/`Expand`/
+  `Concat`/`Unsqueeze`/`Cast`/`Not`/`Slice`.
+- Interpretable attention (`_interpretable_attention.py:90-96`,
+  the export path; the SDPA fast path is NOT used) ->
+  `MatMul`/`Transpose`/`Div`/`Sqrt`/`Where`(masked_fill)/`Softmax`/
+  `ReduceMean`; `torch.nan_to_num` (UNCONDITIONAL on the export
+  path) -> `IsNaN`/`IsInf`/`Where` (it sanitizes NaN AND +/-inf).
+- `_run_lstm` export path (no `argsort`/`sort`: the F3 left-pad
+  stable valid-first permutation is the modular ROLL
+  `(arange + (L - lengths)) % L`) -> `Range`/`Add`/`Sub`/`Mod`,
+  rank-3 `gather`/scatter -> `GatherND`/`GatherElements`, `Not`/`Cast`
+  (`~mask`/`.int`), `ReduceSum` (`lengths`).
+- `_readout` -> `Flip` (`valid.flip`), `ArgMax`, `Gather`,
+  `ReduceSum`/`Div` (mean_pool).
+- DELIBERATELY EXCLUDED (their appearance is the regression the
+  deploy test must catch): `ScaledDotProductAttention`, `Attention`
+  (the SDPA path is off the export graph), `Loop`, `If`, `Scan`
+  (the strict=False guard-specialization erases the data-dependent
+  control flow), `NonZero`.
+
 ## Addressed
 
 Round 1 (design-review swarm):

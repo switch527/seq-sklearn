@@ -386,12 +386,24 @@ All classifier and regressor classes expose the same methods:
 - `save(path)` and `load(path)` for safetensors + JSON serialization
   (the two-file directory format described in F4; no pickle in the
   public artifact).
-- `export_onnx(path)` for ONNX export via `torch.onnx.export(dynamo=True)`
-  at opset 20. The dependency on `onnx` and `onnxruntime` lives in an
-  optional extra (`pip install seq-sklearn[onnx]`). Attention export
-  uses the math backend of `F.scaled_dot_product_attention` selected
-  via `torch.nn.attention.sdpa_kernel(SDPBackend.MATH)`; the fused
-  flash and mem-efficient backends do not export to ONNX cleanly.
+- `export_onnx(path, X)` for ONNX export via the two-step
+  `torch.export.export(strict=False)` then
+  `torch.onnx.export(dynamo=True)` at opset 20. The dependency on
+  `onnx` and `onnxruntime` lives in an optional extra
+  (`pip install seq-sklearn[onnx]`). The exported graph is the model
+  forward only (backbone + head, raw logits); calibration,
+  thresholding and the F1 caller-row-order restore are sklearn-side
+  numpy, not in the graph. The TFT backbone's predict/export forward
+  uses the interpretable manual-softmax attention
+  (`forward_interpretable`), NOT `F.scaled_dot_product_attention`,
+  so it is inherently ONNX-safe; the export is still wrapped in
+  `torch.nn.attention.sdpa_kernel(SDPBackend.MATH)` as
+  defense-in-depth (a no-op for the dominant attention, covering any
+  incidental SDPA in a submodule). The flash and mem-efficient SDPA
+  backends do not export cleanly, which is why the SDPA fast path is
+  off the export graph by construction. Enforcement is the
+  architecture A21 restricted-op-surface allowlist plus the deploy
+  static-analysis test, not the SDPA backend selection.
 - `predict_with_attention(X)` (or `predict_with_states(X)` for recurrent
   models) (**BETA**, see stability tiers) returning the prediction plus
   model-introspection outputs as a frozen dataclass with attribute
@@ -1699,17 +1711,23 @@ per-phase rosters govern precise per-phase release-gate timing.
   `seq_sklearn_version` in the checkpoint metadata to a fake older
   value, reload, assert a single `UserWarning` whose message contains
   "version mismatch" and both versions.
-- **ONNX parity.** Export via `torch.onnx.export(dynamo=True)`, load
-  in onnxruntime, predict on a fixed batch including a masked
-  variable-length entity, assert agreement within `atol=1e-4` with
-  the PyTorch path. The target opset is 20 (matches F1). Attention
-  is exported via the math backend of
-  `F.scaled_dot_product_attention` selected through
-  `torch.nn.attention.sdpa_kernel(SDPBackend.MATH)`; the flash and
-  mem-efficient backends do not export to ONNX cleanly. The
-  architecture phase enumerates the restricted PyTorch op surface
-  the backbone is allowed to use; ops outside the surface are caught
-  by a static-analysis check in the deploy job.
+- **ONNX parity.** Export via the two-step
+  `torch.export.export(strict=False)` then
+  `torch.onnx.export(dynamo=True)`, load in onnxruntime, predict on
+  a fixed batch including a masked variable-length entity, assert
+  agreement within `atol=1e-4` with the PyTorch path. The target
+  opset is 20 (matches F1). The backbone's export forward uses the
+  interpretable manual-softmax attention, not
+  `F.scaled_dot_product_attention`, so it is inherently ONNX-safe;
+  the export is wrapped in
+  `torch.nn.attention.sdpa_kernel(SDPBackend.MATH)` as a no-op
+  defense-in-depth (the flash and mem-efficient backends do not
+  export cleanly, which is why the SDPA fast path is kept off the
+  export graph). The restricted PyTorch op surface the backbone is
+  allowed to use is enumerated in architecture A21 (discharged in
+  Phase 10 by static analysis of the backbone/head/attention
+  modules); ops outside it are caught by the deploy static-analysis
+  test `tests/deploy/test_restricted_op_surface.py`.
 - **Unseen-category robustness.** Fit encoder on `{A, B}`, predict on
   a panel with `{A, C}`, assert `C` maps to the `<unk>` index without
   raising.

@@ -63,6 +63,8 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: "3.14"
+      - name: Sync with dev + onnx extras
+        run: uv sync --extra dev --extra onnx
       - name: Build wheel
         run: uv build --wheel
       - name: Install wheel in a clean venv
@@ -71,7 +73,12 @@ jobs:
           source .venv-deploy/bin/activate
           uv pip install dist/*.whl
           python -c "import seq_sklearn; print(seq_sklearn.__version__)"
-      - run: uv run pytest tests/deploy/ -m "deploy" || echo "tests/deploy/ empty in Phase 0; skipping"
+      # Phase 10: the deploy/onnx gate is live. The wheel test consumes
+      # the wheel just built (SEQ_SKLEARN_WHEEL) instead of rebuilding.
+      - name: Deploy + ONNX gate
+        run: |
+          export SEQ_SKLEARN_WHEEL="$(ls dist/*.whl | head -1)"
+          uv run pytest tests/deploy/ tests/integration/test_onnx_parity.py -m "deploy or onnx"
 
   docs:
     runs-on: ubuntu-latest

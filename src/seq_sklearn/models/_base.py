@@ -46,7 +46,12 @@ from seq_sklearn.data.splits import (
     window_time_index,
 )
 from seq_sklearn.data.tabular_to_sequence import TabularToSequence
-from seq_sklearn.errors import ConfigError, DataContractError, NotFittedError
+from seq_sklearn.errors import (
+    ConfigError,
+    DataContractError,
+    NotFittedError,
+    OnnxExportError,
+)
 from seq_sklearn.models._backbone import BackboneOutput
 from seq_sklearn.serialization import (
     CURRENT_SCHEMA_VERSION,
@@ -576,6 +581,97 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
             else None
         )
         return obj
+
+    def export_onnx(self, path: str | Path, X: pd.DataFrame) -> None:  # noqa: N803
+        """Export the fitted model FORWARD to ONNX (F1, BETA).
+
+        The exported graph is backbone + head producing RAW HEAD
+        LOGITS ``(B, K)`` only. Calibration, threshold tuning,
+        below-floor NaN-fill, and the F1 caller-input-row-order
+        restore are sklearn-side numpy post-processing applied by
+        ``predict`` / ``predict_proba`` / ``predict_quantiles`` and are
+        deliberately NOT in the ONNX graph. To reproduce
+        ``predict_proba`` from the ONNX output, apply sigmoid/softmax
+        and the fitted calibration in the serving layer.
+
+        The graph trusts its inputs: the eager input-validation guards
+        (non-finite, embedding-index bounds, left-pad contract,
+        all-padding row) are SKIPPED on the export path via the
+        backbone's ``onnx_export`` flag (set ``True`` only on
+        ``_OnnxForward``'s private deepcopy of the backbone, never on
+        the shared instance), since ONNX has no exception
+        mechanism. Validation remains the responsibility of the eager
+        ``predict`` path (where the flag is False and every guard
+        runs) and the caller.
+
+        Dynamic batch ``B`` is supported; the time dimension is the
+        fit-time constant ``lookback``. ``X`` is required (a fitted
+        ``TabularToSequence`` schema-valid panel; one window per row
+        is emitted, mirroring ``predict``).
+
+        Args:
+            path: destination ``.onnx`` file path.
+            X: a schema-valid panel; its ``transform`` supplies the
+                example inputs (include a short, left-padded entity to
+                trace the mask path).
+
+        Raises:
+            NotFittedError: called before ``fit``.
+            OnnxExportError: the optional ``[onnx]`` extra is absent,
+                or ``torch.export`` / ``torch.onnx.export`` could not
+                lower the model.
+        """
+        self._check_fitted()
+        import importlib
+
+        try:
+            # Dynamic import: presence-check the optional [onnx] extra
+            # while preserving the ImportError as __cause__ (a unit
+            # test pins the message + __cause__). String import keeps
+            # pyright/ruff clean without the extra installed.
+            importlib.import_module("onnx")
+            importlib.import_module("onnxruntime")
+        except ImportError as e:
+            raise OnnxExportError(
+                "ONNX export requires the optional extra: pip install seq-sklearn[onnx]"
+            ) from e
+
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+
+        from seq_sklearn.inference.onnx import _OnnxForward
+
+        backbone, head = self._predict_module()
+        batch = self.transformer_.transform(X)
+        args = (
+            batch["static_categorical"],
+            batch["static_real"],
+            batch["time_varying_real"],
+            batch["time_varying_categorical"],
+            batch["padding_mask"],
+        )
+        # _OnnxForward deepcopies backbone/head and sets onnx_export
+        # only on its private clone, so the trace captures the
+        # gather-preserving path while the shared backbone the
+        # estimator predicts with is never mutated (thread-safe).
+        module = _OnnxForward(backbone, head)
+        batch_dim = torch.export.Dim("batch")
+        dynamic_shapes = ({0: batch_dim},) * 5
+
+        try:
+            with sdpa_kernel([SDPBackend.MATH]), torch.no_grad():
+                exported = torch.export.export(
+                    module, args, dynamic_shapes=dynamic_shapes, strict=False
+                )
+                torch.onnx.export(
+                    exported,
+                    args,
+                    str(path),
+                    dynamo=True,
+                    opset_version=20,
+                    external_data=False,
+                )
+        except Exception as e:
+            raise OnnxExportError(f"ONNX export failed during lowering: {e}") from e
 
     def _predict_module(self) -> tuple[nn.Module, nn.Module]:
         """The (backbone, head) pair to predict with (fitted or loaded)."""
