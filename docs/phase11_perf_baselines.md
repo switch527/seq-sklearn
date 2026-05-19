@@ -124,10 +124,23 @@ TFT train/predict path through the public estimator API.
   ARE resettable, but the child keeps CPU and CUDA paths symmetric and
   isolated). The JSON records the metric name actually gated per cell
   so a CPU/GPU mix is explicit, never silently comparing RSS to CUDA
-  bytes. `test_peak_memory_payload_runs_in_child_process` (a
-  `perf`-marked PG.4 test) asserts the measured value comes from a
-  distinct PID, so a regression that inlines the payload back into the
-  pytest process (reintroducing the contamination) fails.
+  bytes. The child returns a small record over the `Queue`:
+  `{value, peak_memory_metric, pid, start_method}` where
+  `start_method` is the child's `multiprocessing.get_start_method()`.
+  The parent does a BLOCKING `Queue.get(timeout=...)` (a pinned
+  `PEAK_MEM_CHILD_TIMEOUT_S` constant) and treats an empty queue /
+  timeout / non-zero child exitcode as a hard test failure
+  ("peak-memory child did not return"), never a silent skip
+  (post-Gemini qa-I1: a crashed/OOM-killed child must fail loudly,
+  not hang or pass vacuously). `test_peak_memory_payload_runs_in_child_process`
+  (a `perf`-marked PG.4 test) asserts (i) the queue record is present
+  (child completed), (ii) `pid != os.getpid()` (a regression that
+  inlines the payload back into the pytest process fails), AND (iii)
+  `start_method == "spawn"` (post-Gemini qa-I1: on Linux the default
+  context is `fork`; a regression from `get_context("spawn")` to the
+  default keeps the PID distinct but silently reinherits the parent
+  heap into `ru_maxrss`, so the PID check alone is insufficient and
+  the start-method must be pinned explicitly).
 - **PB.3 `test_inference_latency.py`** measures per-sample inference
   latency on a batch of 1024 windows (the N7 latency reference size),
   reported as median and P95 over a fixed repeat count, measured
@@ -457,21 +470,29 @@ and the gate's correctness offline, deterministic, and fast.
 - **PG.5 `conftest.py` fixture guard (I3; corrected per
   Gemini-IMPROVEMENT).** The session-scoped perf fixture ENABLES
   determinism then asserts it: it calls the library's strict-mode
-  entrypoint (`seq_sklearn.training.enable_strict_mode()`, the same
-  one the determinism config path uses) and ONLY THEN asserts
+  entrypoint and ONLY THEN asserts
   `torch.are_deterministic_algorithms_enabled() is True`, raising
-  `RuntimeError` if the assert fails. The earlier wording asserted the
-  flag without anyone setting it, which (Gemini noted) would crash
-  every perf run unconditionally since nothing in the plan turned
-  determinism on before the assert. Enabling-then-asserting both
-  guarantees PA.2's "determinism ON for every perf run" and still
-  fails loudly if `enable_strict_mode` itself regresses.
-  `tests/perf/conftest.py` does its `import torch` AND its
-  `from seq_sklearn.training import enable_strict_mode` INSIDE the
-  fixture function body, NOT at module level (qa R4-I2 + Gemini-C2:
-  `seq_sklearn.training` also pulls torch transitively), so importing
-  the conftest module to introspect the fixture does not pull torch;
-  PG.3 check (b) pins this. The fixture is `autouse=False` and explicitly
+  `RuntimeError` if the assert fails. The import path is
+  `from seq_sklearn.training._determinism import enable_strict_mode`
+  (post-Gemini arch-I: `seq_sklearn/training/__init__.py` has an
+  empty `__all__` and does NOT re-export the symbol;
+  `enable_strict_mode` is defined at
+  `src/seq_sklearn/training/_determinism.py:21`; the
+  `_determinism` direct import is exactly how `trainer.py:47` reaches
+  it, zero source change, lower blast radius than adding a
+  re-export). The earlier wording asserted the flag without anyone
+  setting it, which (Gemini noted) would crash every perf run
+  unconditionally since nothing in the plan turned determinism on
+  before the assert. Enabling-then-asserting both guarantees PA.2's
+  "determinism ON for every perf run" and still fails loudly if
+  `enable_strict_mode` itself regresses. `tests/perf/conftest.py`
+  does its `import torch` AND its
+  `from seq_sklearn.training._determinism import enable_strict_mode`
+  INSIDE the fixture function body, NOT at module level (qa R4-I2 +
+  Gemini-C2: `seq_sklearn.training._determinism` module-imports torch
+  at `_determinism.py:12`), so importing the conftest module to
+  introspect the fixture does not pull torch; PG.3 check (b) pins
+  this. The fixture is `autouse=False` and explicitly
   requested only by the `perf`-marked workload tests (qa R3-I4): a
   session `autouse` fixture would run torch at the start of the fast
   PR suite and violate the PC.1a no-torch boundary for the non-`perf`
@@ -524,17 +545,24 @@ and the gate's correctness offline, deterministic, and fast.
   hard-gates latency is caught.
 - **PG.10 `test_all_three_perf_tests_collected`** (Gemini-C1
   regression guard, NON-`perf`-marked so it runs in the fast suite
-  via pytest collection only, no benchmark execution): use
-  `pytest.main(["--collect-only", "-q", "-m", "perf",
-  "tests/perf/"])` (or the `pytester`/`Config` collection API) and
-  assert the collected node ids include all three of
-  `test_train_step_time`, `test_peak_memory`,
-  `test_inference_latency`. A second assertion runs the same
-  collection WITH `--benchmark-only` and asserts it collects FEWER
-  than three (documenting WHY the flag is forbidden in PF.1/PF.2:
-  the test is the executable proof that `--benchmark-only` silently
-  drops PB.2/PB.3). Collection-only, so it neither builds the proxy
-  nor imports torch.
+  via pytest collection only, no benchmark execution): use the
+  `pytester` plugin (or `pytest.main(["--collect-only", "-q", "-m",
+  "perf", "tests/perf/"])`) and assert the collected node ids include
+  all three of `test_train_step_time`, `test_peak_memory`,
+  `test_inference_latency`. This single positive assertion IS the
+  load-bearing regression guard: it fails if any of the three loses
+  its `perf` marker or its file is renamed, which is the exact
+  Gemini-C1 silent-drop. The earlier proposed second assertion
+  (collect WITH `--benchmark-only`, expect fewer than three) is
+  RETRACTED (post-Gemini qa-I2): `pytest-benchmark`'s
+  `--benchmark-only` filters at the RUN phase (it skips non-`benchmark`
+  -fixture tests at execution), not at collection, so under
+  `--collect-only` it may still collect all three and the assertion
+  would be mechanistically false / flaky. WHY `--benchmark-only` is
+  forbidden in PF.1/PF.2 is instead documented as a one-line code
+  comment in the test referencing PB.1's run-phase rationale, not a
+  mechanically asserted clause. Collection-only, so PG.10 neither
+  builds the proxy nor imports torch.
 
 ## Resolved questions (round 1)
 
@@ -693,10 +721,13 @@ audit-level gaps:
   - qa R3-I2: `test_unset_env_defaults_to_warn` pins
     `provisional=False` + matching metric so the no-raise is reached
     via mode dispatch, not a short-circuit.
-  - qa R3-I3: PG.3 boundary test now also calls the resolver
-    (monkeypatched `detect()==CPU`) in the subprocess, exercising the
-    resolver's internal lazy-import contract, not just the module
-    boundary.
+  - qa R3-I3: [SUPERSEDED by Gemini-C2, see "Gemini final-pass
+    report" below] originally added a subprocess resolver call to
+    PG.3; that construction was RETRACTED because
+    `seq_sklearn.hardware:14` module-imports torch, making a
+    torch-free resolver call impossible. PG.3 is now split into a
+    boundary test that never calls the resolver and an in-process
+    `test_cell_resolver_branch_logic`.
   - qa R3-I4: PG.5 fixture stated `autouse=False`, perf-requested
     only; `test_perf_fixture_not_autouse` pins it so the PC.1a
     boundary cannot silently regress.
@@ -818,3 +849,46 @@ prior round-1..4 + confirming consensus stands for everything Gemini
 did not touch; the re-review is scoped to the C1/C2/C3/IMPROVEMENT/
 NITPICK revisions (PB.1, PB.2, PC.1a, PC.2, PF.1, PF.2, PG.3, PG.5,
 PG.10).
+
+## Post-Gemini re-review round (Claude swarm)
+
+architecture 0C/1I/1N, qa 0C/2I/1N, style 0/0/0 APPROVE. Zero
+CRITICAL: all three Gemini CRITICALs verified correctly and
+completely closed, no new layering/import/data-flow violation. The
+IMPROVEMENTs were valid doc-precision defects in the Gemini fixes
+themselves, all addressed:
+
+- Addressed (IMPROVEMENT):
+  - arch-I: PG.5 named `seq_sklearn.training.enable_strict_mode`,
+    but `seq_sklearn/training/__init__.py` has an empty `__all__`;
+    the symbol is at `_determinism.py:21`. Repointed to
+    `from seq_sklearn.training._determinism import enable_strict_mode`
+    (matches the `trainer.py:47` precedent, zero source change).
+    Conftest lazy-import + Gemini-C2 torch-transitivity note
+    repointed to `_determinism.py:12` accordingly.
+  - qa-I1: PG.4/PB.2 PID-distinctness test did not pin the
+    `multiprocessing` start method; on Linux the default is `fork`,
+    which reinherits the parent heap into `ru_maxrss` while keeping
+    the PID distinct. The child now returns `start_method` (and the
+    parent fails loudly on empty queue / timeout / nonzero exitcode);
+    PG.4 asserts queue-present + distinct PID + `start_method ==
+    "spawn"`.
+  - qa-I2: PG.10's second assertion (collect with `--benchmark-only`,
+    expect < 3) was mechanistically uncertain (`--benchmark-only`
+    filters at run phase, not collection). Retracted; the positive
+    "all three collected under `-m perf`" assertion is the
+    load-bearing guard, the `--benchmark-only` rationale moved to a
+    code comment.
+- Addressed (NITPICK):
+  - arch-NIT / qa-N1: the round-3 tracking entry for qa R3-I3 (which
+    described the now-retracted subprocess resolver call) is marked
+    SUPERSEDED-by-Gemini-C2 so an implementer reading the ledger
+    cannot implement the retracted construction. style NITPICK: none
+    (style 0/0/0).
+
+POST-GEMINI CONSENSUS REACHED. The Gemini design final-pass found 3
+CRITICAL + 1 IMPROVEMENT + 1 NITPICK (all valid, all addressed); the
+mandatory follow-up Claude `/design-review` round on the revised
+plan returned zero CRITICAL with every IMPROVEMENT resolved (arch +
+qa + style). The Phase 11 plan is FINAL and cleared for S6
+implementation. NITPICKs permitted to remain per the consensus rule.
