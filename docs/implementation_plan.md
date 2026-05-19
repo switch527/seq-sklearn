@@ -110,8 +110,8 @@ runs an empty test suite green.
 - `.github/workflows/pr.yml` (lint, type, test-unit, test-deploy,
   docs, snapshot-guard jobs per A19; tests jobs are no-ops until
   Phase 1 lands real tests; the docs job is a no-op script until
-  Phase 12 lands `mkdocs.yml`, then flips to `mkdocs build
-  --strict`).
+  Phase 12 flips it to `sphinx-build -W` (HTML + `-b doctest`); the
+  Sphinx stack is ratified, see Phase 12).
 - `.github/workflows/nightly.yml` skeleton per A19.
 - `scripts/check_snapshots.sh` per A14.
 - `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`,
@@ -1306,28 +1306,33 @@ contrived 20% slowdown.
 
 **Modules**:
 
-- `mkdocs.yml` with the A12 plugin recipe (`griffe-pydantic`,
-  `mkdocs-material`, `mkdocs-gen-files`, `mkdocs-literate-nav`,
-  `mkdocs-section-index`).
-- `docs/index.md` (rewritten from README quickstart).
-- `docs/observability.md` (F11 event-payload reference).
-- `docs/guides/`: getting_started, panel_data, calibration,
-  optuna_search, hardware_and_precision per A12.
-- `docs/examples/optuna_search.py`,
-  `docs/examples/mlflow_search.py` (F7 and F11 references).
-- `docs/api/`: auto-generated via mkdocstrings; the literate-nav
-  index drives the table of contents.
+- `docs/conf.py` extended to the A12 Sphinx recipe (numpydoc +
+  autosummary + intersphinx + `sphinx.ext.doctest` + autodoc-pydantic
+  + sphinx-gallery + sphinx-copybutton + sphinx-sitemap + myst), the
+  Sphinx stack ratified at Phase 12 R1 (NOT mkdocs; see
+  `docs/phase12_docs_release.md` P-0).
+- `docs/index.md` (value prop + above-the-fold quickstart, embedding
+  `examples/quickstart.py` by `literalinclude`).
+- `docs/reference/observability` (F11 event-payload reference).
+- Diátaxis `tutorial/ how-to/ reference/ explanation/ about/ design/`
+  trees per A12 and the Phase 12 plan.
+- `docs/examples/` sphinx-gallery (executed `.py`, incl. the F7/F11
+  references), curated small set, CPU + `max_epochs=1`.
+- `docs/reference/`: API via autosummary + numpydoc; config via
+  autodoc-pydantic.
 - `README.md` rewritten with the one-screen quickstart that
-  `tests/e2e/test_quickstart.py` imports.
+  `tests/e2e/test_quickstart.py` imports (AST-equivalent to
+  `examples/quickstart.py`'s `run_quickstart` body).
 - `CHANGELOG.md` updated with the v1.0.0 entry.
-- The `mkdocs build --strict` job in the PR workflow turns from a
-  skeleton into a real gate.
+- The `pr.yml` docs job turns from a no-op into a real
+  `sphinx-build -W` gate (HTML + `-b doctest`).
 
 **Dependencies**: Phases 1-11.
 
-**Deliverable tests**: `mkdocs build --strict` exits 0; the
-docstring-examples test (`pytest --doctest-modules src/seq_sklearn/`
-per N1) passes; the quickstart in CI passes.
+**Deliverable tests**: `sphinx-build -W --keep-going` exits 0; the
+`-b doctest` pass exits 0; the docstring-examples test
+(`pytest --doctest-modules src/seq_sklearn/` per N1) passes; the
+quickstart in CI passes.
 
 **Release checklist step (criterion 9, N7 absolute budgets)**: run
 `pytest -m "gpu and slow" tests/perf/test_n7_absolute.py` once on an
@@ -1337,10 +1342,10 @@ criterion 9 (`docs/requirements.md`); it is intentionally excluded
 from PR and nightly CI (the N7 reference workload exceeds the CI
 envelope) and is owned here, not by Phase 11's relative gate.
 
-**Done when**: the docs site renders, the API reference shows the
-pydantic field tables via griffe-pydantic, and the release
-checklist (acceptance criteria 1-11 in requirements, including the
-criterion-9 N7-absolute step above) is complete.
+**Done when**: the docs site renders under `sphinx-build -W`, the
+API reference shows the pydantic field tables via autodoc-pydantic,
+and the release checklist (acceptance criteria 1-11 in requirements,
+including the criterion-9 N7-absolute step above) is complete.
 
 ## Future-proofing for v2 / v3
 
@@ -1452,10 +1457,12 @@ The phases above lock contracts that v2 and v3 inherit unchanged:
   states the upstream callback is not shipped and why. No code
   enforcement is feasible because the user's Trainer is theirs to
   configure; the protection is documentation.
-- **R8: docs build flakiness from `griffe-pydantic` 1.3 rendering
-  of `Mapping[str, int]`** (Phase 12). Mitigation: A20 item 4
-  tracks the verification; the docs job runs `mkdocs build
-  --strict` and a render regression fails CI.
+- **R8: docs build flakiness from `autodoc-pydantic` rendering
+  of `Mapping[str, int]`** (Phase 12; reconciled to the Sphinx
+  stack, R1). Mitigation: A20 item 4 tracks the verification; the
+  docs job runs `sphinx-build -W` and the Phase 12
+  `test_autodoc_pydantic_field_tables_rendered` fails CI on a render
+  regression.
 
 ## PR workflow per phase
 
@@ -1599,10 +1606,10 @@ Round 1 (design-review swarm):
   `RecurrentSequenceEstimator` (abstract class), `config/recurrent.py`,
   and the compose test from Phase 7 to Phase 6 so the cross-family
   contract locks before TFT specifics land.
-- **Phase 0 docs CI job had no `mkdocs.yml` until Phase 12 (arch
-  r1-I9).** Phase 0 entry now notes the docs job is a no-op script
-  until Phase 12 lands the config, at which point it flips to
-  `mkdocs build --strict`.
+- **Phase 0 docs CI job is a no-op until Phase 12 (arch r1-I9;
+  reconciled to Sphinx, Phase 12 R1).** Phase 0 entry notes the docs
+  job is a no-op script until Phase 12 flips it to
+  `sphinx-build -W` (HTML + `-b doctest`).
 - **`strict_mode_globals` autouse fixture deferred to Phase 9 but
   required in Phase 4 (qa r1-I1).** Moved to Phase 4's local
   `tests/unit/training/conftest.py`.

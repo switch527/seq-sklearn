@@ -1901,7 +1901,7 @@ version; macOS and Windows nightly-only.
 2. `pyright` strict mode
 3. `pytest -m "not slow and not perf and not gpu"` with coverage gates
 4. `pytest tests/deploy/` (wheel-install smoke)
-5. Documentation build (mkdocs or sphinx, decided in architecture phase)
+5. Documentation build (`sphinx-build -W`; Sphinx stack, Q12/Q16)
 
 **Nightly workflow.** Full suite including `slow`, `perf`, and the
 macOS/Windows matrix. GPU tests run when a self-hosted runner is
@@ -2432,7 +2432,9 @@ Round 1 (design-review swarm):
   architecture phase. N1's pinning to opset 17 and the note about the
   math backend of scaled_dot_product_attention narrow the surface;
   the full op list is an implementation detail.
-- **Q12** (mkdocs vs. sphinx): OPEN, decided in architecture phase.
+- **Q12** (mkdocs vs. sphinx): RESOLVED to Sphinx (see open-question
+  12 / 16; user-ratified Phase 12 R1, superseding the interim mkdocs
+  resolution).
 - **Q15** (perf-benchmark baseline hardware cells): OPEN, decided
   when CI infra lands.
 - **Architecture-reviewer I6** (quantiles validator location): minor
@@ -2581,9 +2583,14 @@ brief under `docs/research/`):
   `safetensors>=0.5`, `mkdocs<2` after hostile 2.0 rewrite). Upper-bound
   policy amended to allow preemptive caps in three named cases.
   Sources: every doc under `docs/research/`.
-- **Q12 (docs toolchain) RESOLVED.** mkdocs + mkdocs-material +
-  mkdocstrings + griffe-pydantic. Critical pin `mkdocs<2`. Source:
-  `docs/research/mkdocstrings.md`.
+- **Q12 (docs toolchain) RESOLVED.** Sphinx + numpydoc +
+  autosummary/autodoc + sphinx-gallery, PyData Sphinx Theme, Read
+  the Docs (autodoc-pydantic for pydantic v2 field tables). The
+  earlier mkdocs + mkdocstrings + griffe-pydantic resolution was
+  SUPERSEDED, user-ratified at Phase 12 design-review R1 for
+  sklearn/time-series peer-cluster adoption credibility. See
+  open-question 12/16, architecture A12,
+  `docs/readme_and_docs_plan.md`.
 
 Gemini final pass (cross-family review on requirements doc):
 

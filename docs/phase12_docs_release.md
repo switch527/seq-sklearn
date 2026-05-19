@@ -42,18 +42,35 @@ finding in `docs/docs_strategy_research.md` (RS-Cn / RS-Dn / RS-Sn).
   in the docs job; (c) `docs/examples/*.py` executed at build by
   `sphinx-gallery` (a failing example fails the build). A bounded
   non-executable-block meta-test (PD.4) caps how much can opt out.
-- **R4** The N1 quickstart anti-drift holds WITHOUT fragile
-  verbatim-substring matching (arch-C2: `examples/quickstart.py` is a
-  `def run_quickstart() -> float` consumed by `importlib` in
-  `tests/e2e/test_quickstart.py`; a print-ending flat script it is
-  not). Mechanism: `examples/quickstart.py` is the SINGLE source;
-  `docs/index.md` embeds it by reference via
-  `literalinclude`/`literal-block` (zero drift by construction);
-  `README.md` carries the same code in a fenced block and
-  `test_quickstart_readme_in_sync` asserts the README block is
-  AST-equivalent to the `run_quickstart` body (normalized compare,
-  not whitespace-exact). Two quickstart examples exist and pass in
-  CI (acceptance criterion 10).
+- **R4** The N1 quickstart is the single executable source and
+  cannot silently rot. Ground truth (verified): `README.md:76` is a
+  `## Planned API (not yet released)` section with THREE illustrative
+  python fences and NO working quickstart; `examples/quickstart.py`
+  is a `def run_quickstart() -> float` whose own docstring states
+  "the README snippet is the legible shape; this is the executable
+  form" - so README and the file are INTENTIONALLY not identical and
+  an AST-equivalence test (the R1 attempt) is wrong by the file's own
+  contract (qa R2-C1/C2 corrected). Phase 12 mechanism:
+  - Phase 12 REWRITES `README.md` from "Planned API" stubs into a
+    real one-screen quickstart under a single `## Quickstart`
+    heading (the disambiguator: the anti-drift test targets the
+    first ```` ```python ```` fence after the `## Quickstart`
+    heading, not "the fenced block"; qa R2-C2).
+  - `examples/quickstart.py` stays the SINGLE executable source,
+    N1-tested by `tests/e2e/test_quickstart.py` (unchanged).
+  - `docs/index.md` embeds `examples/quickstart.py` via
+    `literalinclude` (zero drift by construction; the SITE quickstart
+    is the real tested code, strictly better than a legible-only
+    snippet for RS-C1/C2).
+  - `README.md`'s `## Quickstart` fenced block is CI-EXECUTED by the
+    `sphinx.ext.doctest`/snippet mechanism applied to the README
+    (R3), so it cannot rot even though it is the legible shape and
+    not byte-identical to the file. `test_quickstart_readme_block`
+    (PD.4) asserts only that (a) the block exists under `##
+    Quickstart`, (b) it parses, (c) it imports the same public
+    symbols `examples/quickstart.py` uses (a structural contract,
+    NOT AST-equality; respects legible-vs-executable). Two quickstart
+    examples exist and pass in CI (acceptance criterion 10).
 - **R5** Diátaxis four-mode IA (RS-C3): `tutorial/` `how-to/`
   `reference/` `explanation/` `about/` `design/` toctrees, every page
   with exactly one home, dense bidirectional cross-linking via
@@ -128,41 +145,90 @@ NO LONGER deferred. `sphinx-gallery` provides it natively, so v1.0.0
 ships a real rendered, executed gallery (this was the single biggest
 mkdocs caveat; the Sphinx decision removes it).
 
-## P-0: Stack reconciliation (arch-C1, landed in this change set)
+## P-0: Stack reconciliation (arch-C1, enumerated and LANDED)
 
-The Sphinx-vs-mkdocs contradiction the R1 swarm flagged is resolved
-by editing the authoritative docs, not by the plan asserting a
-winner: A12 rewritten to Sphinx; requirements N6/Q12/Q16 + `[docs]`
-extra reconciled; `readme_and_docs_plan.md` marked ratified;
-`docs_strategy_research.md` verdict annotated superseded. The
-existing `docs/conf.py` + `docs/api/generated/*.rst` are kept and
-extended. `docs/_build/` is added to `.gitignore` (a build artifact
-must never be committed; PA.4).
+The R1 swarm flagged the Sphinx-vs-mkdocs contradiction as live in
+main. It is resolved by editing every authoritative spec site, with
+each site enumerated (the R2 arch-C1/C2 lesson: "land, do not
+assert", and enumerate so a re-review can verify). Landed in this
+change set (commit-of-this-revision):
 
-## P-A: Site scaffold (R1 / R2)
+- `docs/architecture.md`: A12 prose (Sphinx recipe + pin list) `:31`
+  Q12-resolution pointer, `:~149` layout (`autosummary`/
+  sphinx-gallery), A18 `[docs]` extra block (was a duplicate stale
+  mkdocs block), A19 CI table (`sphinx-build -W`), A20 item 4 +
+  the Deferred entry (`autodoc-pydantic`). No mkdocs/mkdocstrings/
+  griffe language remains except correct "Sphinx analog of
+  griffe-pydantic" comparisons.
+- `docs/requirements.md`: N6, open-question 12 + 16, the `[docs]`
+  extra pin line, the release-workflow item `:~1904`, the
+  changelog-tail `Q12` entries (`:~2435`, `:~2585`) all reconciled
+  to Sphinx; Q12-OPEN vs Q16-mkdocs no longer contradict.
+- `docs/implementation_plan.md`: Phase 12 Modules + Deliverable
+  tests + Done-when, the Phase 0 `:~113` docs-job note, the R8 risk
+  entry, and the Phase-0 retro entry all reconciled (Phase 12's own
+  R12 grading source is now Sphinx, closing R2 arch-C2).
+- `docs/readme_and_docs_plan.md` marked the ratified stack doc;
+  `docs/docs_strategy_research.md` verdict annotated superseded.
 
-- **PA.1** `docs/conf.py`: extend the existing skeleton to the A12
-  recipe (extensions list, `autosummary_generate=True`,
+A `test_no_mkdocs_residue_in_specs` (PD.4) greps the four spec docs
+for unreconciled `mkdocs`/`mkdocstrings`/`griffe-pydantic` tokens
+(allowing only the explicitly-marked "superseded/analog" mentions
+via an allowlist of line-substrings) so the reconciliation cannot
+silently regress.
+
+The scaffold files (`docs/conf.py`, `pyproject.toml [docs]`,
+`.readthedocs.yaml`, `.gitignore`, `.github/workflows/pr.yml`,
+`docs/conf.py:exclude_patterns`) are NOT spec contradictions, they
+are already Sphinx, but they need concrete Phase-12 deltas; those
+are S6 work, enumerated precisely in P-A so the plan drives them
+rather than asserting them done.
+
+## P-A: Site scaffold (R1 / R2), enumerated S6 deltas
+
+Ground truth (verified): `pyproject.toml:52-59` `[docs]` is ALREADY
+Sphinx (`sphinx>=8.1,<9`, `pydata-sphinx-theme>=0.16,<0.17`,
+`numpydoc>=1.8,<2`, `myst-parser>=4.0,<5`,
+`sphinx-copybutton>=0.5,<0.6`, `sphinx-sitemap>=2.6,<3`).
+`docs/conf.py:24-33` already loads autodoc/autosummary/intersphinx/
+napoleon/numpydoc/myst/copybutton/sitemap. `docs/api/generated/`
+holds 33 UNTRACKED autosummary stubs (regenerated by
+`autosummary_generate`). `.readthedocs.yaml` has
+`fail_on_warning: false` and no version config. `.gitignore` has no
+`docs/_build/` entry (nothing under `docs/_build/` is git-tracked;
+arch R2-I2). The deltas:
+
+- **PA.1** `docs/conf.py`: ADD the three missing A12 extensions
+  (`sphinx.ext.doctest`, `sphinxcontrib.autodoc_pydantic`,
+  `sphinx_gallery.gen_gallery`), `autosummary_generate=True`,
   `numpydoc_show_class_members=False`, autodoc-pydantic field/
-  validator summaries on, the `intersphinx_mapping` for
-  sklearn/numpy/torch/pydantic, `sphinx_gallery_conf` pointing at
-  `docs/examples/`, copybutton, myst-parser, `nitpicky=True` so
-  missing xrefs are warnings `-W` turns to errors).
-- **PA.2** `[docs]` extra in `pyproject.toml` pinned EXACTLY as A12
-  now lists (`sphinx>=8,<9`, `pydata-sphinx-theme>=0.16`,
-  `numpydoc>=1.8`, `sphinx-gallery>=0.18`, `autodoc-pydantic>=2.2`,
-  `sphinx-copybutton>=0.5`, `myst-parser>=4`).
-- **PA.3** Diátaxis toctree (A12 layout): the existing MyST
-  `docs/index.md` becomes the value-prop + quickstart landing; the
-  35 existing `docs/api/generated/*.rst` autosummary stubs move under
-  `reference/`; new `tutorial/ how-to/ explanation/ about/ design/`
-  trees. Root `index.md` toctree wires every page (no orphans).
-- **PA.4** `.gitignore` gains `docs/_build/`; the committed
-  `docs/_build/html/` tree is removed (build output, never tracked).
-- **PA.5** `.readthedocs.yaml`: build config (python version, the
-  `[docs]` extra, `sphinx` builder, `fail_on_warning: true` mirroring
-  the CI `-W` gate) + RTD project versioning (stable / latest). This
-  is R9's versioned hosting; RTD does it natively (no `mike`).
+  validator summary flags, the `intersphinx_mapping`
+  (sklearn/numpy/torch/pydantic), `sphinx_gallery_conf` ->
+  `docs/examples/`, `nitpicky=True`. `sphinx_copybutton`/
+  `sphinx_sitemap`/`myst_parser` already present (no change). The
+  A12 recipe is aligned to keep `sphinx-sitemap` (it is in the real
+  pyproject and aids SEO/adoption; arch R2-C3/N1).
+- **PA.2** `pyproject.toml [docs]`: ADD exactly two pins
+  (`sphinx-gallery>=0.18,<0.19`, `autodoc-pydantic>=2.2,<3`), bounds
+  matching the repo N3 upper-bound convention the existing pins use
+  (arch R2-N1). The other six already match A12; no churn.
+- **PA.3** Diátaxis toctree: the existing MyST `docs/index.md`
+  becomes the value-prop + above-the-fold quickstart landing; the
+  33 (not 35; arch R2-I3) autosummary *targets* are relocated via
+  the `reference/` toctree (the stubs are untracked build output,
+  regenerated, not git-moved); new `tutorial/ how-to/ explanation/
+  about/ design/` trees; root toctree wires every page (no orphans).
+- **PA.4** `docs/conf.py:exclude_patterns` currently EXCLUDES
+  `requirements.md`/`architecture.md`/`implementation_plan.md`/
+  research from the build (arch R2-I1). Phase 12 MOVES those into a
+  `design/` subtree and REMOVES them from `exclude_patterns` so the
+  `design/` quadrant renders with an "internal governance, not user
+  docs" callout (Q3 resolution). `.gitignore` gains `docs/_build/`
+  (arch R2-I2: additive only, nothing committed to remove; the
+  earlier "remove committed _build" wording was wrong).
+- **PA.5** `.readthedocs.yaml`: flip `fail_on_warning: true`
+  (mirrors the CI `-W` gate) and add RTD versioning (stable /
+  latest). R9's versioned hosting, RTD-native (no `mike`).
 
 ## P-B: The four Diátaxis quadrants
 
@@ -248,12 +314,32 @@ must never be committed; PA.4).
     name appear, so a misconfigured autodoc-pydantic that emits an
     empty Fields section fails (qa-C3: `-W` alone does not catch an
     empty-but-valid render).
-  - `test_quickstart_readme_in_sync`: parse the fenced python block
-    in `README.md`, parse `examples/quickstart.py`, assert the
-    README block is AST-equivalent to the `run_quickstart` body
-    (normalized, not whitespace-exact; arch-C2/qa-C4). Fails (not
-    skips) if either is missing. `docs/index` uses `literalinclude`
-    so it cannot drift and needs no test beyond the build.
+  - `test_quickstart_readme_block` (R4, corrected per qa R2-C1/C2):
+    locate the FIRST ```` ```python ```` fence after the `##
+    Quickstart` heading in `README.md` (fails, not skips, if the
+    heading or fence is absent, this is also what forces the
+    "Planned API" -> real-quickstart README rewrite to land);
+    assert the block parses (`ast.parse`) and imports the same
+    public symbols `examples/quickstart.py` imports (structural
+    contract, NOT AST-equality, because the file's own docstring
+    pins README = legible shape != executable form). The block is
+    ALSO executed by the README snippet pass (R3), so legibility
+    does not exempt it from rot-checking. `docs/index` uses
+    `literalinclude` of `examples/quickstart.py` so it is the real
+    tested code and needs no test beyond the build.
+  - `test_no_mkdocs_residue_in_specs` (P-0 guard): grep
+    `docs/architecture.md`, `docs/requirements.md`,
+    `docs/implementation_plan.md`, `docs/readme_and_docs_plan.md`
+    for `mkdocs`/`mkdocstrings`/`griffe-pydantic`; assert every hit
+    is on an allowlist of explicitly-superseded/"Sphinx analog"
+    substrings, so the stack reconciliation cannot silently regress
+    (arch R2-C1).
+  - `test_every_gallery_script_has_max_epochs_1` (qa R2-C3, static
+    pre-execution scan): `ast`-parse every `docs/examples/*.py`,
+    assert each estimator construction passes `max_epochs=1` (or a
+    pinned `_GALLERY_MAX_EPOCHS`), so an over-heavy gallery script
+    is caught BEFORE the build runs it, not only after via the
+    wall-clock `test_doc_snippet_suite_fast`.
   - `test_every_doc_has_a_toctree_home`: assert every `docs/**/*.{md,
     rst}` (excluding `_build`, `design/` hosted-as-is) is reachable
     from a toctree (explicit orphan check complementing `-W`).
@@ -273,6 +359,14 @@ must never be committed; PA.4).
 
 ## P-E: Release readiness (R9 / R11 / R12)
 
+- **PE.0 README rewrite (qa R2-C1, an explicit deliverable, not
+  implied).** `README.md`'s `## Planned API (not yet released)`
+  section (currently three illustrative non-working fences) is
+  rewritten into a real `## Quickstart` with one runnable one-screen
+  example whose code is CI-executed (R3/R4). The "Planned API"
+  framing is removed (v1.0.0 ships the API; it is no longer
+  "planned"). Without this, `test_quickstart_readme_block` fails by
+  construction, which is the intended forcing function.
 - **PE.1** `CHANGELOG.md`: `[Unreleased]` -> `[1.0.0] - <date>` with
   the full Keep-a-Changelog section set, summarizing F1-F11 + N1-N7;
   fresh empty `[Unreleased]` on top. `test_changelog_has_1_0_0_entry`
@@ -295,22 +389,26 @@ must never be committed; PA.4).
   required-status-checks" line (qa-C5, a human-verified repo-settings
   item, not a test).
 
-## P-F: Open questions for the swarm
+## Resolved questions (R2, both reviewers converged)
 
-- **Q1** Keep a separate 15-minute `tutorial/first_classifier` on top
-  of the 30-second `index` quickstart, or one progressive example
-  serving both (FastAPI single-spine; the R1-qa lean was single)?
-- **Q2** `docs/index` and the gallery both surface
-  `examples/quickstart.py` via `literalinclude`/gallery; is that
-  double-surfacing confusing, or correct (hook on index, full run in
-  gallery)?
-- **Q3** Host the large internal design docs (`requirements.md`,
-  `architecture.md`, phase plans) in-site under `design/` (NG1) with
-  a callout, or exclude from the user site entirely and keep
-  repo-only? R1-qa/arch leaned host-with-callout.
-- **Q4** Single docs CI job (one `uv sync`, build + doctest
-  sequential) vs split (parallel, two syncs)? Default single; revisit
-  only if the 5-minute budget is breached.
+- **Q1 RESOLVED** ONE progressive example (FastAPI single-spine): the
+  `index` 30-second hook and `tutorial/first_classifier` are the same
+  canonical `examples/quickstart.py` surfaced at two depths
+  (`literalinclude` on index; the gallery-rendered, narrated run as
+  the tutorial), not two maintained snippets. One executable source,
+  zero drift.
+- **Q2 RESOLVED** Double-surfacing is correct, not confusing: the
+  index is the above-the-fold hook, the gallery is the executed,
+  output-bearing full run. Both point at the one
+  `examples/quickstart.py`; there is nothing to keep in sync.
+- **Q3 RESOLVED** Host the internal design docs in-site under
+  `design/` WITH an "internal governance, not user docs" callout
+  (NG1), conditional on PA.4 removing them from
+  `conf.py:exclude_patterns` (they are currently excluded; the plan
+  now lands that flip).
+- **Q4 RESOLVED** Single docs CI job (one `uv sync --extra docs
+  --extra dev`, then `-b html` and `-b doctest` sequentially); the
+  ~40s build fits the 5-minute budget; revisit only if breached.
 
 ## Risks
 
@@ -394,6 +492,50 @@ REQUEST_CHANGES; style 0/0/0 APPROVE):
   - qa-N3 (CHANGELOG unlinted): PE.1 `test_changelog_has_1_0_0_entry`
     regex guard.
 - Style: APPROVE 0/0/0 (re-graded in R2 against the rewrite).
+
+Round 2 (architecture 3C/4I/2N REQUEST_CHANGES; qa 5-R1-closed +
+3-new-C; style 0/0/1 APPROVE accepted-house-style):
+
+- Addressed (CRITICAL):
+  - arch-C1 (P-0 "landed" was only partial: mkdocs residue in
+    architecture.md A18/A19/`:31`/`:149`/A20.4/Deferred,
+    requirements `:1904`/`:2435`/`:2585`, all of
+    implementation_plan Phase 12): every site now ENUMERATED in P-0
+    and LANDED this revision; `test_no_mkdocs_residue_in_specs`
+    (PD.4) guards regression.
+  - arch-C2 (implementation_plan Phase 12, R12's grading source, was
+    all-mkdocs): reconciled (Modules/Deliverable-tests/Done-when +
+    `:113` + R8 risk + Phase-0 retro).
+  - arch-C3 (PA.1/2/5 misdescribed the real scaffold): P-A rewritten
+    to ground truth, A12 pin list aligned to the real pyproject
+    (keeps `sphinx-sitemap`), deltas are ADD-only and enumerated.
+  - qa R2-C1 (README has no `run_quickstart` body, only "Planned
+    API" stubs): R4 rewritten + PE.0 makes the README
+    Planned-API->Quickstart rewrite an explicit deliverable;
+    `test_quickstart_readme_block` fails-by-construction until it
+    lands.
+  - qa R2-C2 ("the fenced block" ambiguous, README has 3): R4/PD.4
+    disambiguate to the first python fence after `## Quickstart`.
+  - qa R2-C3 (max_epochs prose-only): PD.4
+    `test_every_gallery_script_has_max_epochs_1` static AST scan,
+    pre-execution.
+  - The R1 AST-equivalence anti-drift (itself wrong by the file's
+    legible-vs-executable contract) is RETRACTED; replaced by
+    literalinclude (index, executable) + structural README block
+    test + R3 execution.
+- Addressed (IMPROVEMENT/NITPICK):
+  - arch R2-I1 (conf.py excludes design docs): PA.4 flips
+    `exclude_patterns` so the `design/` quadrant renders.
+  - arch R2-I2 (.gitignore, nothing committed to remove): PA.4
+    additive-only, the wrong "remove committed _build" wording
+    dropped.
+  - arch R2-I3 (33 not 35 stubs, untracked): PA.3 corrected.
+  - arch R2-I4 (pr.yml not enumerated): P-0 names it; PD.3 owns the
+    edit, S6.
+  - arch R2-N1 (pin bounds): PA.2 uses the repo N3 bound convention.
+  - Q1-Q4 resolved in-doc (both reviewers converged).
+- Style: the one R2 NITPICK was accepted house style (inline
+  enumeration hyphens), no change.
 
 Gemini design final-pass: deferred until quota resets; recorded here
 when run (R11).
