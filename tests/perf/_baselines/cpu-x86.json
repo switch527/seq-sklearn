@@ -1,0 +1,14 @@
+{
+  "cell": "cpu-x86",
+  "captured_git_sha": "4ec7ee964166a98567ec758edcacc59087d9d2de",
+  "torch_version": "2.12.0+cu130",
+  "python_version": "3.14.2",
+  "device_name": "cpu",
+  "provisional": false,
+  "train_step_median_s": 10.921403260086663,
+  "train_step_p95_s": 12.018688848987221,
+  "peak_memory_value": 1767408.0,
+  "peak_memory_metric": "ru_maxrss_kb",
+  "inference_latency_median_s": 0.00011828447850348311,
+  "inference_latency_p95_s": 0.00021001871348289578
+}

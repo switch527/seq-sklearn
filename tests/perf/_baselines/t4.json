@@ -1,0 +1,14 @@
+{
+  "cell": "t4",
+  "captured_git_sha": "provisional-unmeasured",
+  "torch_version": "provisional",
+  "python_version": "provisional",
+  "device_name": "Tesla T4",
+  "provisional": true,
+  "train_step_median_s": 0.0,
+  "train_step_p95_s": 0.0,
+  "peak_memory_value": 0.0,
+  "peak_memory_metric": "cuda_max_alloc_bytes",
+  "inference_latency_median_s": 0.0,
+  "inference_latency_p95_s": 0.0
+}
