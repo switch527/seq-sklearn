@@ -1935,10 +1935,13 @@ follow-up.
   | `safetensors` | `>=0.5` | save/load format (F4) |
 
   Optional extras pinned similarly: `onnx>=1.18`, `onnxruntime>=1.21`
-  for `[onnx]`; `sphinx>=8,<9`, `pydata-sphinx-theme>=0.16`,
-  `numpydoc>=1.8`, `sphinx-gallery>=0.18`, `autodoc-pydantic>=2.2`,
-  `sphinx-copybutton>=0.5`, `myst-parser>=4` for `[docs]` (Sphinx
-  stack, Q12/Q16; the prior mkdocs pins are superseded).
+  for `[onnx]`; `sphinx>=8.1,<9`, `pydata-sphinx-theme>=0.16,<0.17`,
+  `numpydoc>=1.8,<2`, `myst-parser>=4.0,<5`,
+  `sphinx-copybutton>=0.5,<0.6`, `sphinx-sitemap>=2.6,<3` (the six
+  live base pins), plus `sphinx-gallery>=0.18,<0.19` and
+  `autodoc-pydantic>=2.2,<3` added by Phase 12 PA.2, for `[docs]`
+  (Sphinx stack, Q12/Q16; capped bounds per the N3 upper-bound
+  policy; the prior mkdocs pins are superseded).
 
 - **Upper-bound policy.** Lower bounds by default; an upper bound is
   added preemptively ONLY when one of (a) a documented breaking

@@ -1502,10 +1502,16 @@ docs = [
 ]
 ```
 
-This is the exact `[project.optional-dependencies] docs` extra in
-`pyproject.toml` (A18); the Phase 12 implementation ADDS only
-`sphinx-gallery` and `autodoc-pydantic` to the already-Sphinx
-scaffold (the rest already match).
+This is the POST-Phase-12 TARGET `[project.optional-dependencies]
+docs` extra. The LIVE `pyproject.toml` (A18) currently carries the
+six base Sphinx pins (`sphinx`, `pydata-sphinx-theme`, `numpydoc`,
+`myst-parser`, `sphinx-copybutton`, `sphinx-sitemap`); Phase 12
+PA.2 ADDS exactly the two remaining (`sphinx-gallery`,
+`autodoc-pydantic`). It is intentionally NOT byte-identical to the
+live file until PA.2 lands; the Phase 12 plan's
+`test_docs_extra_is_target_or_live` guards that this list equals
+the live pyproject extra OR the live-plus-the-two-PA.2-pins, so the
+divergence stays an enumerated intentional state, not drift.
 
 **Pydantic v2 rendering** uses `autodoc-pydantic` (the Sphinx analog
 of griffe-pydantic): dedicated field tables with type / default /
