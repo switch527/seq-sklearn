@@ -1326,6 +1326,17 @@ contrived 20% slowdown.
 - `CHANGELOG.md` updated with the v1.0.0 entry.
 - The `pr.yml` docs job turns from a no-op into a real
   `sphinx-build -W` gate (HTML + `-b doctest`).
+- `src/seq_sklearn/__init__.py` wired to the architecture-A1
+  re-export block (`TFTClassifier`, `TFTRegressor`,
+  `TabularToSequence`/`Config`, `TFTConfig`,
+  `EntityTimeSeriesSplit`, `HardwareTier`/`detect`, the six error
+  classes, `AttentionOutput`/`RegressionAttentionOutput`,
+  `suggest_params`, `optuna_trial_guard`), with `__version__` from
+  `importlib.metadata.version("seq-sklearn")`; `pyproject.toml`
+  version bumped from `0.0.0` to the v1.0.0 release version. This
+  is release-prep that was a Phase-8<->12 seam never owned by any
+  prior phase's tests (see Phase 12 plan R13/PE.4 +
+  `test_public_api_surface`).
 
 **Dependencies**: Phases 1-11.
 
@@ -1610,6 +1621,21 @@ Round 1 (design-review swarm):
   reconciled to Sphinx, Phase 12 R1).** Phase 0 entry notes the docs
   job is a no-op script until Phase 12 flips it to
   `sphinx-build -W` (HTML + `-b doctest`).
+- **Public-API façade (architecture A1 `__all__`) was an unowned
+  seam between Phase 8 and Phase 12 (Phase 12 S6 finding).** Phase 8
+  delivered the functional public classes at their module paths and
+  the Optuna integration, but the literal package-level re-export in
+  `src/seq_sklearn/__init__.py` was never wired (stayed at the
+  Phase-0 placeholder `__all__ = []`, `__version__ = "0.0.0"`). The
+  gap survived 11 phases because nothing in the 95-file suite
+  imported via the façade: tests use the deep module paths,
+  `check_estimator` validates classes handed to it directly,
+  coverage measures lines-executed not surface-correctness, and
+  design-review grades plans not live `src/`. The fix is folded
+  into Phase 12 as release-prep (PE.4 + the owning
+  `test_public_api_surface`), user-ratified at the Phase 12 S6 scope
+  question; no behavior change, re-export only of
+  already-`check_estimator`-passing classes.
 - **`strict_mode_globals` autouse fixture deferred to Phase 9 but
   required in Phase 4 (qa r1-I1).** Moved to Phase 4's local
   `tests/unit/training/conftest.py`.

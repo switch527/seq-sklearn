@@ -127,6 +127,33 @@ finding in `docs/docs_strategy_research.md` (RS-Cn / RS-Dn / RS-Sn).
   passes, the quickstart-in-CI passes, and the release checklist
   (acceptance criteria 1-11, including the criterion-9 step) is
   enumerated with every item mapped to an owning CI job or artifact.
+- **R13 Public-API façade + version (release-prep; the unowned
+  Phase 8<->12 seam, user-ratified into Phase 12).** Ground truth at
+  S6 start: `src/seq_sklearn/__init__.py` is the Phase-0 placeholder
+  (`__all__ = []`, `__version__ = "0.0.0"`); the documented
+  `from seq_sklearn import TFTClassifier` surface does not exist; no
+  test in the 95-file suite imports the façade (every test uses the
+  deep module path), so 11 phases of governance never flagged it
+  (it had no owning test; coverage measures lines-executed not
+  surface-correctness; `check_estimator` validates classes handed to
+  it directly). Phase 12 wires `seq_sklearn/__init__.py` to the
+  EXACT spec-defined surface in architecture A1 (the literal
+  `__all__` block at `docs/architecture.md:240`: `TFTClassifier`,
+  `TFTRegressor`, `TabularToSequence`, `TabularToSequenceConfig`,
+  `TFTConfig`, `EntityTimeSeriesSplit`, `HardwareTier`, `detect`,
+  the six error classes, `AttentionOutput`,
+  `RegressionAttentionOutput`, `suggest_params`,
+  `optuna_trial_guard`), with the matching imports, AND sets the
+  single-sourced version (`pyproject.toml` `version` ->
+  release version; `seq_sklearn.__version__` read via
+  `importlib.metadata.version`, not a hardcoded literal that can
+  drift). This is re-export of already-implemented,
+  already-`check_estimator`-passing classes (no behavior change), and
+  it is what makes R4/R6 (a working quickstart) and a non-`0.0.0`
+  v1 release possible. Scope is EXACTLY the A1 list, not a wider
+  surface; INTERNAL-tier symbols (e.g. `RecurrentSequenceEstimator`,
+  `seq_sklearn._*`) stay absent per the requirements stability
+  tiers.
 
 ## Scope and non-goals
 
@@ -400,8 +427,24 @@ arch R2-I2). The deltas:
     not under an unconditional `pytest.mark.skip` (qa-I4: the
     criterion-9 release step has a real artifact, not just an
     enumerated line).
-
-## P-E: Release readiness (R9 / R11 / R12)
+  - `test_public_api_surface` (R13/PE.4; the owning test the prior
+    11 phases lacked): assert (a)
+    `seq_sklearn.__all__ == _SPEC_PUBLIC_API` where the constant is
+    the literal architecture-A1 list parsed once at test-module
+    scope, sorted compare so reorder is non-fatal, exact set match;
+    (b) every name in `__all__` is a real attribute on
+    `seq_sklearn` AND `getattr(seq_sklearn, name)` is the SAME
+    object as the deep-path import (so the façade re-exports the
+    real symbols, not stubs); (c) `seq_sklearn.__version__` equals
+    `importlib.metadata.version("seq-sklearn")` (single source of
+    truth; rejects a hardcoded drift); (d) no INTERNAL-tier symbol
+    leaked (e.g. `RecurrentSequenceEstimator`,
+    `_GalleryMaxEpochsScanner`, anything `_*`); (e) `from
+    seq_sklearn import TFTClassifier` (and the rest of the list)
+    works without error in a subprocess (via `sys.executable` for
+    venv parity). This test, NOT a phase plan, is what owns the
+    façade going forward, closing the seam that hid PE.4 for 11
+    phases.
 
 - **PE.0 README rewrite (qa R2-C1, an explicit deliverable, not
   implied).** `README.md`'s `## Planned API (not yet released)`
@@ -432,6 +475,25 @@ arch R2-I2). The deltas:
   an explicit "the `docs` PR job is registered in branch-protection
   required-status-checks" line (qa-C5, a human-verified repo-settings
   item, not a test).
+- **PE.4 Public-API façade + version wiring (R13).** Implement the
+  spec-defined re-export block in `src/seq_sklearn/__init__.py`
+  EXACTLY per architecture A1 (`docs/architecture.md:235-251`): the
+  imports of `TFTClassifier`/`TFTRegressor` from their module paths,
+  `TabularToSequence`/`TabularToSequenceConfig`, `TFTConfig`,
+  `EntityTimeSeriesSplit`, `HardwareTier`/`detect`, the six error
+  classes from `seq_sklearn.errors`, `AttentionOutput`/
+  `RegressionAttentionOutput`, `suggest_params`,
+  `optuna_trial_guard`; then `__all__` = that list (the spec
+  literal). `__version__` is read via
+  `importlib.metadata.version("seq-sklearn")` (NOT a hardcoded
+  literal that drifts from `pyproject.toml`); a single source of
+  truth. `pyproject.toml` `version` is bumped from `"0.0.0"` to the
+  v1.0.0 release version at release time (PE.1 records it; the
+  CHANGELOG entry and `__version__` will then match by
+  construction). The classes being re-exported are
+  already-implemented and already pass the Phase-9 N1
+  `check_estimator` suite; PE.4 is re-export + version, no behavior
+  change.
 
 ## Resolved questions (R2, both reviewers converged)
 
