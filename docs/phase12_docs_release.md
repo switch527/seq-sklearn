@@ -435,12 +435,15 @@ arch R2-I2). The deltas:
     delta-N1). Assertions:
     (a) Spec-literal source: `_SPEC_PUBLIC_API` is EXTRACTED from
     `docs/architecture.md` at test-module scope by REGEX over the A3
-    `__all__ = [ ... ]` block (capture between the first `__all__
-    = [` and the matching `]`; strip whitespace/quotes; parse to a
-    set), NOT a hand-typed Python literal (qa delta-C1: a hand-typed
-    copy is what kept the 11-phase drift class open; the spec file
-    is the single source). Assert `set(seq_sklearn.__all__) ==
-    _SPEC_PUBLIC_API`.
+    `__all__` block. The pattern uses tolerant whitespace
+    (`r"__all__\s*=\s*\[(.*?)\]"` with `re.DOTALL`) so future
+    formatting edits to the spec block cannot silently produce an
+    empty set; on a non-matching file the test fails LOUDLY with a
+    parse error, not a silent zero-element compare (qa confirming
+    delta-I1). Strip whitespace/quotes from the captured names;
+    parse to a set. NOT a hand-typed Python literal (qa delta-C1: a
+    hand-typed copy is what kept the 11-phase drift class open).
+    Assert `set(seq_sklearn.__all__) == _SPEC_PUBLIC_API`.
     (b) Every name in `__all__` is a real attribute on
     `seq_sklearn` AND `getattr(seq_sklearn, name) is`
     (identity-compare) the deep-path import, so the façade
@@ -460,8 +463,10 @@ arch R2-I2). The deltas:
     `docs/architecture.md:253-257`) are NOT in
     `seq_sklearn.__all__` AND `getattr(seq_sklearn, name, _MISSING)
     is _MISSING`. Plus a structural rule: every non-underscore,
-    non-dunder attribute of `seq_sklearn` MUST be in `__all__` (no
-    namespace leakage via `getattr` outside the documented surface).
+    non-dunder name in `vars(seq_sklearn)` (NOT `dir`, which
+    surfaces inherited module-type attrs the test does not own)
+    MUST be in `__all__` (no namespace leakage via `getattr` outside
+    the documented surface; qa confirming delta-NIT).
     (e) Subprocess façade execution: in a subprocess via
     `sys.executable` (same venv), `import seq_sklearn` then
     `from seq_sklearn import <each_A3_name>` (one statement per
