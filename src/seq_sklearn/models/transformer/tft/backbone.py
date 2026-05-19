@@ -174,7 +174,7 @@ class TFTBackbone(BaseBackbone):
             # the leading pad block (in order). Identical to the
             # stable-argsort result on left-padded input; only Range/
             # Add/Sub/Mod ops, all ONNX-safe.
-            roll = (seq_len - lengths).to(torch.int64)  # (B,)
+            roll = seq_len - lengths  # (B,); lengths is int64 (bool sum)
             pos = torch.arange(seq_len, device=mask.device)  # (L,)
             order = (pos[None, :] + roll[:, None]) % seq_len  # (B, L)
             inverse = (pos[None, :] - roll[:, None]) % seq_len  # (B, L)

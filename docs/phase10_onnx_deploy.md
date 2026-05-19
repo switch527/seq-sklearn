@@ -590,3 +590,58 @@ GRAPHS-plural subgraph attribute is recursed (synthetic `Sqrt`
 surfaced only via that path). S7 Claude code-review consensus
 REACHED: zero CRITICAL, every IMPROVEMENT resolved, NITPICKs
 optional/closed. Cleared for the S8 Gemini final pass.
+
+## S8 Gemini code final-pass
+
+Gemini @code-reviewer on `git diff 7eee920..HEAD` (the primary model
+429'd then produced a full cited report; path:line citations
+present). Tally: CRITICAL 1 · IMPROVEMENT 0 · NITPICK 1.
+
+### Gemini report (verbatim summary)
+
+- CRITICAL `inference/onnx.py:67-68`: `_OnnxForward` mutates
+  `onnx_export` on the SHARED `self.backbone` returned by
+  `_predict_module()`. A concurrent `predict()` (Thread B) during
+  an `export_onnx` (Thread A) observes `onnx_export==True`, skips
+  the eager validation guards and routes through the ONNX
+  `_run_lstm` trace path: an inference race violating the sklearn
+  read-only post-fit thread-safety contract.
+- IMPROVEMENT `backbone.py:167-180`: CONFIRMS (no change needed) the
+  modular-roll == stable-argsort equivalence for F3 left-pad incl.
+  lengths in {0, 1, L}; no silent divergence from skipping guards on
+  VALID input; PyTorch `%` -> ONNX `Mod` (Euclidean, negative
+  dividend wraps safely).
+- NITPICK `backbone.py:177`: `.to(torch.int64)` redundant (bool
+  `sum()` already int64).
+
+### Claude perspective
+
+- AGREED, CRITICAL is valid and is a genuine cross-family find the
+  same-family S7 swarm missed: S7 reasoned "flag restored in
+  `finally`, shared backbone untouched AFTER the call" but did not
+  consider the DURING-export concurrent-`predict` window. This is
+  the exact Phase 9 G-C1 statefulness-under-concurrent-predict
+  hazard class. Verified against `_base.py:675-679` (`_predict_
+  module` returns the live `self._module.backbone` / `_loaded_
+  backbone`) and `inference/onnx.py` (the wrapper toggled it on that
+  shared instance). FIXED: `_OnnxForward.__init__` now
+  `copy.deepcopy`s backbone+head and sets `onnx_export=True` on the
+  PRIVATE clone permanently; the shared estimator modules are never
+  mutated, so a concurrent `predict()` is unaffected. `forward()`
+  no longer toggles shared state (no try/finally). Export is
+  one-shot, so the deepcopy cost is irrelevant. Parity + op-surface
+  tests stay green (the clone has identical weights).
+- AGREED (corroboration), the IMPROVEMENT is an independent
+  cross-family confirmation of the core modular-roll mechanism and
+  the guard-skip safety (matches code-opus S7-R1's hand-algebra).
+- AGREED, NITPICK applied (`roll = seq_len - lengths`, the cast
+  dropped; removes a redundant ONNX `Cast`).
+- Hallucination note: Gemini cited `architecture.md:549-550` for the
+  read-only thread-safety contract; that exact line is a config
+  field, but the contract itself is real (the Phase 9 G-C1 basis),
+  so the finding stands on substance despite the imprecise cite.
+- Missed-by-Gemini: none new.
+
+Per the gemini-final-pass protocol a NEW valid CRITICAL invalidates
+the S7 consensus: one more Claude `/review` round on the deepcopy
+fix is required before Phase 10 closes (run next).

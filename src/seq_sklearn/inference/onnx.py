@@ -20,6 +20,8 @@ the export and restores in a ``finally`` (the trained eager forward
 is untouched).
 """
 
+import copy
+
 import torch
 from torch import Tensor, nn
 
@@ -37,10 +39,24 @@ class _OnnxForward(nn.Module):
 
     def __init__(self, backbone: nn.Module, head: nn.Module) -> None:
         super().__init__()
-        self.backbone = backbone
-        self.head = head
+        # DEEPCOPY the modules: export traces a PRIVATE clone, never
+        # the live shared backbone/head the fitted estimator predicts
+        # with. Mutating `onnx_export` on the shared instance would
+        # race a concurrent `predict()` (sklearn read-only post-fit
+        # thread-safety contract; Gemini S8 / Phase 9 G-C1 class). The
+        # clone is set to the pack-free export path permanently; no
+        # flag toggle on shared state, no try/finally needed. Export
+        # is one-shot and not perf-critical, so the copy cost is fine.
+        self.backbone = copy.deepcopy(backbone)
+        self.head = copy.deepcopy(head)
         self.backbone.eval()
         self.head.eval()
+        # The clone always uses the gather-preserving pack-free LSTM
+        # path (Phase 10 Step 1 GATE CONDITION): the parity test's
+        # `_OnnxForward == _predict_raw[0]` (atol=1e-6) is therefore,
+        # on every run, the objective proof that pack-free equals the
+        # packed production path.
+        setattr(self.backbone, "onnx_export", True)  # noqa: B010
 
     def forward(
         self,
@@ -57,18 +73,8 @@ class _OnnxForward(nn.Module):
             "time_varying_categorical": time_varying_categorical,
             "padding_mask": padding_mask,
         }
-        # ALWAYS use the gather-preserving pack-free LSTM path (Phase
-        # 10 plan Step 1 GATE CONDITION): the wrapper never depends on
-        # whether pack_padded_sequence lowers, so the parity test's
-        # `_OnnxForward == _predict_raw[0]` (atol=1e-6) is, on every
-        # run, the objective proof that pack-free equals the packed
-        # production path. The flag is restored so the shared backbone
-        # the estimator predicts with is untouched after the call.
-        prev = getattr(self.backbone, "onnx_export", False)
-        setattr(self.backbone, "onnx_export", True)  # noqa: B010
-        try:
-            with torch.no_grad():
-                representation = self.backbone(batch).representation
-                return self.head(representation)
-        finally:
-            setattr(self.backbone, "onnx_export", prev)  # noqa: B010
+        # The deepcopied backbone is permanently onnx_export=True
+        # (set in __init__); no toggle of shared state here.
+        with torch.no_grad():
+            representation = self.backbone(batch).representation
+            return self.head(representation)
