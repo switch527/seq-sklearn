@@ -1326,8 +1326,9 @@ contrived 20% slowdown.
 - `CHANGELOG.md` updated with the v1.0.0 entry.
 - The `pr.yml` docs job turns from a no-op into a real
   `sphinx-build -W` gate (HTML + `-b doctest`).
-- `src/seq_sklearn/__init__.py` wired to the architecture-A1
-  re-export block (`TFTClassifier`, `TFTRegressor`,
+- `src/seq_sklearn/__init__.py` wired to the architecture-A3
+  ("Public-API surface") re-export block (`TFTClassifier`,
+  `TFTRegressor`,
   `TabularToSequence`/`Config`, `TFTConfig`,
   `EntityTimeSeriesSplit`, `HardwareTier`/`detect`, the six error
   classes, `AttentionOutput`/`RegressionAttentionOutput`,
@@ -1621,7 +1622,8 @@ Round 1 (design-review swarm):
   reconciled to Sphinx, Phase 12 R1).** Phase 0 entry notes the docs
   job is a no-op script until Phase 12 flips it to
   `sphinx-build -W` (HTML + `-b doctest`).
-- **Public-API façade (architecture A1 `__all__`) was an unowned
+- **Public-API façade (architecture A3 `__all__`, "Public-API
+  surface") was an unowned
   seam between Phase 8 and Phase 12 (Phase 12 S6 finding).** Phase 8
   delivered the functional public classes at their module paths and
   the Optuna integration, but the literal package-level re-export in

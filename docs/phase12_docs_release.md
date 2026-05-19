@@ -137,8 +137,9 @@ finding in `docs/docs_strategy_research.md` (RS-Cn / RS-Dn / RS-Sn).
   (it had no owning test; coverage measures lines-executed not
   surface-correctness; `check_estimator` validates classes handed to
   it directly). Phase 12 wires `seq_sklearn/__init__.py` to the
-  EXACT spec-defined surface in architecture A1 (the literal
-  `__all__` block at `docs/architecture.md:240`: `TFTClassifier`,
+  EXACT spec-defined surface in architecture **A3** ("Public-API
+  surface", `docs/architecture.md:219-251`; the literal `__all__`
+  block at `:240`: `TFTClassifier`,
   `TFTRegressor`, `TabularToSequence`, `TabularToSequenceConfig`,
   `TFTConfig`, `EntityTimeSeriesSplit`, `HardwareTier`, `detect`,
   the six error classes, `AttentionOutput`,
@@ -150,7 +151,7 @@ finding in `docs/docs_strategy_research.md` (RS-Cn / RS-Dn / RS-Sn).
   drift). This is re-export of already-implemented,
   already-`check_estimator`-passing classes (no behavior change), and
   it is what makes R4/R6 (a working quickstart) and a non-`0.0.0`
-  v1 release possible. Scope is EXACTLY the A1 list, not a wider
+  v1 release possible. Scope is EXACTLY the A3 list, not a wider
   surface; INTERNAL-tier symbols (e.g. `RecurrentSequenceEstimator`,
   `seq_sklearn._*`) stay absent per the requirements stability
   tiers.
@@ -428,23 +429,49 @@ arch R2-I2). The deltas:
     criterion-9 release step has a real artifact, not just an
     enumerated line).
   - `test_public_api_surface` (R13/PE.4; the owning test the prior
-    11 phases lacked): assert (a)
-    `seq_sklearn.__all__ == _SPEC_PUBLIC_API` where the constant is
-    the literal architecture-A1 list parsed once at test-module
-    scope, sorted compare so reorder is non-fatal, exact set match;
-    (b) every name in `__all__` is a real attribute on
-    `seq_sklearn` AND `getattr(seq_sklearn, name)` is the SAME
-    object as the deep-path import (so the façade re-exports the
-    real symbols, not stubs); (c) `seq_sklearn.__version__` equals
-    `importlib.metadata.version("seq-sklearn")` (single source of
-    truth; rejects a hardcoded drift); (d) no INTERNAL-tier symbol
-    leaked (e.g. `RecurrentSequenceEstimator`,
-    `_GalleryMaxEpochsScanner`, anything `_*`); (e) `from
-    seq_sklearn import TFTClassifier` (and the rest of the list)
-    works without error in a subprocess (via `sys.executable` for
-    venv parity). This test, NOT a phase plan, is what owns the
-    façade going forward, closing the seam that hid PE.4 for 11
-    phases.
+    11 phases lacked; runs in the UNIT job's default
+    `pytest -m "not slow and not perf and not gpu"` sweep via
+    `testpaths = ["tests"]`, so it gates EVERY PR going forward, qa
+    delta-N1). Assertions:
+    (a) Spec-literal source: `_SPEC_PUBLIC_API` is EXTRACTED from
+    `docs/architecture.md` at test-module scope by REGEX over the A3
+    `__all__ = [ ... ]` block (capture between the first `__all__
+    = [` and the matching `]`; strip whitespace/quotes; parse to a
+    set), NOT a hand-typed Python literal (qa delta-C1: a hand-typed
+    copy is what kept the 11-phase drift class open; the spec file
+    is the single source). Assert `set(seq_sklearn.__all__) ==
+    _SPEC_PUBLIC_API`.
+    (b) Every name in `__all__` is a real attribute on
+    `seq_sklearn` AND `getattr(seq_sklearn, name) is`
+    (identity-compare) the deep-path import, so the façade
+    re-exports the real symbols, not stubs.
+    (c) Version single-source: `seq_sklearn.__version__ ==
+    importlib.metadata.version("seq-sklearn")`; on
+    `PackageNotFoundError` (a non-editable invocation, e.g.
+    `PYTHONPATH=src pytest`), `pytest.fail("seq-sklearn not
+    installed; run uv sync or pip install -e .")` so a misconfigured
+    CI cell fails LOUDLY, not with an unhandled exception (qa
+    delta-I1).
+    (d) INTERNAL-tier forbidden set (qa delta-I2; "anything `_*`" is
+    a tautology since `__all__` cannot legitimately carry private
+    names): assert the ENUMERATED INTERNAL-tier names from A3
+    (`RecurrentSequenceEstimator`,
+    `RecurrentSequenceEstimatorConfig`, per
+    `docs/architecture.md:253-257`) are NOT in
+    `seq_sklearn.__all__` AND `getattr(seq_sklearn, name, _MISSING)
+    is _MISSING`. Plus a structural rule: every non-underscore,
+    non-dunder attribute of `seq_sklearn` MUST be in `__all__` (no
+    namespace leakage via `getattr` outside the documented surface).
+    (e) Subprocess façade execution: in a subprocess via
+    `sys.executable` (same venv), `import seq_sklearn` then
+    `from seq_sklearn import <each_A3_name>` (one statement per
+    name, so a failure identifies which name is broken); assert
+    returncode 0 and no traceback. Layered on (b) which checks
+    identity in the parent process; the subprocess proves the
+    package is genuinely installed-and-importable, not just
+    monkey-imported in the test session.
+    This test, NOT a phase plan, is what OWNS the façade going
+    forward, closing the seam that hid PE.4 for 11 phases.
 
 - **PE.0 README rewrite (qa R2-C1, an explicit deliverable, not
   implied).** `README.md`'s `## Planned API (not yet released)`
@@ -477,7 +504,8 @@ arch R2-I2). The deltas:
   item, not a test).
 - **PE.4 Public-API façade + version wiring (R13).** Implement the
   spec-defined re-export block in `src/seq_sklearn/__init__.py`
-  EXACTLY per architecture A1 (`docs/architecture.md:235-251`): the
+  EXACTLY per architecture A3 ("Public-API surface",
+  `docs/architecture.md:219-251`): the
   imports of `TFTClassifier`/`TFTRegressor` from their module paths,
   `TabularToSequence`/`TabularToSequenceConfig`, `TFTConfig`,
   `EntityTimeSeriesSplit`, `HardwareTier`/`detect`, the six error
