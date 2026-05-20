@@ -27,7 +27,7 @@ to the design B7.5 statistics block.
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict
@@ -125,7 +125,10 @@ def rank_by_primary_loss(manifest: pd.DataFrame) -> list[LeaderboardEntry]:
         return []
     entries: list[LeaderboardEntry] = []
     grouped = manifest.groupby(["dataset_name", "model_name", "task_type"], sort=True)
-    for (dataset_name, model_name, task_type), block in grouped:
+    # The MultiIndex group key types as `Hashable` to pyright; the
+    # cast narrows it to the actual 3-tuple shape.
+    for group_key, block in grouped:
+        dataset_name, model_name, task_type = cast(tuple[str, str, str], group_key)
         if task_type not in _PRIMARY_LOSS:
             # regression_quantile cells are deferred to a B5-followup.
             continue
@@ -162,7 +165,7 @@ def rank_by_primary_loss(manifest: pd.DataFrame) -> list[LeaderboardEntry]:
                 if len(primary_series) > 1
                 else 0.0,
                 n_seeds=int(ok["seed"].nunique()),
-                n_folds_evaluated=int(len(ok)),
+                n_folds_evaluated=len(ok),
                 n_skipped=n_skipped,
             )
         )
@@ -270,15 +273,14 @@ def _render_skipped_footnote(manifest: pd.DataFrame) -> str:
     grouped = skipped.groupby(["dataset_name", "model_name", "skipped_reason"]).size()
     lines.append("| Dataset | Model | Reason | Count |")
     lines.append("| --- | --- | --- | --- |")
-    for (dataset_name, model_name, reason), count in grouped.items():
+    for group_key, count in grouped.items():
+        dataset_name, model_name, reason = cast(tuple[str, str, str], group_key)
         # Truncate long reason strings (adapter tracebacks) so the
         # table stays readable.
         reason_short = str(reason)
         if len(reason_short) > 120:
             reason_short = reason_short[:117] + "..."
-        lines.append(
-            f"| {dataset_name} | {model_name} | {reason_short} | {int(count)} |"
-        )
+        lines.append(f"| {dataset_name} | {model_name} | {reason_short} | {int(count)} |")
     lines.append("")
     return "\n".join(lines)
 

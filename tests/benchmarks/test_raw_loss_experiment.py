@@ -21,7 +21,6 @@ cover the B5 + B7.2 contracts:
   renderer produces non-empty Markdown.
 """
 
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Self
@@ -61,7 +60,6 @@ from benchmarks.report.raw_loss import (
     rank_by_primary_loss,
     render_leaderboard_markdown,
 )
-
 
 _ZERO_SHA = "0" * 64
 
@@ -177,7 +175,7 @@ class _ConstantBinaryAdapter:
     hyperparameters: dict[str, Any] = field(default_factory=dict)
     _majority: int = field(default=0, init=False)
 
-    def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:  # noqa: ARG002
+    def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:
         # Majority class from training data.
         if len(y) == 0:
             self._majority = 0
@@ -195,7 +193,7 @@ class _ConstantBinaryAdapter:
         proba[:, self._majority] = 0.7
         return proba
 
-    def predict_quantiles(self, panel: pd.DataFrame) -> np.ndarray:  # noqa: ARG002
+    def predict_quantiles(self, panel: pd.DataFrame) -> np.ndarray:
         raise QuantilesUnsupportedError(
             f"{self.name}: classifier does not produce quantile predictions"
         )
@@ -214,19 +212,19 @@ class _ConstantRegressorAdapter:
     hyperparameters: dict[str, Any] = field(default_factory=dict)
     _mean: float = field(default=0.0, init=False)
 
-    def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:  # noqa: ARG002
+    def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:
         self._mean = float(np.mean(y)) if len(y) > 0 else 0.0
         return self
 
     def predict(self, panel: pd.DataFrame) -> np.ndarray:
         return np.full(len(panel), self._mean, dtype=np.float64)
 
-    def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:  # noqa: ARG002
+    def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:
         raise ProbaUnsupportedError(
             f"{self.name}: regression adapter does not produce probabilities"
         )
 
-    def predict_quantiles(self, panel: pd.DataFrame) -> np.ndarray:  # noqa: ARG002
+    def predict_quantiles(self, panel: pd.DataFrame) -> np.ndarray:
         raise QuantilesUnsupportedError(
             f"{self.name}: point-regression adapter does not produce quantiles"
         )
@@ -244,7 +242,7 @@ class _CrashingAdapter:
     spec: DatasetSpec
     hyperparameters: dict[str, Any] = field(default_factory=dict)
 
-    def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:  # noqa: ARG002
+    def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:
         raise RuntimeError("fake_crashing: synthetic adapter failure")
 
     def predict(self, panel: pd.DataFrame) -> np.ndarray:
@@ -262,6 +260,7 @@ class _CrashingAdapter:
 
 def _register_fake_datasets(panels: list[PanelDataset]) -> None:
     for panel_dataset in panels:
+
         def _loader(_root: Path, _captured: PanelDataset = panel_dataset) -> PanelDataset:
             return _captured
 
@@ -293,7 +292,7 @@ def _register_fake_models() -> None:
 @pytest.fixture
 def fake_registry(
     monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[list[PanelDataset]]:  # pyright: ignore[reportUnusedFunction]
+) -> list[PanelDataset]:  # pyright: ignore[reportUnusedFunction]
     """Register the synthetic datasets + models for the test run.
 
     `isolated_registry` (autouse) restores the registries on teardown.
@@ -306,7 +305,7 @@ def fake_registry(
     ]
     _register_fake_datasets(panels)
     _register_fake_models()
-    yield panels
+    return panels
 
 
 def _make_config(
@@ -352,8 +351,8 @@ def test_run_raw_loss_emits_shards_and_sentinels_for_each_cell(
     assert len(manifest) == 5
     # The metrics column is populated (constant adapter -> log_loss is
     # finite but non-trivial).
-    assert manifest["log_loss"].notna().all()
-    assert manifest["skipped_reason"].isna().all()
+    assert bool(manifest["log_loss"].notna().all())
+    assert bool(manifest["skipped_reason"].isna().all())
 
 
 def test_run_raw_loss_is_resumable_via_sentinel_check(
@@ -394,14 +393,10 @@ def test_task_type_mismatch_emits_typed_skip_reason(
     assert result.cells_attempted == 0
     assert result.cells_skipped_task_mismatch == 5
     manifest = load_run(tmp_path / "out")
-    assert manifest["skipped_reason"].notna().all()
-    assert (
-        manifest["skipped_reason"]
-        .str.startswith("task_type_mismatch")
-        .all()
-    )
+    assert bool(manifest["skipped_reason"].notna().all())
+    assert bool(manifest["skipped_reason"].str.startswith("task_type_mismatch").all())
     # Skipped rows carry None for metrics.
-    assert manifest["log_loss"].isna().all()
+    assert bool(manifest["log_loss"].isna().all())
 
 
 def test_regression_quantile_emits_b5_followup_skip_reason(
@@ -453,8 +448,8 @@ def test_adapter_crash_emits_skipped_reason_and_does_not_abort_run(
     healthy = manifest.loc[manifest["model_name"] == "fake_constant_binary"]
     assert len(crashed) == 5
     assert len(healthy) == 5
-    assert crashed["skipped_reason"].str.contains("adapter_error: RuntimeError").all()
-    assert healthy["skipped_reason"].isna().all()
+    assert bool(crashed["skipped_reason"].str.contains("adapter_error: RuntimeError").all())
+    assert bool(healthy["skipped_reason"].isna().all())
 
 
 def test_leaderboard_renders_nonempty_markdown(
@@ -518,9 +513,7 @@ def test_resolve_seeds_raises_when_no_raw_loss_experiment(
         run_raw_loss(config, output_root=tmp_path / "out", env=env)
 
 
-def test_run_requires_cache_dir(
-    fake_registry: list[PanelDataset], tmp_path: Path
-) -> None:
+def test_run_requires_cache_dir(fake_registry: list[PanelDataset], tmp_path: Path) -> None:
     del fake_registry
     config = BenchmarkConfig(
         datasets=("fake_binary",),
@@ -566,7 +559,4 @@ def test_already_complete_cells_keep_their_metrics_after_resume(
     # the first run because we did NOT re-write the shard. (Run
     # IDs across the two invocations differ, but the resumed cells
     # carry the run_id of the FIRST invocation, not the second.)
-    assert (
-        first_manifest["run_id"].tolist()
-        == second_manifest["run_id"].tolist()
-    )
+    assert first_manifest["run_id"].tolist() == second_manifest["run_id"].tolist()

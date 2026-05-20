@@ -102,8 +102,7 @@ def _read_fd001_table(text: str) -> pd.DataFrame:
     # parse boundary rather than miscast to int downstream.
     if bool(df["entity_id"].isna().any()):
         raise DatasetIOError(
-            f"{_NAME}: parsed file has rows with missing entity_id; "
-            f"archive layout may have changed"
+            f"{_NAME}: parsed file has rows with missing entity_id; archive layout may have changed"
         )
     df["entity_id"] = df["entity_id"].astype(np.int64)
     df["cycle"] = df["cycle"].astype(np.int64)
@@ -114,9 +113,7 @@ def _materialize_panel(df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
     """Compute the RUL target and emit the panel + y in F2 contract
     shape (one row per `(entity_id, cycle)`, sorted by entity then
     cycle, panel columns match the spec)."""
-    sorted_df: pd.DataFrame = df.sort_values(
-        ["entity_id", "cycle"]
-    ).reset_index(drop=True)
+    sorted_df: pd.DataFrame = df.sort_values(["entity_id", "cycle"]).reset_index(drop=True)
     max_cycle = sorted_df.groupby("entity_id")["cycle"].transform("max")
     rul = (max_cycle - sorted_df["cycle"]).astype(np.float64)
     panel_cols = list(_SPEC.feature_real_cols)
@@ -139,16 +136,13 @@ def load(cache_root: Path) -> PanelDataset:
         DatasetIOError: the archive does not contain
             ``train_FD001.txt`` or the file is malformed.
     """
-    archive = require_archive(
-        cache_root, _NAME, _SPEC.archive_basename, _SPEC.integrity_sha256
-    )
+    archive = require_archive(cache_root, _NAME, _SPEC.archive_basename, _SPEC.integrity_sha256)
     with zipfile.ZipFile(archive) as zf:
         try:
             text = zf.read("train_FD001.txt").decode("utf-8")
         except KeyError as exc:
             raise DatasetIOError(
-                f"{_NAME}: archive {_SPEC.archive_basename!r} does not "
-                f"contain 'train_FD001.txt'"
+                f"{_NAME}: archive {_SPEC.archive_basename!r} does not contain 'train_FD001.txt'"
             ) from exc
     df = _read_fd001_table(text)
     panel, y = _materialize_panel(df)

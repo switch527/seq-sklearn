@@ -23,8 +23,6 @@ def resolve_lookback(spec: DatasetSpec, override: int | None = None) -> int:
     """
     if override is not None:
         if override < 1:
-            raise ValueError(
-                f"resolve_lookback: override must be >= 1; got {override}"
-            )
+            raise ValueError(f"resolve_lookback: override must be >= 1; got {override}")
         return override
     return spec.lookback

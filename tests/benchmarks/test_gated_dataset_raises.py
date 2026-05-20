@@ -22,9 +22,7 @@ _GATED_DATASETS_IN_THIS_PHASE: tuple[str, ...] = ("amex_default",)
 
 
 @pytest.mark.parametrize("name", _GATED_DATASETS_IN_THIS_PHASE)
-def test_gated_loader_raises_when_archive_absent(
-    name: str, tmp_path: Path
-) -> None:
+def test_gated_loader_raises_when_archive_absent(name: str, tmp_path: Path) -> None:
     spec = get_dataset(name)
     assert spec.access_tier == "GATED", (
         f"dataset {name!r} is parametrized as GATED but its spec "
@@ -37,16 +35,13 @@ def test_gated_loader_raises_when_archive_absent(
     # The error names the source URI so the user can find the
     # acceptance click-through.
     assert spec.source_uri in message, (
-        f"GATED loader for {name!r} must name the source URI in its "
-        f"error message; got:\n{message}"
+        f"GATED loader for {name!r} must name the source URI in its error message; got:\n{message}"
     )
     # The error names the expected cache path so the user knows
     # where to drop the file.
     assert str(tmp_path) in message, (
-        f"GATED loader for {name!r} must name the expected cache path; "
-        f"got:\n{message}"
+        f"GATED loader for {name!r} must name the expected cache path; got:\n{message}"
     )
     assert spec.archive_basename in message, (
-        f"GATED loader for {name!r} must name the archive basename; "
-        f"got:\n{message}"
+        f"GATED loader for {name!r} must name the archive basename; got:\n{message}"
     )

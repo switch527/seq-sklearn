@@ -256,9 +256,7 @@ def test_lag_featurize_does_not_cross_entity_boundaries() -> None:
 
 
 def test_lag_featurize_handles_categorical_columns() -> None:
-    spec = _make_spec(
-        feature_real_cols=("x",), feature_categorical_cols=("category",)
-    )
+    spec = _make_spec(feature_real_cols=("x",), feature_categorical_cols=("category",))
     panel = _make_panel(n_entities=2, n_periods=3, extra_categorical=True)
     fe = lag_featurize(panel, spec, lookback_override=2)
     # Categorical lag0 of entity-1 row-0 is entity-1's own value;
@@ -309,9 +307,7 @@ def test_lag_featurize_train_perturbation_outside_lookback_changes_train_only() 
     window (qa-NEW-I2: covers both numeric and categorical
     channels)."""
     lookback = 3
-    spec = _make_spec(
-        feature_real_cols=("x",), feature_categorical_cols=("category",)
-    )
+    spec = _make_spec(feature_real_cols=("x",), feature_categorical_cols=("category",))
     panel = _make_panel(n_entities=4, n_periods=10, extra_categorical=True)
     splitter = make_splitter(spec, lookback=lookback, n_splits=4)
     base = lag_featurize(panel, spec, lookback_override=lookback)
@@ -331,11 +327,7 @@ def test_lag_featurize_train_perturbation_outside_lookback_changes_train_only() 
             entity_id = int(panel.at[candidate, "entity_id"])
             same_entity_mask = panel["entity_id"] == entity_id
             entity_positions = np.where(same_entity_mask.to_numpy())[0]
-            window = set(
-                int(p)
-                for p in entity_positions
-                if candidate <= p < candidate + lookback
-            )
+            window = set(int(p) for p in entity_positions if candidate <= p < candidate + lookback)
             if not (window & test_set):
                 pivot = candidate
                 break
@@ -348,12 +340,15 @@ def test_lag_featurize_train_perturbation_outside_lookback_changes_train_only() 
         # Numeric AND categorical channels (qa-NEW-I2: cover the
         # categorical leakage path too).
         for col in (
-            "x_lag0", "x_lag1", "x_lag2",
-            "category_lag0", "category_lag1", "category_lag2",
+            "x_lag0",
+            "x_lag1",
+            "x_lag2",
+            "category_lag0",
+            "category_lag1",
+            "category_lag2",
         ):
             assert (
-                base.loc[test_idx, col].to_numpy()
-                == re_fe.loc[test_idx, col].to_numpy()
+                base.loc[test_idx, col].to_numpy() == re_fe.loc[test_idx, col].to_numpy()
             ).all(), f"fold leakage at col {col!r} on pivot {pivot}"
 
 

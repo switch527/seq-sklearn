@@ -8,8 +8,8 @@ manifest produced by the experiment driver.
 
 from benchmarks.report.raw_loss import (
     LeaderboardEntry,
-    render_leaderboard_markdown,
     rank_by_primary_loss,
+    render_leaderboard_markdown,
 )
 
 __all__ = [

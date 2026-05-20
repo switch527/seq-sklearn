@@ -130,31 +130,23 @@ def lag_featurize(
     """
     lookback = resolve_lookback(spec, override=lookback_override)
     if spec.entity_col not in panel.columns:
-        raise ValueError(
-            f"lag_featurize: entity_col {spec.entity_col!r} missing from panel"
-        )
+        raise ValueError(f"lag_featurize: entity_col {spec.entity_col!r} missing from panel")
     if spec.time_col not in panel.columns:
-        raise ValueError(
-            f"lag_featurize: time_col {spec.time_col!r} missing from panel"
-        )
+        raise ValueError(f"lag_featurize: time_col {spec.time_col!r} missing from panel")
     missing = [
         c
         for c in (*spec.feature_real_cols, *spec.feature_categorical_cols)
         if c not in panel.columns
     ]
     if missing:
-        raise KeyError(
-            f"lag_featurize: feature columns missing from panel: {missing}"
-        )
+        raise KeyError(f"lag_featurize: feature columns missing from panel: {missing}")
     _check_panel_time_ordered_per_entity(panel, spec.entity_col, spec.time_col)
 
     blocks: list[pd.DataFrame] = []
     for col in spec.feature_real_cols:
         blocks.append(_lag_real_column(panel, col, spec.entity_col, lookback))
     for col in spec.feature_categorical_cols:
-        blocks.append(
-            _lag_categorical_column(panel, col, spec.entity_col, lookback)
-        )
+        blocks.append(_lag_categorical_column(panel, col, spec.entity_col, lookback))
     if blocks:
         out: pd.DataFrame = pd.concat(blocks, axis=1)
     else:
@@ -162,11 +154,7 @@ def lag_featurize(
 
     # missing_lag_count: for each row, how many of the L lags fell
     # before the entity's first observation.
-    position_within_entity = (
-        panel.groupby(spec.entity_col, sort=False).cumcount().to_numpy()
-    )
-    missing_lag_count = np.maximum(
-        0, lookback - 1 - position_within_entity
-    ).astype(np.int64)
+    position_within_entity = panel.groupby(spec.entity_col, sort=False).cumcount().to_numpy()
+    missing_lag_count = np.maximum(0, lookback - 1 - position_within_entity).astype(np.int64)
     out["missing_lag_count"] = missing_lag_count
     return out

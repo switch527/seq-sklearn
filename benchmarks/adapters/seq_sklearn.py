@@ -15,7 +15,7 @@ any drift into `seq_sklearn._*`.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Self, cast
 
 import numpy as np
 import pandas as pd
@@ -23,8 +23,8 @@ import pandas as pd
 from benchmarks.adapters._base import (
     ProbaUnsupportedError,
     QuantilesUnsupportedError,
+    SeqSklearnAdapter,
 )
-from benchmarks.adapters._base import SeqSklearnAdapter
 from benchmarks.config import DatasetSpec, ModelSpec, TaskType
 from benchmarks.registry.models import register_adapter_factory, register_model
 from seq_sklearn import (
@@ -142,9 +142,7 @@ class SeqSklearnTFTClassifierAdapter:
 
     def predict(self, panel: pd.DataFrame) -> np.ndarray:
         if self._est is None:
-            raise NotFittedError(
-                f"{self.name}: predict() called before fit(); call fit() first"
-            )
+            raise NotFittedError(f"{self.name}: predict() called before fit(); call fit() first")
         return self._est.predict(panel)
 
     def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:
@@ -210,9 +208,7 @@ class SeqSklearnTFTRegressorAdapter:
 
     def predict(self, panel: pd.DataFrame) -> np.ndarray:
         if self._est is None:
-            raise NotFittedError(
-                f"{self.name}: predict() called before fit(); call fit() first"
-            )
+            raise NotFittedError(f"{self.name}: predict() called before fit(); call fit() first")
         return self._est.predict(panel)
 
     def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:  # noqa: ARG002
@@ -227,9 +223,7 @@ class SeqSklearnTFTRegressorAdapter:
         """Quantile predictions when fit with `task_type=
         'regression_quantile'`."""
         if self._est is None:
-            raise NotFittedError(
-                f"{self.name}: predict_quantiles() called before fit()"
-            )
+            raise NotFittedError(f"{self.name}: predict_quantiles() called before fit()")
         return self._est.predict_quantiles(panel)
 
 
@@ -253,8 +247,7 @@ _REGRESSOR_SPEC = ModelSpec(
     task_types=("regression_point", "regression_quantile"),
     supports_proba=False,
     reason=(
-        "v1.0.0 reference regression model; the library's TFT "
-        "point and quantile regression head"
+        "v1.0.0 reference regression model; the library's TFT point and quantile regression head"
     ),
 )
 
@@ -275,8 +268,14 @@ def _make_tft_classifier(
     spec: DatasetSpec,
     hyperparameters: dict[str, Any] | None = None,
 ) -> SeqSklearnAdapter:
-    return SeqSklearnTFTClassifierAdapter(
-        spec=spec, hyperparameters=hyperparameters or {}
+    # The dataclass declares the protocol metadata as `ClassVar`,
+    # which pyright treats as not satisfying the Protocol's instance-
+    # attribute declarations; runtime `isinstance(..., SeqSklearnAdapter)`
+    # passes (verified by `runtime_checkable`). The cast keeps the
+    # factory's public surface honest.
+    return cast(
+        SeqSklearnAdapter,
+        SeqSklearnTFTClassifierAdapter(spec=spec, hyperparameters=hyperparameters or {}),
     )
 
 
@@ -285,8 +284,9 @@ def _make_tft_regressor(
     spec: DatasetSpec,
     hyperparameters: dict[str, Any] | None = None,
 ) -> SeqSklearnAdapter:
-    return SeqSklearnTFTRegressorAdapter(
-        spec=spec, hyperparameters=hyperparameters or {}
+    return cast(
+        SeqSklearnAdapter,
+        SeqSklearnTFTRegressorAdapter(spec=spec, hyperparameters=hyperparameters or {}),
     )
 
 

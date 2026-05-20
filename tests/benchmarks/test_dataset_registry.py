@@ -28,9 +28,7 @@ from benchmarks.registry import (
 
 # The irregular-time roster is named explicitly in B2.1; the test
 # asserts every active member carries a densification_policy.
-_IRREGULAR_TIME_DATASETS: frozenset[str] = frozenset(
-    {"physionet_2012", "ptb_xl", "mimic_iv_ihm"}
-)
+_IRREGULAR_TIME_DATASETS: frozenset[str] = frozenset({"physionet_2012", "ptb_xl", "mimic_iv_ihm"})
 
 
 def test_every_registered_dataset_has_a_loader() -> None:
@@ -60,12 +58,8 @@ def test_every_excluded_spec_has_a_reason() -> None:
         if not spec.excluded:
             continue
         reason = spec.exclusion_reason
-        assert reason is not None, (
-            f"dataset {name!r}: excluded=True but exclusion_reason is None"
-        )
-        assert reason.strip(), (
-            f"dataset {name!r}: excluded=True but exclusion_reason is blank"
-        )
+        assert reason is not None, f"dataset {name!r}: excluded=True but exclusion_reason is None"
+        assert reason.strip(), f"dataset {name!r}: excluded=True but exclusion_reason is blank"
 
 
 def test_irregular_time_datasets_carry_densification_policy() -> None:

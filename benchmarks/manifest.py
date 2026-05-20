@@ -92,15 +92,11 @@ def cell_key(
             )
         if not _CELL_KEY_TOKEN_RE.fullmatch(value):
             raise CellKeyError(
-                f"cell_key: {label}={value!r} must match "
-                f"{_CELL_KEY_TOKEN_RE.pattern!r}"
+                f"cell_key: {label}={value!r} must match {_CELL_KEY_TOKEN_RE.pattern!r}"
             )
     if fold_index < 0:
         raise CellKeyError(f"cell_key: fold_index must be >= 0; got {fold_index}")
-    return (
-        f"{dataset_name}__{model_name}__seed_{seed}__{variant}__"
-        f"fold_{fold_index}"
-    )
+    return f"{dataset_name}__{model_name}__seed_{seed}__{variant}__fold_{fold_index}"
 
 
 def results_dir(root: Path) -> Path:
@@ -150,7 +146,7 @@ def _atomic_write_bytes(payload: bytes, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + f".tmp.{os.getpid()}")
     tmp.write_bytes(payload)
-    os.replace(tmp, dest)
+    tmp.replace(dest)
 
 
 def _atomic_write_parquet(df: pd.DataFrame, dest: Path) -> None:
@@ -164,7 +160,7 @@ def _atomic_write_parquet(df: pd.DataFrame, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + f".tmp.{os.getpid()}")
     df.to_parquet(tmp, index=False)
-    os.replace(tmp, dest)
+    tmp.replace(dest)
 
 
 class ResultRow(BaseModel):
@@ -317,7 +313,7 @@ def _empty_manifest_dataframe() -> pd.DataFrame:
     untyped one so downstream `pd.concat` with a non-empty frame
     matches columns exactly.
     """
-    columns = list(ResultRow.model_fields.keys())
+    columns = pd.Index(list(ResultRow.model_fields.keys()))
     return pd.DataFrame(columns=columns)
 
 
@@ -331,8 +327,7 @@ def list_completed_keys(root: Path) -> tuple[str, ...]:
     if not sentinel_dir(root).exists():
         return ()
     keys = [
-        p.name[: -len(_SENTINEL_SUFFIX)]
-        for p in sentinel_dir(root).glob(f"*{_SENTINEL_SUFFIX}")
+        p.name[: -len(_SENTINEL_SUFFIX)] for p in sentinel_dir(root).glob(f"*{_SENTINEL_SUFFIX}")
     ]
     return tuple(sorted(keys))
 

@@ -23,9 +23,7 @@ def test_resolve_cache_dir_override_wins(tmp_path: Path) -> None:
     assert out.is_dir()
 
 
-def test_resolve_cache_dir_env_var(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_resolve_cache_dir_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SEQ_SKLEARN_BENCHMARKS_CACHE", str(tmp_path / "from_env"))
     out = resolve_cache_dir()
     assert out == tmp_path / "from_env"

@@ -46,7 +46,7 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -54,11 +54,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict
 
-from benchmarks.adapters._base import (
-    ProbaUnsupportedError,
-    QuantilesUnsupportedError,
-    SeqSklearnAdapter,
-)
+from benchmarks.adapters._base import ProbaUnsupportedError, SeqSklearnAdapter
 from benchmarks.config import BenchmarkConfig, DatasetSpec, ExperimentSpec, TaskType
 from benchmarks.datasets._base import PanelDataset
 from benchmarks.manifest import (
@@ -140,7 +136,7 @@ class RawLossExperimentResult(BaseModel):
 
 def _utc_now() -> str:
     """Current UTC time as a stable ISO-8601 string."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _resolve_git_sha(start: Path) -> str:
@@ -237,9 +233,7 @@ def _take_panel_rows(
     return panel.iloc[indices].reset_index(drop=True), y[indices]
 
 
-def _maybe_predict_proba(
-    adapter: SeqSklearnAdapter, panel: pd.DataFrame
-) -> np.ndarray | None:
+def _maybe_predict_proba(adapter: SeqSklearnAdapter, panel: pd.DataFrame) -> np.ndarray | None:
     """Call `predict_proba` when supported; return None otherwise.
 
     Two non-supported paths: `supports_proba=False` (regressor
@@ -253,29 +247,6 @@ def _maybe_predict_proba(
     try:
         return adapter.predict_proba(panel)
     except ProbaUnsupportedError:
-        return None
-
-
-def _maybe_predict_quantiles(
-    adapter: SeqSklearnAdapter,
-    task_type: TaskType,
-    panel: pd.DataFrame,
-) -> np.ndarray | None:
-    """Call `predict_quantiles` only when the cell's task type asks
-    for it AND the adapter supports it.
-
-    A classifier adapter raises `QuantilesUnsupportedError` here;
-    the regressor adapters return an `(N, n_quantiles)` array. The
-    pinball labels are NOT computable from the adapter surface in
-    B5 (see the module-docstring B5-followup); the caller checks
-    `task_type == "regression_quantile"` separately and surfaces
-    the skipped-reason there.
-    """
-    if task_type != "regression_quantile":
-        return None
-    try:
-        return adapter.predict_quantiles(panel)
-    except QuantilesUnsupportedError:
         return None
 
 
@@ -392,12 +363,8 @@ def _run_one_cell(
 
     try:
         adapter = instantiate_adapter(model_name, spec=spec)
-        train_panel, train_y = _take_panel_rows(
-            panel_dataset.panel, panel_dataset.y, train_idx
-        )
-        test_panel, test_y = _take_panel_rows(
-            panel_dataset.panel, panel_dataset.y, test_idx
-        )
+        train_panel, train_y = _take_panel_rows(panel_dataset.panel, panel_dataset.y, train_idx)
+        test_panel, test_y = _take_panel_rows(panel_dataset.panel, panel_dataset.y, test_idx)
 
         # B5.3 wall-clock + RSS; CUDA hooks are a B5-followup wired by B6.
         fit_resource = measure_fit(
@@ -406,10 +373,16 @@ def _run_one_cell(
         )
         y_pred = adapter.predict(test_panel)
         y_proba = _maybe_predict_proba(adapter, test_panel)
+
+        def _timed_predict() -> None:
+            adapter.predict(test_panel)
+
         # The latency closure runs `predict` once per rep; ensures
-        # warm cache parity across models.
+        # warm cache parity across models. The closure discards the
+        # return value so the metric layer's `Callable[[], None]`
+        # signature matches exactly.
         latency = measure_inference_latency(
-            lambda: adapter.predict(test_panel),
+            _timed_predict,
             n_reps=_DEFAULT_LATENCY_REPS,
             n_warmup=_DEFAULT_LATENCY_WARMUP,
         )
@@ -437,7 +410,7 @@ def _run_one_cell(
             fit_resource=fit_resource,
             latency=latency,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # Any uncaught adapter error becomes a skipped-reason row.
         # The bare-Exception is intentional: a single broken adapter
         # must not abort the harness, and the typed error categories
@@ -492,9 +465,7 @@ def _fit_with_seed(
     adapter.fit(train_panel, train_y)
 
 
-def _resolve_labels(
-    panel_dataset: PanelDataset, task_type: TaskType
-) -> np.ndarray | None:
+def _resolve_labels(panel_dataset: PanelDataset, task_type: TaskType) -> np.ndarray | None:
     """Return the canonical class-label array for classification
     cells; `None` for regression.
 
@@ -644,9 +615,7 @@ def run_raw_loss(
                         )
                         if row.skipped_reason is None:
                             attempted += 1
-                        elif row.skipped_reason.startswith(
-                            "regression_quantile_b5_followup"
-                        ):
+                        elif row.skipped_reason.startswith("regression_quantile_b5_followup"):
                             skipped_quantile_followup += 1
                         else:
                             skipped_adapter_error += 1

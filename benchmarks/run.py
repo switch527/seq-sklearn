@@ -27,7 +27,7 @@ from pydantic import ValidationError
 # (...)` calls so the registry is populated before the experiment
 # driver inspects it. The same import pattern lives in the scaffold
 # test.
-import benchmarks.adapters  # noqa: F401  # pyright: ignore[reportUnusedImport]
+import benchmarks.adapters  # pyright: ignore[reportUnusedImport]
 import benchmarks.datasets  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from benchmarks.config import BenchmarkConfig
 from benchmarks.experiments import build_run_environment, run_raw_loss

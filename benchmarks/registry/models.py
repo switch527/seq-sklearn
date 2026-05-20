@@ -19,10 +19,18 @@ function declared next to the class.
 """
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from benchmarks.adapters._base import SeqSklearnAdapter
 from benchmarks.config import DatasetSpec, ModelSpec
+
+if TYPE_CHECKING:
+    # Type-only import: importing `benchmarks.adapters._base` at module
+    # top would pull in `benchmarks.adapters.__init__` (which itself
+    # imports each adapter module, which imports `register_adapter_
+    # factory` from this file), creating a partial-init circular
+    # import. The factory's runtime contract is duck-typed; pyright
+    # gets the Protocol annotation through the TYPE_CHECKING guard.
+    from benchmarks.adapters._base import SeqSklearnAdapter
 
 # The factory protocol: a callable that returns an adapter ready to
 # run protocol introspection (`name`, `family`, `task_types`,
@@ -30,7 +38,7 @@ from benchmarks.config import DatasetSpec, ModelSpec
 # REQUIRED because adapters carry per-dataset state (`tabular_config`
 # is built from the spec at the B3.2.2 boundary). Hyperparameters
 # are optional; the HPO driver (B8) feeds suggested params here.
-AdapterFactory = Callable[..., SeqSklearnAdapter]
+AdapterFactory = Callable[..., "SeqSklearnAdapter"]
 
 
 _REGISTRY: dict[str, ModelSpec] = {}
@@ -49,8 +57,7 @@ def register_model(spec: ModelSpec) -> ModelSpec:
     existing = _REGISTRY.get(spec.name)
     if existing is not None and existing != spec:
         raise ValueError(
-            f"model {spec.name!r} already registered with a different "
-            f"spec; refusing to overwrite"
+            f"model {spec.name!r} already registered with a different spec; refusing to overwrite"
         )
     _REGISTRY[spec.name] = spec
     return spec
@@ -92,8 +99,7 @@ def get_model(name: str) -> ModelSpec:
         return _REGISTRY[name]
     except KeyError as exc:
         raise ModelNotRegisteredError(
-            f"no model registered under name {name!r}; "
-            f"registered models: {sorted(_REGISTRY)}"
+            f"no model registered under name {name!r}; registered models: {sorted(_REGISTRY)}"
         ) from exc
 
 
@@ -119,7 +125,7 @@ def instantiate_adapter(
     *,
     spec: DatasetSpec,
     hyperparameters: dict[str, Any] | None = None,
-) -> SeqSklearnAdapter:
+) -> "SeqSklearnAdapter":
     """Build an adapter by registered name.
 
     Thin convenience over `get_adapter_factory(name)(spec=..., ...)`
@@ -127,9 +133,7 @@ def instantiate_adapter(
     `instantiate_adapter("tft_classifier", spec=ds_spec)` without
     threading the factory variable.
     """
-    return get_adapter_factory(name)(
-        spec=spec, hyperparameters=hyperparameters or {}
-    )
+    return get_adapter_factory(name)(spec=spec, hyperparameters=hyperparameters or {})
 
 
 def list_models() -> tuple[str, ...]:

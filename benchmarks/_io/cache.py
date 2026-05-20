@@ -72,8 +72,7 @@ def require_archive(
     path = archive_path(cache_root, dataset_name, basename)
     if not path.is_file():
         raise FileNotFoundError(
-            f"archive {basename!r} for dataset {dataset_name!r} not "
-            f"found in cache at {path}"
+            f"archive {basename!r} for dataset {dataset_name!r} not found in cache at {path}"
         )
     verify_sha256(path, expected_sha256)
     return path

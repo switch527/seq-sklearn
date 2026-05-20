@@ -47,8 +47,7 @@ def register_dataset(spec: DatasetSpec, loader: "LoaderCallable") -> DatasetSpec
     existing_loader = _LOADERS.get(spec.name)
     if existing_spec is not None and existing_spec != spec:
         raise ValueError(
-            f"dataset {spec.name!r} already registered with a different "
-            f"spec; refusing to overwrite"
+            f"dataset {spec.name!r} already registered with a different spec; refusing to overwrite"
         )
     if existing_loader is not None and existing_loader is not loader:
         raise ValueError(
@@ -66,8 +65,7 @@ def get_dataset(name: str) -> DatasetSpec:
         return _REGISTRY[name]
     except KeyError as exc:
         raise DatasetNotRegisteredError(
-            f"no dataset registered under name {name!r}; "
-            f"registered datasets: {sorted(_REGISTRY)}"
+            f"no dataset registered under name {name!r}; registered datasets: {sorted(_REGISTRY)}"
         ) from exc
 
 
@@ -77,8 +75,7 @@ def get_loader(name: str) -> "LoaderCallable":
         return _LOADERS[name]
     except KeyError as exc:
         raise DatasetNotRegisteredError(
-            f"no loader registered for dataset {name!r}; "
-            f"registered datasets: {sorted(_LOADERS)}"
+            f"no loader registered for dataset {name!r}; registered datasets: {sorted(_LOADERS)}"
         ) from exc
 
 
