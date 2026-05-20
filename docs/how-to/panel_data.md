@@ -117,7 +117,7 @@ The shape `(14, 7)` reflects the variable-length entities (some have
   instead.
 
 ```{testcode}
-from seq_sklearn.config.adapters import TabularConfigParams
+from seq_sklearn import TabularConfigParams
 
 cfg = TabularConfigParams(
     id_col="customer_id",

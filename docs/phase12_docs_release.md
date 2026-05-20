@@ -743,3 +743,71 @@ Gemini design final-pass: deferred until Gemini quota resets
 R11/PE.3 its tally is recorded here before the release checklist
 references it. A new Gemini CRITICAL would reopen consensus for one
 more `/design-review` round.
+
+## S7 implementation-review ledger (post-consensus)
+
+The bulk Phase 12 landing (commit `0cf6d89`) went through `/review`
+(Claude-only swarm: code + arch + qa + style) per the user direction
+to drive to consensus with Gemini deferred. Findings and resolutions
+below; the plan-doc enumeration of the 18-name façade above is
+historical (PE.4 / R13) and has been superseded at the file level
+by the 24-name surface in `seq_sklearn/__init__.py` and
+architecture A3.
+
+### S7 Round 1 (commit `2f83ab7`)
+
+Resolved CRITICAL findings:
+
+- code-C1 / arch-C2 / qa-C1 (n7 skip-detection De Morgan):
+  `tests/docs/test_misc_gates.py` rewritten to a regex anchored to
+  top-of-line `@pytest.mark.skip`; bare-decorator silencing is now
+  caught.
+- code-C2 (test ruff+pyright): `tests/docs/test_docs_extra_matches_spec.py`
+  UP036, SIM109, RUF100 + pyright Optional member access resolved.
+- code-C3 (wrong attention axis): gallery + how-to + explanation
+  corrected from `out.attention_weights.mean(axis=-1)` to
+  `out.attention_weights[:, :, -1, :].mean(axis=1)`; shape comments
+  updated to the actual `(N, n_heads, L, L)`.
+- arch-C1 / code-I1 (A3-vs-estimator-API seam): promoted the six
+  `*Params` adapter classes to STABLE. `seq_sklearn.config._adapters.py`
+  renamed to `adapters.py`; `__all__` extended 18 → 24 names;
+  architecture A3 + requirements per-module stability table + A4
+  step-3 file-path reference all updated; ~50 import sites repointed.
+- style-CRITICAL (8 prose em-dashes): rewritten to periods,
+  semicolons, or parens across six user-facing docs.
+
+Resolved IMPROVEMENT findings: criterion-9 CPU N7 artifact added
+(`tests/perf/test_n7_absolute.py::test_n7_cpu_inference_latency`,
+opt-in via `SEQ_SKLEARN_N7_CPU=1`); architecture A12 stale
+post-PA.2 prose updated; `_spec_public_api` regex anchored to
+`## A3:`; README structural test now validates every `ImportFrom`
+resolution; pr.yml docs job timeout-minutes added.
+
+### S7 Round 2
+
+Resolved CRITICAL findings:
+
+- arch-C1: `docs/requirements.md:233` updated `docs/api/` →
+  `docs/reference/` (Phase 12 R1 collapsed the path; the normative
+  bullet had not followed).
+- arch-C2 / qa-C1 (N7 per-sample-vs-per-batch math):
+  `tests/perf/test_n7_absolute.py` dropped the `/ len(batch)`
+  division on both functions; the `*_INFER_MS` constants are now the
+  per-batch budgets per `requirements.md:2100-2101`. BOTH functions
+  gated behind env vars (`SEQ_SKLEARN_N7_GPU=1` and
+  `SEQ_SKLEARN_N7_CPU=1`) so the strict per-batch budgets never
+  assert incidentally on a non-reference device; the release engineer
+  sets the env vars on the recording run.
+- arch-C3: `docs/architecture.md:51` A1 layout tree updated
+  `_adapters.py` → `adapters.py` with a STABLE-per-A3 callout.
+- style-C1 + style-C2: two prose em-dashes in
+  `docs/explanation/design_sklearn_api_over_lightning.md` rewritten.
+
+Resolved IMPROVEMENT findings: `docs/reference/api.md` autoclasses
+the six adapter classes; CHANGELOG `Added` entry calls out the
+24-name surface and the adapter promotion; README + 3 how-to pages
++ 3 gallery scripts + `examples/quickstart.py` switched from
+`from seq_sklearn.config.adapters import ...` to
+`from seq_sklearn import ...` (the documented STABLE form); this
+ledger added; `__init__.py` docstring updated to reference the
+`## A3:` heading rather than a stale line range.

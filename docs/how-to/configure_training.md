@@ -24,8 +24,12 @@ The classes are pydantic models with `extra="forbid"`: typos like
 training time.
 
 ```python
-from seq_sklearn import TFTClassifier, TFTConfig
-from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
+from seq_sklearn import (
+    SchedulerParams,
+    TabularConfigParams,
+    TFTClassifier,
+    TFTConfig,
+)
 
 clf = TFTClassifier(
     task_type="binary",
@@ -100,8 +104,7 @@ Start by tuning `hidden_size`, `max_epochs`, `batch_size`, and
 `dropout`; see [Tuning](tuning) and [Tune with Optuna](tune_with_optuna).
 
 ```{testcode}
-from seq_sklearn import TFTClassifier
-from seq_sklearn.config.adapters import SchedulerParams
+from seq_sklearn import SchedulerParams, TFTClassifier
 
 sched = SchedulerParams(name="cosine_with_warmup", warmup_steps=50)
 assert sched.name == "cosine_with_warmup"

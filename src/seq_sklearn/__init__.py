@@ -1,10 +1,12 @@
 """seq-sklearn: sklearn-compatible deep sequence models for tabular panel data.
 
 The public API is defined by `__all__` below per architecture A3
-(`docs/architecture.md:219-251`) and the requirements stability tiers
-(`docs/requirements.md`). Anything not in this list, or reachable only
-through an underscore-prefixed module/attribute, is INTERNAL and not
-covered by the SemVer stability guarantee.
+(`docs/architecture.md`, the `## A3:` section's literal `__all__`
+block; `tests/unit/test_public_api_surface.py` anchors to that
+heading and asserts the equality on every PR) and the requirements
+stability tiers (`docs/requirements.md`). Anything not in this list,
+or reachable only through an underscore-prefixed module/attribute, is
+INTERNAL and not covered by the SemVer stability guarantee.
 """
 
 from importlib.metadata import PackageNotFoundError as _PackageNotFoundError

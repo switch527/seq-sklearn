@@ -64,8 +64,8 @@ costs:
 - **No sklearn composability.** Users have to write their own glue
   to plug it into a Pipeline or GridSearchCV; they all write the
   same glue, slightly wrong each time.
-- **No standard fit-state contract.** `fit` returning `self`,
-  `*_` attributes — these are conventions sklearn users rely on for
+- **No standard fit-state contract.** `fit` returning `self` and
+  `*_` attributes are conventions sklearn users rely on for
   introspection and serialization.
 - **Wider surface area to maintain.** Lightning's Trainer has many
   knobs that don't make sense to expose for a fixed library use
@@ -90,5 +90,5 @@ Not public:
 - The internal `_LightningModule` subclass, the internal `Trainer`
   args, the backbone module structure. INTERNAL-tier; can change
   in MINOR releases. If you find yourself reaching into
-  `clf._module.backbone.lstm` for a feature, file an issue —
+  `clf._module.backbone.lstm` for a feature, file an issue;
   that's a request for a public surface.

@@ -12,8 +12,7 @@ dataclass. This example shows how to read them.
 # ---------------------
 import numpy as np
 
-from seq_sklearn import TFTClassifier
-from seq_sklearn.config.adapters import TabularConfigParams
+from seq_sklearn import TabularConfigParams, TFTClassifier
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
 
 gen = SyntheticPanelGenerator(

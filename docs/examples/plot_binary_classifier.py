@@ -11,8 +11,7 @@ benchmarking one.
 # %%
 # Build a small synthetic panel
 # -----------------------------
-from seq_sklearn import TFTClassifier
-from seq_sklearn.config.adapters import TabularConfigParams
+from seq_sklearn import TabularConfigParams, TFTClassifier
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
 
 gen = SyntheticPanelGenerator(

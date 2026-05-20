@@ -230,7 +230,7 @@ The library uses **semantic versioning** strictly. `MAJOR.MINOR.PATCH`:
 The **public API** is exactly:
 
 - What `seq_sklearn/__init__.py` re-exports.
-- What is documented in the API reference under `docs/api/`.
+- What is documented in the API reference under `docs/reference/`.
 - Module attributes reached without a leading underscore in the import
   path (e.g. `seq_sklearn.tuning.suggest_params` is public;
   `seq_sklearn._validate.check_y` is not).

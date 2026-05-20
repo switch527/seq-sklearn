@@ -21,8 +21,10 @@ import pytest
 
 # N7 reference (docs/requirements.md N7): TFT 128 hidden, 4 heads,
 # lookback 12; 100k entities x 24 months x 30 features < 8 GB GPU;
-# training < 30 min on A100/T4/4090; batch of 1024 windows < 10 ms GPU
-# and < 100 ms CPU.
+# training < 30 min on A100/T4/4090; whole 1024-window batch
+# < 10 ms GPU and < 100 ms CPU. The constants are PER-BATCH budgets,
+# matching the spec verbatim; the assertions below time wall-clock
+# of a single .predict(batch) call without dividing by batch size.
 N7_GPU_MEM_BYTES = 8 * 1024**3
 N7_TRAIN_SECONDS = 30 * 60
 N7_GPU_INFER_MS = 10.0
@@ -32,6 +34,14 @@ N7_CPU_INFER_MS = 100.0
 @pytest.mark.gpu
 @pytest.mark.slow
 def test_n7_absolute_budgets(perf_determinism: None) -> None:
+    import os
+
+    if not os.environ.get("SEQ_SKLEARN_N7_GPU"):
+        pytest.skip(
+            "set SEQ_SKLEARN_N7_GPU=1 on a release-reference GPU "
+            "(A100/T4/4090) to record the criterion-9 GPU budgets"
+        )
+
     import numpy as np
     import torch
 
@@ -90,26 +100,32 @@ def test_n7_absolute_budgets(perf_determinism: None) -> None:
     for _ in range(20):
         t = time.perf_counter()
         est.predict(batch)
-        lat.append((time.perf_counter() - t) / len(batch) * 1000.0)
+        lat.append((time.perf_counter() - t) * 1000.0)
     infer_ms = float(np.median(lat))
 
     assert peak_mem < N7_GPU_MEM_BYTES, f"N7 memory: {peak_mem} >= {N7_GPU_MEM_BYTES}"
     assert train_seconds < N7_TRAIN_SECONDS, f"N7 train: {train_seconds}s"
-    assert infer_ms < N7_GPU_INFER_MS, f"N7 inference: {infer_ms}ms/sample"
+    assert infer_ms < N7_GPU_INFER_MS, f"N7 inference (per 1024-batch): {infer_ms}ms"
 
 
 @pytest.mark.slow
 def test_n7_cpu_inference_latency(perf_determinism: None) -> None:
-    """N7 CPU-inference budget: 1024-window batch under 100 ms / sample.
+    """N7 CPU-inference budget: a 1024-window batch under 100 ms total.
 
-    Smaller workload than the GPU function (the CPU N7 number is the
-    latency budget, not the training-throughput budget), so we fit a
-    shorter quickstart-shaped panel on CPU then time inference on a
-    1024-row batch. Marked ``slow`` only (no ``gpu``), so it runs
-    when a release engineer explicitly invokes ``pytest -m slow
-    tests/perf/test_n7_absolute.py::test_n7_cpu_inference_latency``
-    on a release-reference CPU.
+    Smaller fit workload than the GPU function (the CPU N7 number is
+    the latency budget, not the training-throughput budget), so we fit
+    a shorter quickstart-shaped panel on CPU then time inference on a
+    1024-row batch. Gated behind ``SEQ_SKLEARN_N7_CPU=1`` so it never
+    runs incidentally on a developer laptop where the strict per-batch
+    budget is unmeasurable; the release engineer sets the env var on
+    the release-reference CPU and runs
+    ``pytest -m slow tests/perf/test_n7_absolute.py::test_n7_cpu_inference_latency``.
     """
+    import os
+
+    if not os.environ.get("SEQ_SKLEARN_N7_CPU"):
+        pytest.skip("set SEQ_SKLEARN_N7_CPU=1 on a release-reference CPU to record the criterion-9 CPU inference budget")
+
     import numpy as np
 
     from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
@@ -159,7 +175,7 @@ def test_n7_cpu_inference_latency(perf_determinism: None) -> None:
     for _ in range(20):
         t = time.perf_counter()
         est.predict(batch)
-        lat.append((time.perf_counter() - t) / len(batch) * 1000.0)
+        lat.append((time.perf_counter() - t) * 1000.0)
     infer_ms = float(np.median(lat))
 
-    assert infer_ms < N7_CPU_INFER_MS, f"N7 CPU inference: {infer_ms}ms/sample"
+    assert infer_ms < N7_CPU_INFER_MS, f"N7 CPU inference (per 1024-batch): {infer_ms}ms"

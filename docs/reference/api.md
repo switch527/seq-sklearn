@@ -30,6 +30,39 @@ SemVer stability guarantee.
    :show-inheritance:
 ```
 
+## Configuration adapters
+
+The sklearn-compatible nested-config surface (architecture A4 step 3).
+These are the only documented way to construct a configured
+estimator (`tabular_config=...`, `scheduler=...`, etc.); field
+additions follow the F7 ALPHA → BETA → STABLE promotion path.
+
+```{eval-rst}
+.. autoclass:: seq_sklearn.TabularConfigParams
+   :members:
+   :show-inheritance:
+
+.. autoclass:: seq_sklearn.OptimizerParams
+   :members:
+   :show-inheritance:
+
+.. autoclass:: seq_sklearn.SchedulerParams
+   :members:
+   :show-inheritance:
+
+.. autoclass:: seq_sklearn.LossParams
+   :members:
+   :show-inheritance:
+
+.. autoclass:: seq_sklearn.SamplerParams
+   :members:
+   :show-inheritance:
+
+.. autoclass:: seq_sklearn.TFTAdvancedParams
+   :members:
+   :show-inheritance:
+```
+
 ## Cross-validation
 
 ```{eval-rst}

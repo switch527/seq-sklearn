@@ -42,6 +42,11 @@ def _spec_public_api() -> set[str]:
     if a3_heading is None:
         pytest.fail(f"could not locate `## A3:` heading in {_ARCH_DOC}")
     next_heading = re.search(r"^##\s+A\d", text[a3_heading.end() :], re.MULTILINE)
+    # The `next_heading is None` arm runs when A3 is the LAST `## A`
+    # section in the file (today there's always an A4 trailing A3, so
+    # this branch is reachable but unexercised in CI; the slice
+    # extension to `len(text)` keeps the regex from silently returning
+    # an empty result if the doc structure changes).
     end = a3_heading.end() + next_heading.start() if next_heading else len(text)
     a3_slice = text[a3_heading.start() : end]
     match = re.search(r"__all__\s*=\s*\[(.*?)\]", a3_slice, re.DOTALL)

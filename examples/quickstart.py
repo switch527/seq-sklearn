@@ -12,9 +12,12 @@ example is self-contained and reproducible.
 
 from sklearn.metrics import accuracy_score
 
-from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
+from seq_sklearn import (
+    SchedulerParams,
+    TabularConfigParams,
+    TFTClassifier,
+)
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
-from seq_sklearn.models.transformer.tft.classifier import TFTClassifier
 
 
 def run_quickstart(seed: int = 42) -> float:

@@ -69,7 +69,16 @@ for the criteria 1-11 release procedure.
   version is single-sourced from `pyproject.toml`.
   `tests/unit/test_public_api_surface.py` owns the façade going
   forward (Phase 12 R13/PE.4; the unowned Phase 8↔12 seam that hid
-  the missing re-export for 11 phases now has a CI gate).
+  the missing re-export for 11 phases now has a CI gate). The S7-R1
+  pass extended the façade from 18 to 24 names by promoting the six
+  `*Params` adapter classes to STABLE; they are the only documented
+  way to construct a configured estimator (`tabular_config=...`,
+  `optimizer=...`, etc.) and so belong on the public surface.
+  Module renamed from `_adapters.py` to `adapters.py` accordingly.
+- **24 STABLE public names** at `seq_sklearn.*` after Phase 12 S7-R1:
+  the 18 originals plus `TabularConfigParams`, `OptimizerParams`,
+  `SchedulerParams`, `LossParams`, `SamplerParams`, and
+  `TFTAdvancedParams` (`docs/reference/api.md` autoclasses each).
 - **Phase-0 scaffold.** `pyproject.toml`, src/tests tree, ruff +
   pyright + pytest config, `.github/workflows/pr.yml` and
   `nightly.yml`, `scripts/check_snapshots.sh`,
@@ -82,10 +91,14 @@ for the criteria 1-11 release procedure.
 
 The four N7 numbers below are recorded at release time from two
 manual runs per [the release checklist](release_checklist.md):
-`pytest -m "gpu and slow" tests/perf/test_n7_absolute.py` on an
-A100/T4/4090 for the three GPU/training numbers, and
-`pytest -m slow tests/perf/test_n7_absolute.py::test_n7_cpu_inference_latency`
+`SEQ_SKLEARN_N7_GPU=1 pytest -m "gpu and slow" tests/perf/test_n7_absolute.py`
+on an A100/T4/4090 for the three GPU/training numbers, and
+`SEQ_SKLEARN_N7_CPU=1 pytest -m slow tests/perf/test_n7_absolute.py::test_n7_cpu_inference_latency`
 on the release-reference CPU for the inference-latency number.
+Both env-var gates exist so the strict per-batch budgets never
+assert incidentally on a non-reference device. Each `*_INFER_MS`
+budget is the *whole 1024-window batch* (not per-sample), matching
+the requirements wording verbatim.
 
 - GPU peak memory: TBD (target `< 8 GB`)
 - Training wall-clock: TBD (target `< 30 min`)

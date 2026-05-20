@@ -48,7 +48,7 @@ src/seq_sklearn/
     _domains.py                     TASK_TYPES, LOSS_STRATEGIES, etc. (F5)
     _validity.py                    F5 validity-matrix cross-field validator (check_combo)
     _extras.py                      ExtraDict, _normalize_extras, _PROMOTED_KEYS_BY_FAMILY, extract_deprecated_extras (hyperparameter strategy)
-    _adapters.py                    BaseEstimator adapters per pydantic config (TabularConfigParams, OptimizerParams, SchedulerParams, LossParams, SamplerParams, <Model>AdvancedParams)
+    adapters.py                     BaseEstimator adapters per pydantic config (TabularConfigParams, OptimizerParams, SchedulerParams, LossParams, SamplerParams, <Model>AdvancedParams); STABLE per A3
     base.py                         BaseTrainingConfig, BaseModelConfig
     optimizer.py                    OptimizerConfig (family sub-config)
     scheduler.py                    SchedulerConfig (family sub-config)

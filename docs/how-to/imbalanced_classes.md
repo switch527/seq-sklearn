@@ -70,7 +70,7 @@ versions may ship a `pos_weight` config field.
 - [ ] Tune the decision threshold post-hoc on a held-out set.
 
 ```{testcode}
-from seq_sklearn.config.adapters import SamplerParams
+from seq_sklearn import SamplerParams
 
 sampler = SamplerParams(strategy="balanced_by_class")
 assert sampler.strategy == "balanced_by_class"
