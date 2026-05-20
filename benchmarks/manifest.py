@@ -278,7 +278,7 @@ def write_cell(root: Path, row: ResultRow) -> None:
     # FutureWarning that becomes a dtype error in upcoming releases.
     # Coerce the metric columns to `float64` so the shard schema is
     # consistent across skipped and successful cells.
-    df = _coerce_optional_float_columns(df)
+    df = _coerce_optional_scalar_columns(df)
     _atomic_write_parquet(df, shard_path(root, key))
     payload = json.dumps(
         {
@@ -330,40 +330,49 @@ def _empty_manifest_dataframe() -> pd.DataFrame:
     return pd.DataFrame(columns=columns)
 
 
-def _optional_float_columns() -> tuple[str, ...]:
+def _optional_scalar_columns() -> tuple[tuple[str, str], ...]:
     """Compute the list of `ResultRow` fields whose annotation is
-    `float | None`.
+    `float | None` or `int | None`.
 
-    Computed by inspection once per process so the column list stays
-    in sync with the schema; adding a new optional-float metric
-    automatically picks it up.
+    Each entry is `(field_name, target_dtype)` where target_dtype is
+    `float64` for `float | None` and `Int64` (pandas nullable) for
+    `int | None`. Computed by inspection once per process so the
+    column list stays in sync with the schema; adding a new optional
+    scalar metric automatically picks it up.
     """
-    out: list[str] = []
+    out: list[tuple[str, str]] = []
     for name, info in ResultRow.model_fields.items():
-        annotation = info.annotation
-        # `Optional[float]` and `float | None` both stringify to
-        # "float | None" under pydantic's annotation repr. Cheap
-        # check that does not require typing introspection.
-        if str(annotation) == "float | None":
-            out.append(name)
+        annotation = str(info.annotation)
+        # `Optional[X]` and `X | None` both stringify to "X | None"
+        # under pydantic's annotation repr; cheap check without
+        # typing introspection.
+        if annotation == "float | None":
+            out.append((name, "float64"))
+        elif annotation == "int | None":
+            out.append((name, "Int64"))
     return tuple(out)
 
 
-def _coerce_optional_float_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Cast every `float | None` ResultRow column to `float64`.
+def _coerce_optional_scalar_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Cast every `float | None` / `int | None` ResultRow column to
+    its nullable pandas dtype.
 
     On a skipped row pydantic emits Python `None` for every metric
     field; pandas types those as `object`. Concatenating an object-
-    typed null column with a float-typed shard from a successful row
-    triggers a `FutureWarning` that becomes an error in pandas 3.x.
-    The cast normalizes to `float64` (NaN for None), which matches
-    the dtype of a successful row.
+    typed null column with a scalar-typed shard from a successful
+    row triggers a `FutureWarning` that becomes an error in pandas
+    3.x. Casting to `float64` (for floats) and `Int64` (the pandas
+    nullable integer type, distinct from numpy `int64`, for ints)
+    keeps the shard schema consistent across skipped and successful
+    cells.
     """
-    cols = [c for c in _optional_float_columns() if c in df.columns]
+    cols = _optional_scalar_columns()
     if not cols:
         return df
     df = df.copy()
-    df[cols] = df[cols].astype("float64")
+    for name, dtype in cols:
+        if name in df.columns:
+            df[name] = df[name].astype(dtype)
     return df
 
 

@@ -257,6 +257,130 @@ class _CrashingAdapter:
 
 
 @dataclass
+class _RuntimeProbaErrorAdapter:
+    """Declares supports_proba=True at the spec but raises
+    `ProbaUnsupportedError` at runtime.
+
+    Pre-R2 this would abort the run via the narrowed-except chain
+    (compute_all raises ValueError on `y_proba=None`); post-R2 the
+    typed `probabilities_required_but_runtime_unavailable` skip
+    catches it.
+    """
+
+    name: ClassVar[str] = "fake_runtime_proba_error"
+    family: ClassVar[str] = "sklearn_passthrough"
+    task_types: ClassVar[tuple[TaskType, ...]] = ("binary",)
+    supports_proba: ClassVar[bool] = True
+
+    spec: DatasetSpec
+    hyperparameters: dict[str, Any] = field(default_factory=dict)
+
+    def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:
+        return self
+
+    def predict(self, panel: pd.DataFrame) -> np.ndarray:
+        return np.zeros(len(panel), dtype=np.int64)
+
+    def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:
+        raise ProbaUnsupportedError(
+            f"{self.name}: runtime ProbaUnsupportedError despite supports_proba=True"
+        )
+
+    def predict_quantiles(self, panel: pd.DataFrame) -> np.ndarray:
+        raise QuantilesUnsupportedError(self.name)
+
+
+@dataclass
+class _PredictCrashingAdapter:
+    """Fits cleanly but raises `RuntimeError` at `predict`."""
+
+    name: ClassVar[str] = "fake_predict_crashing"
+    family: ClassVar[str] = "sklearn_passthrough"
+    task_types: ClassVar[tuple[TaskType, ...]] = ("binary",)
+    supports_proba: ClassVar[bool] = True
+
+    spec: DatasetSpec
+    hyperparameters: dict[str, Any] = field(default_factory=dict)
+
+    def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:
+        return self
+
+    def predict(self, panel: pd.DataFrame) -> np.ndarray:
+        raise RuntimeError("fake_predict_crashing: synthetic predict-time crash")
+
+    def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:
+        raise RuntimeError("not reached")
+
+    def predict_quantiles(self, panel: pd.DataFrame) -> np.ndarray:
+        raise QuantilesUnsupportedError(self.name)
+
+
+@dataclass
+class _NaNRegressorAdapter:
+    """Regression adapter that returns nan in the first 2 y_pred rows.
+
+    Exercises the float-y_pred branch of `_strip_below_floor_rows`
+    (which `_ConstantRegressorAdapter` doesn't reach because its
+    predictions are all-finite).
+    """
+
+    name: ClassVar[str] = "fake_nan_regressor"
+    family: ClassVar[str] = "sklearn_passthrough"
+    task_types: ClassVar[tuple[TaskType, ...]] = ("regression_point",)
+    supports_proba: ClassVar[bool] = False
+
+    spec: DatasetSpec
+    hyperparameters: dict[str, Any] = field(default_factory=dict)
+    _mean: float = field(default=0.0, init=False)
+
+    def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:
+        self._mean = float(np.mean(y)) if len(y) > 0 else 0.0
+        return self
+
+    def predict(self, panel: pd.DataFrame) -> np.ndarray:
+        out = np.full(len(panel), self._mean, dtype=np.float64)
+        out[: min(2, len(panel))] = np.nan
+        return out
+
+    def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:
+        raise ProbaUnsupportedError(self.name)
+
+    def predict_quantiles(self, panel: pd.DataFrame) -> np.ndarray:
+        raise QuantilesUnsupportedError(self.name)
+
+
+@dataclass
+class _NotFittedAdapter:
+    """Always raises `NotFittedError` at `predict`.
+
+    Confirms the R2 narrowed except includes `NotFittedError` and
+    routes the cell through the adapter-error skip path.
+    """
+
+    name: ClassVar[str] = "fake_not_fitted"
+    family: ClassVar[str] = "sklearn_passthrough"
+    task_types: ClassVar[tuple[TaskType, ...]] = ("binary",)
+    supports_proba: ClassVar[bool] = True
+
+    spec: DatasetSpec
+    hyperparameters: dict[str, Any] = field(default_factory=dict)
+
+    def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:
+        return self
+
+    def predict(self, panel: pd.DataFrame) -> np.ndarray:
+        from seq_sklearn import NotFittedError as _NotFittedError
+
+        raise _NotFittedError("fake_not_fitted: synthetic NotFittedError")
+
+    def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:
+        raise RuntimeError("not reached")
+
+    def predict_quantiles(self, panel: pd.DataFrame) -> np.ndarray:
+        raise QuantilesUnsupportedError(self.name)
+
+
+@dataclass
 class _QuantileRegressorAdapter:
     """Declares `regression_quantile` so the B5-followup skip fires."""
 
@@ -394,6 +518,10 @@ def _register_fake_models() -> None:
         _NoProbaClassifierAdapter,
         _NaNProbaAdapter,
         _HarnessBugAdapter,
+        _RuntimeProbaErrorAdapter,
+        _PredictCrashingAdapter,
+        _NaNRegressorAdapter,
+        _NotFittedAdapter,
     ):
         spec = ModelSpec(
             name=adapter_cls.name,
@@ -1057,6 +1185,7 @@ def test_register_adapter_rolls_back_spec_when_factory_registration_fails() -> N
         supports_proba=True,
         reason="synthetic; test only",
     )
+
     # Force the factory registration to fail by pre-poisoning the
     # factory map with a conflicting entry under the same name. This
     # requires the spec to be present already, so do the poisoning
@@ -1177,3 +1306,200 @@ def test_format_metric_branches() -> None:
     assert _format_metric(float("nan")) == ""
     assert _format_metric(1.23456) == "1.2346"
     assert _format_metric("hello") == "hello"
+
+
+# --- R2 / arch-CRITICAL: runtime ProbaUnsupportedError emits a typed
+# skip instead of aborting the run. ---
+
+
+def test_runtime_proba_unsupported_emits_typed_skip(
+    fake_registry: list[PanelDataset], tmp_path: Path
+) -> None:
+    del fake_registry
+    config = _make_config(
+        datasets=("fake_binary",),
+        models=("fake_runtime_proba_error",),
+        seeds=(0,),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    # Pre-R2: this would raise ValueError from compute_all and abort
+    # the run. Post-R2: the cell is skipped with the typed reason.
+    result = run_raw_loss(config, output_root=tmp_path / "out", env=env)
+    assert result.cells_attempted == 0
+    assert result.cells_skipped_proba_runtime_unavailable == 5
+    assert result.cells_skipped_adapter_error == 0
+    manifest = load_run(tmp_path / "out")
+    assert bool(
+        manifest["skipped_reason"]
+        .str.startswith("probabilities_required_but_runtime_unavailable")
+        .all()
+    )
+
+
+# --- R2 / code-IMP: a predict-time adapter crash routes to
+# adapter_error (the existing test only exercises fit-time). ---
+
+
+def test_predict_time_runtime_error_routes_to_adapter_error(
+    fake_registry: list[PanelDataset], tmp_path: Path
+) -> None:
+    del fake_registry
+    config = _make_config(
+        datasets=("fake_binary",),
+        models=("fake_predict_crashing",),
+        seeds=(0,),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    result = run_raw_loss(config, output_root=tmp_path / "out", env=env)
+    assert result.cells_attempted == 0
+    assert result.cells_skipped_adapter_error == 5
+    manifest = load_run(tmp_path / "out")
+    assert bool(manifest["skipped_reason"].str.contains("adapter_error: RuntimeError").all())
+
+
+# --- R2 / arch-I1: NotFittedError is in the narrowed except set. ---
+
+
+def test_not_fitted_error_is_caught_as_adapter_error(
+    fake_registry: list[PanelDataset], tmp_path: Path
+) -> None:
+    del fake_registry
+    config = _make_config(
+        datasets=("fake_binary",),
+        models=("fake_not_fitted",),
+        seeds=(0,),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    # Pre-R2: NotFittedError -> ValueError-shaped (NotFittedError
+    # subclasses sklearn.exceptions.NotFittedError which itself
+    # subclasses ValueError) -> falls outside narrow set -> aborts.
+    # Post-R2: caught explicitly, routes to adapter_error.
+    result = run_raw_loss(config, output_root=tmp_path / "out", env=env)
+    assert result.cells_attempted == 0
+    assert result.cells_skipped_adapter_error == 5
+    manifest = load_run(tmp_path / "out")
+    assert bool(manifest["skipped_reason"].str.contains("NotFittedError").all())
+
+
+# --- R2 / qa-I-C: _strip_below_floor_rows for float y_pred (regression). ---
+
+
+def test_strip_below_floor_rows_regression_nan_pred(
+    fake_registry: list[PanelDataset], tmp_path: Path
+) -> None:
+    del fake_registry
+    config = _make_config(
+        datasets=("fake_regression_point",),
+        models=("fake_nan_regressor",),
+        seeds=(0,),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    result = run_raw_loss(config, output_root=tmp_path / "out", env=env)
+    assert result.cells_attempted == 5
+    assert result.cells_skipped_adapter_error == 0
+    manifest = load_run(tmp_path / "out")
+    # The 2 nan rows per fold are stripped before the metric layer.
+    assert bool(manifest["n_below_floor_dropped"].notna().all())
+    assert bool((manifest["n_below_floor_dropped"] == 2).all())
+    # And the metric columns are finite.
+    assert bool(manifest["rmse"].notna().all())
+
+
+# --- R2 / qa-I-B: register_adapter happy path. ---
+
+
+def test_register_adapter_returns_spec_on_success() -> None:
+    from benchmarks.registry import (
+        get_adapter_factory,
+        list_models,
+        register_adapter,
+    )
+
+    spec = ModelSpec(
+        name="fake_happy_path_model",
+        family="sklearn_passthrough",
+        task_types=("binary",),
+        supports_proba=True,
+        reason="synthetic; test only",
+    )
+
+    def _factory(
+        *,
+        spec: DatasetSpec,
+        hyperparameters: dict[str, Any] | None = None,
+    ) -> SeqSklearnAdapter:
+        del hyperparameters
+        return _ConstantBinaryAdapter(spec=spec)  # type: ignore[return-value]
+
+    returned = register_adapter(spec, _factory)
+    assert returned is spec
+    assert "fake_happy_path_model" in list_models()
+    assert get_adapter_factory("fake_happy_path_model") is _factory
+
+
+# --- R2 / qa-I-D: rank_by_primary_loss skips regression_quantile groups. ---
+
+
+def test_rank_by_primary_loss_skips_regression_quantile_groups() -> None:
+    manifest = pd.DataFrame(
+        [
+            {
+                "dataset_name": "ds_a",
+                "model_name": "m_a",
+                "task_type": "regression_quantile",
+                "seed": 0,
+                "fold_index": 0,
+                "skipped_reason": None,
+                "rmse": 0.5,
+                "log_loss": None,
+            }
+        ]
+    )
+    entries = rank_by_primary_loss(manifest)
+    # regression_quantile rows are not in `_PRIMARY_LOSS`; skipped.
+    assert entries == []
+
+
+# --- R2 / qa-I-E: build_run_environment honors explicit library_repo_root. ---
+
+
+def test_build_run_environment_honors_explicit_library_repo_root(
+    tmp_path: Path,
+) -> None:
+    # An empty tmp_path is not a git checkout; `_resolve_git_sha`
+    # returns "unknown" for it. The explicit-root branch must
+    # actually route through this path (not fall back to the
+    # module-relative default which IS a git checkout).
+    env = build_run_environment(profile="smoke", library_repo_root=tmp_path)
+    assert env.library_git_sha == "unknown"
+
+
+# --- R2 / arch-I2: int|None column dtype is Int64 in shards. ---
+
+
+def test_int_or_none_columns_are_int64_nullable_dtype(
+    fake_registry: list[PanelDataset], tmp_path: Path
+) -> None:
+    del fake_registry
+    config = _make_config(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        seeds=(0,),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    run_raw_loss(config, output_root=tmp_path / "out", env=env)
+    manifest = load_run(tmp_path / "out")
+    # n_below_floor_dropped is `int | None` -> nullable Int64.
+    assert str(manifest["n_below_floor_dropped"].dtype) == "Int64"
+    # peak_cuda_bytes is also int | None and unset on this CPU run.
+    assert str(manifest["peak_cuda_bytes"].dtype) == "Int64"

@@ -89,6 +89,7 @@ from benchmarks.registry import (
     list_datasets,
     list_models,
 )
+from seq_sklearn import NotFittedError
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,9 @@ class RawLossExperimentResult(BaseModel):
     cells_attempted: int  # adapter actually fit
     cells_skipped_task_mismatch: int  # dataset.task_type not in model.task_types
     cells_skipped_proba_unavailable: int  # classification cell whose model has supports_proba=False
+    cells_skipped_proba_runtime_unavailable: (
+        int  # supports_proba=True at spec but raised at runtime
+    )
     cells_skipped_quantile_followup: int  # regression_quantile pending B5-followup
     cells_skipped_adapter_error: int  # adapter raised at fit / predict / proba
     cells_already_complete: int  # sentinel present at scan time
@@ -422,6 +426,37 @@ def _run_one_cell(
         y_pred = adapter.predict(test_panel)
         y_proba = _maybe_predict_proba(adapter, test_panel)
 
+        # Runtime proba precedence: an adapter that declares
+        # `supports_proba=True` at the spec MAY still raise
+        # `ProbaUnsupportedError` at runtime (calibration not fit,
+        # estimator-side guard), in which case `_maybe_predict_proba`
+        # returns None. For classification, `compute_all` requires
+        # `y_proba` and would raise `ValueError`; the pre-call
+        # registry-flag check at the outer loop only catches the
+        # spec-declared shape. Surface a typed skip BEFORE the
+        # metric layer so the row carries the right reason instead
+        # of aborting the run.
+        if y_proba is None and spec.task_type in {"binary", "multiclass"}:
+            return _build_row(
+                env=env,
+                spec=spec,
+                model_name=model_name,
+                seed=seed,
+                fold_index=fold_index,
+                n_folds=n_folds,
+                split_fingerprint=split_fingerprint,
+                l_resolved=l_resolved,
+                started_at_utc=started_at_utc,
+                skipped_reason=(
+                    "probabilities_required_but_runtime_unavailable: "
+                    f"model={model_name} declared supports_proba=True but "
+                    "predict_proba raised ProbaUnsupportedError at runtime"
+                ),
+                metrics_dump=None,
+                fit_resource=fit_resource,
+                latency=None,
+            )
+
         def _timed_predict() -> None:
             adapter.predict(test_panel)
 
@@ -439,8 +474,8 @@ def _run_one_cell(
         # `min_periods_predict` come back as nan from the deep
         # models' `predict` / `predict_proba`. The metric layer
         # raises on nan; strip them first and record the count.
-        y_true_clean, y_pred_clean, y_proba_clean, n_dropped = (
-            _strip_below_floor_rows(test_y, y_pred, y_proba)
+        y_true_clean, y_pred_clean, y_proba_clean, n_dropped = _strip_below_floor_rows(
+            test_y, y_pred, y_proba
         )
 
         metrics = compute_all(
@@ -470,16 +505,19 @@ def _run_one_cell(
     except (
         RuntimeError,
         MemoryError,
+        NotFittedError,
         ProbaUnsupportedError,
         QuantilesUnsupportedError,
     ) as exc:
         # Narrowed to the failure modes the harness expects from a
         # real adapter: torch / numerical (RuntimeError), out-of-
-        # memory (MemoryError), and the typed adapter signals
-        # (`ProbaUnsupportedError` / `QuantilesUnsupportedError`).
-        # Harness-side `ValueError` / `ValidationError` propagate
-        # so a config / data mismatch surfaces loudly instead of
-        # masquerading as "adapter_error".
+        # memory (MemoryError), the library's typed `NotFittedError`
+        # (`sklearn.exceptions.NotFittedError` subclass; raised when
+        # `predict` runs against an adapter whose `_est` is None),
+        # and the typed adapter signals (`ProbaUnsupportedError` /
+        # `QuantilesUnsupportedError`). Harness-side `ValueError` /
+        # `ValidationError` propagate so a config / data mismatch
+        # surfaces loudly instead of masquerading as "adapter_error".
         logger.warning(
             "run_raw_loss: cell %s/%s seed=%d fold=%d skipped: %s: %s",
             spec.name,
@@ -615,9 +653,17 @@ def run_raw_loss(
     attempted = 0
     skipped_task_mismatch = 0
     skipped_proba_unavailable = 0
+    skipped_proba_runtime_unavailable = 0
     skipped_quantile_followup = 0
     skipped_adapter_error = 0
     already_complete = 0
+    # arch-I3 (R2): hoist the completed-keys set out of the
+    # per-dataset loop so the sentinel directory is globbed once per
+    # `run_raw_loss` call rather than N_datasets times. The set is
+    # only consulted by the loader-skip gate which uses the pre-call
+    # snapshot of completed cells; in-loop sentinel writes do not
+    # need to update it.
+    completed_keys = set(list_completed_keys(output_root))
 
     for dataset_name in sorted(dataset_names):
         spec = get_dataset(dataset_name)
@@ -642,11 +688,9 @@ def run_raw_loss(
             seeds=seeds,
             n_folds=_DEFAULT_N_SPLITS,
         )
-        completed_keys = set(list_completed_keys(output_root))
         if expected_keys.issubset(completed_keys):
             logger.info(
-                "run_raw_loss: dataset %s all %d cells already complete; "
-                "skipping loader",
+                "run_raw_loss: dataset %s all %d cells already complete; skipping loader",
                 dataset_name,
                 len(expected_keys),
             )
@@ -766,6 +810,10 @@ def run_raw_loss(
                             attempted += 1
                         elif row.skipped_reason.startswith("regression_quantile_b5_followup"):
                             skipped_quantile_followup += 1
+                        elif row.skipped_reason.startswith(
+                            "probabilities_required_but_runtime_unavailable"
+                        ):
+                            skipped_proba_runtime_unavailable += 1
                         else:
                             skipped_adapter_error += 1
 
@@ -782,6 +830,7 @@ def run_raw_loss(
         cells_attempted=attempted,
         cells_skipped_task_mismatch=skipped_task_mismatch,
         cells_skipped_proba_unavailable=skipped_proba_unavailable,
+        cells_skipped_proba_runtime_unavailable=skipped_proba_runtime_unavailable,
         cells_skipped_quantile_followup=skipped_quantile_followup,
         cells_skipped_adapter_error=skipped_adapter_error,
         cells_already_complete=already_complete,
