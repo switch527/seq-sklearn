@@ -219,6 +219,47 @@ def test_regression_point_known_values_match_inline_arithmetic() -> None:
     assert rec.mape_skip_reason is None
 
 
+def test_pr_auc_multiclass_ovr_macro_matches_inline_arithmetic() -> None:
+    # R1 / qa-I1: the multiclass per-class PR-AUC loop in
+    # compute_pr_auc had no oracle test before this. The fixture
+    # below produces three distinct per-class APs whose macro mean
+    # is hand-computed below.
+    #
+    # y_true = [0, 0, 1, 1, 2, 2]; y_proba designed so each per-class
+    # OVR ranking is non-trivial (a negative outranks at least one
+    # positive in classes 0 and 1; class 2's lower positive sits at
+    # the bottom of the sort).
+    y_true = np.array([0, 0, 1, 1, 2, 2])
+    y_proba = np.array(
+        [
+            [0.50, 0.20, 0.30],
+            [0.25, 0.42, 0.33],
+            [0.45, 0.25, 0.30],
+            [0.30, 0.45, 0.25],
+            [0.20, 0.70, 0.10],
+            [0.60, 0.05, 0.35],
+        ]
+    )
+    # Class 0 OVR ranking (score desc):
+    #   (0.6, 0), (0.5, 1), (0.45, 0), (0.3, 0), (0.25, 1), (0.2, 0)
+    # AP_0 = (0.5-0)*0.5 + (1-0.5)*(2/5) = 0.25 + 0.2 = 0.45
+    #
+    # Class 1 OVR ranking:
+    #   (0.7, 0), (0.45, 1), (0.42, 0), (0.25, 1), (0.2, 0), (0.05, 0)
+    # AP_1 = (0.5-0)*0.5 + (1-0.5)*0.5 = 0.25 + 0.25 = 0.5
+    #
+    # Class 2 OVR ranking:
+    #   (0.35, 1), (0.33, 0), (0.3, 0), (0.3, 0), (0.25, 0), (0.1, 1)
+    # AP_2 = (0.5-0)*1 + (1-0.5)*(2/6) = 0.5 + 1/6 = 2/3
+    #
+    # macro = (0.45 + 0.5 + 2/3)/3 = 97/180
+    from benchmarks.metrics.classification import compute_pr_auc
+
+    out = compute_pr_auc(y_true, y_proba, n_classes=3)
+    assert out == pytest.approx((0.45 + 0.5 + 2 / 3) / 3)
+    assert out == pytest.approx(97 / 180)
+
+
 def test_pinball_at_q50_matches_inline_formula() -> None:
     # With y - p = -0.5 everywhere and alpha = 0.5,
     # pinball = mean(max(alpha * (y-p), (1-alpha) * (p-y)))

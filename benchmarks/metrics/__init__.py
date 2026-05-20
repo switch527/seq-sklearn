@@ -89,9 +89,11 @@ class RegressionPointMetrics(_BaseMetrics):
 class RegressionQuantileMetrics(_BaseMetrics):
     """Metrics applicable when `task_type == "regression_quantile"`.
 
-    `rmse` / `mae` / `r2` use the median quantile's column when one
-    is configured at q=0.5; otherwise the median across quantiles.
-    `pinball_q{level}` carries the per-quantile pinball loss.
+    `rmse` / `mae` / `r2` / `mape` are computed against the caller-
+    supplied `y_pred` point prediction; `y_quantiles` drives only
+    the `pinball` dict. The caller is responsible for selecting the
+    median quantile (when one is configured at q=0.5) or any other
+    derivation as the point prediction.
     """
 
     rmse: float
@@ -159,6 +161,30 @@ def compute_all(
     raise ValueError(f"compute_all: unsupported task_type={task_type!r}")
 
 
+def _resolve_pos_index(labels: np.ndarray | None, y_true: np.ndarray, pos_label: int | str) -> int:
+    """Return the column of `y_proba` that holds `p(positive_class)`.
+
+    The harness's adapter follows the sklearn convention that the
+    `predict_proba` columns are aligned with `classes_` (sorted
+    ascending). When the dataset's `positive_label` is the smaller
+    of the two classes (e.g., binary `0/1` with `positive_label=0`),
+    `y_proba[:, 1]` is `p(negative)`, NOT `p(positive)`, so a naïve
+    column-1 index silently inverts ROC-AUC / PR-AUC / Brier / ECE.
+
+    Raises:
+        ValueError: `pos_label` is not present in `labels` (or in
+            `np.unique(y_true)` when `labels` is not provided).
+    """
+    label_arr = np.asarray(labels) if labels is not None else np.unique(y_true)
+    matches = np.where(label_arr == pos_label)[0]
+    if len(matches) == 0:
+        raise ValueError(
+            f"_resolve_pos_index: pos_label={pos_label!r} not found in "
+            f"labels={label_arr.tolist()!r}"
+        )
+    return int(matches[0])
+
+
 def _compute_binary(
     *,
     y_true: np.ndarray,
@@ -167,6 +193,7 @@ def _compute_binary(
     pos_label: int | str,
     labels: np.ndarray | None,
 ) -> BinaryMetrics:
+    pos_index = _resolve_pos_index(labels, y_true, pos_label)
     p, r, f = _cls.compute_precision_recall_f1_binary(y_true, y_pred, pos_label=pos_label)
     return BinaryMetrics(
         log_loss=_cls.compute_log_loss(y_true, y_proba, labels=labels),
@@ -174,12 +201,20 @@ def _compute_binary(
         precision_zd0=p,
         recall_zd0=r,
         f1_zd0=f,
-        roc_auc=_cls.compute_roc_auc(y_true, y_proba, n_classes=2),
-        pr_auc=_cls.compute_pr_auc(y_true, y_proba, n_classes=2, pos_label=pos_label),
+        roc_auc=_cls.compute_roc_auc(
+            y_true, y_proba, n_classes=2, pos_label=pos_label, pos_index=pos_index
+        ),
+        pr_auc=_cls.compute_pr_auc(
+            y_true, y_proba, n_classes=2, pos_label=pos_label, pos_index=pos_index
+        ),
         balanced_accuracy=_cls.compute_balanced_accuracy(y_true, y_pred),
         mcc=_cls.compute_mcc(y_true, y_pred),
-        brier=_cls.compute_brier(y_true, y_proba, n_classes=2),
-        ece_q15=_cls.compute_ece_q15(y_true, y_proba, n_classes=2),
+        brier=_cls.compute_brier(
+            y_true, y_proba, n_classes=2, pos_label=pos_label, pos_index=pos_index
+        ),
+        ece_q15=_cls.compute_ece_q15(
+            y_true, y_proba, n_classes=2, pos_label=pos_label, pos_index=pos_index
+        ),
     )
 
 
@@ -202,7 +237,7 @@ def _compute_multiclass(
         f1_macro_zd0=prf["f1_macro_zd0"],
         f1_weighted_zd0=prf["f1_weighted_zd0"],
         roc_auc_macro_ovr=_cls.compute_roc_auc(y_true, y_proba, n_classes=n_classes),
-        pr_auc_macro_ovr=_cls.compute_pr_auc(y_true, y_proba, n_classes=n_classes, pos_label=1),
+        pr_auc_macro_ovr=_cls.compute_pr_auc(y_true, y_proba, n_classes=n_classes),
         balanced_accuracy=_cls.compute_balanced_accuracy(y_true, y_pred),
         mcc=_cls.compute_mcc(y_true, y_pred),
         brier_multiclass_mean=_cls.compute_brier(y_true, y_proba, n_classes=n_classes),

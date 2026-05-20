@@ -1,7 +1,7 @@
 """Resource metrics (B5.3).
 
 Wall-clock fit seconds, peak process RSS, peak CUDA memory (when a
-CUDA device is visible), and per-sample inference latency (median +
+CUDA device is visible), and per-batch inference latency (median +
 p95). Recorded on every run; the harness routes them into the
 manifest alongside the predict-quality metrics.
 
@@ -13,22 +13,24 @@ median + p95 in milliseconds per batch.
 import resource as _stdlib_resource
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 
 import numpy as np
+from pydantic import BaseModel, ConfigDict
 
 
-@dataclass(frozen=True, slots=True)
-class FitResource:
+class FitResource(BaseModel):
     """Resource snapshot from a single `adapter.fit` call.
 
     ``wall_seconds`` is the elapsed wall-clock. ``peak_rss_bytes``
     is the process resident-set-size high-water mark observed AFTER
     the fit (via `resource.getrusage` on POSIX; bytes on Linux,
-    kilobytes on macOS — the unit difference is documented in the
-    field name). ``peak_cuda_bytes`` is `torch.cuda.max_memory_
-    allocated()` when CUDA is visible, otherwise None.
+    kilobytes on macOS; the unit difference is documented in the
+    field name and normalized by the B6 harness before the manifest
+    is emitted). ``peak_cuda_bytes`` is ``torch.cuda.max_memory_
+    allocated()`` when CUDA is visible, otherwise None.
     """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     wall_seconds: float
     peak_rss_bytes: int
@@ -63,11 +65,12 @@ def measure_fit(
     return FitResource(wall_seconds=wall, peak_rss_bytes=peak_rss, peak_cuda_bytes=peak_cuda)
 
 
-@dataclass(frozen=True, slots=True)
-class InferenceLatency:
+class InferenceLatency(BaseModel):
     """Median and p95 wall-clock latency (milliseconds) of a single
     predict call on a 1024-row batch (or whatever batch size the
     caller times). N7 reads these per-batch, NOT per-sample."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     median_ms: float
     p95_ms: float

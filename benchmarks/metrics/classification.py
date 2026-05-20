@@ -131,33 +131,65 @@ def compute_precision_recall_f1_multiclass(
     return out
 
 
-def compute_roc_auc(y_true: np.ndarray, y_proba: np.ndarray, *, n_classes: int) -> float:
-    """Binary: `roc_auc_score(y_true, y_proba[:, 1])`.
+def compute_roc_auc(
+    y_true: np.ndarray,
+    y_proba: np.ndarray,
+    *,
+    n_classes: int,
+    pos_label: int | str | None = None,
+    pos_index: int = 1,
+) -> float:
+    """Binary: `roc_auc_score(y_true_binarized, y_proba[:, pos_index])`.
+
+    `sklearn.metrics.roc_auc_score` has no `pos_label` parameter for
+    the binary case; it infers positives from the values of `y_true`
+    (treating the larger label as positive when `y_true` is binary).
+    To honor a dataset whose `positive_label` is the smaller class,
+    `y_true` is binarized to `(y_true == pos_label)` before the
+    sklearn call so the AUC measures the right direction. When
+    `pos_label` is None the function preserves the historical
+    behavior.
+
+    `pos_index` is the column of `y_proba` for the positive class;
+    `_compute_binary` resolves it from `labels` + `pos_label` so a
+    dataset whose loader encodes the positive event as the class-0
+    column does not silently flip the AUC.
 
     Multiclass: `multi_class="ovr"`, `average="macro"` per B5.1.
     """
     if n_classes == 2:
-        return float(roc_auc_score(y_true, y_proba[:, 1]))
+        if pos_label is not None:
+            y_binary = (np.asarray(y_true) == pos_label).astype(np.int64)
+        else:
+            y_binary = y_true
+        return float(roc_auc_score(y_binary, y_proba[:, pos_index]))
     return float(roc_auc_score(y_true, y_proba, multi_class="ovr", average="macro"))
 
 
 def compute_pr_auc(
-    y_true: np.ndarray, y_proba: np.ndarray, *, n_classes: int, pos_label: int | str
+    y_true: np.ndarray,
+    y_proba: np.ndarray,
+    *,
+    n_classes: int,
+    pos_label: int | str | None = None,
+    pos_index: int = 1,
 ) -> float:
     """Average precision (PR-AUC), sklearn step-function definition,
     not trapezoidal (B5.1 / qa-C5).
 
     Binary: `average_precision_score(y_true, y_proba[:, pos_index],
-    pos_label=pos_label)`. Multiclass: one-vs-rest macro average
-    across classes.
+    pos_label=pos_label)`. `_compute_binary` derives `pos_index` from
+    the dataset's labels + `positive_label` so an inverted column
+    order does not silently flip the score.
+
+    Multiclass: one-vs-rest macro average across classes; `pos_label`
+    is unused.
     """
     if n_classes == 2:
-        # `pos_label` is the *value* of the positive class in
-        # `y_true`; sklearn passes it through unchanged.
         return float(
             average_precision_score(
                 y_true,
-                y_proba[:, 1],
+                y_proba[:, pos_index],
                 pos_label=pos_label,  # pyright: ignore[reportArgumentType]
             )
         )
@@ -177,37 +209,65 @@ def compute_mcc(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(matthews_corrcoef(y_true, y_pred))
 
 
-def compute_brier(y_true: np.ndarray, y_proba: np.ndarray, *, n_classes: int) -> float:
+def compute_brier(
+    y_true: np.ndarray,
+    y_proba: np.ndarray,
+    *,
+    n_classes: int,
+    pos_label: int | str | None = None,
+    pos_index: int = 1,
+) -> float:
     """Brier score per B5.1.
 
-    Binary: `brier_score_loss(y_true, y_proba[:, 1])`. Multiclass:
-    unweighted mean over classes of the one-vs-rest per-class
-    `brier_score_loss`, i.e.
-    ``mean_k brier_score_loss(y_true == k, y_proba[:, k])``
-    (no extra division by K beyond that mean; normalized by N
-    inside each call). Pinned by qa-NEW-C1.
+    Binary: ``brier_score_loss(y_true, y_proba[:, pos_index],
+    pos_label=pos_label)``. `_compute_binary` derives `pos_index`
+    from the dataset's labels + `positive_label` so the column does
+    not silently invert when the positive class is class 0.
+
+    Multiclass: unweighted mean over classes of the one-vs-rest
+    per-class ``brier_score_loss((y_true == k).astype(int),
+    y_proba[:, k])`` (no extra division by K beyond that mean;
+    normalized by N inside each call). Pinned by qa-NEW-C1.
     """
     if n_classes == 2:
-        return float(brier_score_loss(y_true, y_proba[:, 1]))
+        return float(
+            brier_score_loss(
+                y_true,
+                y_proba[:, pos_index],
+                pos_label=pos_label,  # pyright: ignore[reportArgumentType]
+            )
+        )
     per_class: list[float] = []
     for k in range(n_classes):
         per_class.append(float(brier_score_loss((y_true == k).astype(np.int64), y_proba[:, k])))
     return float(np.mean(per_class))
 
 
-def compute_ece_q15(y_true: np.ndarray, y_proba: np.ndarray, *, n_classes: int) -> float:
+def compute_ece_q15(
+    y_true: np.ndarray,
+    y_proba: np.ndarray,
+    *,
+    n_classes: int,
+    pos_label: int | str | None = None,
+    pos_index: int = 1,
+) -> float:
     """Expected calibration error with 15 equal-mass quantile bins
     per B5.1.
 
-    For binary: bin by `y_proba[:, 1]` and per bin compute
-    |mean(prob) - frac(y_true == 1)|, weighted by bin size.
+    For binary: bin by `y_proba[:, pos_index]` and per bin compute
+    `|mean(prob) - frac(y_true == pos_label)|`, weighted by bin
+    size. When `pos_label` is None, falls back to the historical
+    `y_true == 1` convention.
 
     For multiclass: bin by the max-class probability and per bin
-    compute |mean(top-prob) - accuracy|, weighted by bin size.
+    compute `|mean(top-prob) - accuracy|`, weighted by bin size.
     """
     if n_classes == 2:
-        probs = y_proba[:, 1]
-        correct = y_true.astype(np.float64)
+        probs = y_proba[:, pos_index]
+        if pos_label is None:
+            correct = y_true.astype(np.float64)
+        else:
+            correct = (np.asarray(y_true) == pos_label).astype(np.float64)
     else:
         probs = y_proba.max(axis=1)
         argmax = y_proba.argmax(axis=1)

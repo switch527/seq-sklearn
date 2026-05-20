@@ -408,12 +408,13 @@ the multiclass averaging strategy spelled out.
     `pos_label=spec.positive_label`. Pinned values for
     `accuracy`, `precision_zd0`, `recall_zd0`, `f1_zd0`,
     `log_loss`, `roc_auc`, PR-AUC, MCC, Brier (binary).
-  - A 3-class 4-sample multiclass fixture with class 2 fully
-    ABSENT from `y_true` (only classes 0 and 1 in `y_true`) so the
+  - A 3-class 4-sample multiclass fixture with class 2 NEVER
+    predicted in `y_pred` (TP=FP=0 for class 2) so the
     `zero_division=0` branch fires non-trivially in
-    `precision_macro_zd0` and `precision_weighted_zd0`; the
-    fixture also has unequal counts (2/1/1) so `macro` and
-    `weighted` produce different values. Pinned values for
+    `precision_macro_zd0` and `precision_weighted_zd0`. Class 2 is
+    kept in `y_true` (supports 2/1/1) so the ROC-AUC OVR pathway
+    has a positive per class; the unequal counts also drive
+    `macro != weighted`. Pinned values for
     `accuracy`, `precision_macro_zd0`, `precision_weighted_zd0`,
     `recall_*`, `f1_*`, `log_loss`, Brier multiclass.
   - An 8-sample regression vector with at least one negative

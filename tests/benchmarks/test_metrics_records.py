@@ -6,9 +6,16 @@ in suffixed multiclass names (`*_macro_zd0` / `*_weighted_zd0`) and
 unsuffixed binary names (`precision_zd0` / `recall_zd0` / `f1_zd0`).
 The regression point and quantile records carry the MAPE skip-reason
 slot per B5.2.
+
+R1-followup: every `compute_all` `ValueError` raise is exercised so
+a refactor that drops one of the guards is caught by the suite.
 """
 
+from typing import cast
+
 import numpy as np
+import pytest
+from benchmarks.config import TaskType
 from benchmarks.metrics import (
     BinaryMetrics,
     MulticlassMetrics,
@@ -154,7 +161,6 @@ def test_regression_quantile_record_carries_pinball_dict() -> None:
 def test_records_reject_extra_fields() -> None:
     # `extra="forbid"` is the contract; a future maintainer cannot
     # silently inject an extra typed field via the constructor path.
-    import pytest
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
@@ -176,3 +182,140 @@ def test_records_reject_extra_fields() -> None:
             ece_q15=0.0,
             not_a_real_metric=1.0,  # pyright: ignore[reportCallIssue]
         )
+
+
+# --- R1 / qa-C2: every `compute_all` ValueError raise is exercised. ---
+
+
+def test_compute_all_binary_missing_y_proba_raises() -> None:
+    with pytest.raises(ValueError, match="y_proba"):
+        compute_all(
+            task_type="binary",
+            y_true=np.array([0, 1, 0, 1]),
+            y_pred=np.array([0, 1, 0, 1]),
+            pos_label=1,
+        )
+
+
+def test_compute_all_binary_missing_pos_label_raises() -> None:
+    with pytest.raises(ValueError, match="pos_label"):
+        compute_all(
+            task_type="binary",
+            y_true=np.array([0, 1, 0, 1]),
+            y_pred=np.array([0, 1, 0, 1]),
+            y_proba=np.array([[0.8, 0.2], [0.2, 0.8], [0.7, 0.3], [0.1, 0.9]]),
+        )
+
+
+def test_compute_all_multiclass_missing_y_proba_raises() -> None:
+    with pytest.raises(ValueError, match="y_proba"):
+        compute_all(
+            task_type="multiclass",
+            y_true=np.array([0, 1, 2]),
+            y_pred=np.array([0, 1, 2]),
+        )
+
+
+def test_compute_all_regression_quantile_missing_args_raises() -> None:
+    with pytest.raises(ValueError, match="y_quantiles"):
+        compute_all(
+            task_type="regression_quantile",
+            y_true=np.array([1.0, 2.0, 3.0]),
+            y_pred=np.array([1.1, 1.9, 3.0]),
+        )
+
+
+def test_compute_all_unsupported_task_type_raises() -> None:
+    # The runtime branch fires only when TaskType is widened without
+    # a matching dispatch arm. Cast bypasses pyright's Literal check.
+    with pytest.raises(ValueError, match="unsupported task_type"):
+        compute_all(
+            task_type=cast(TaskType, "not_a_real_task_type"),
+            y_true=np.array([1.0]),
+            y_pred=np.array([1.0]),
+        )
+
+
+# --- R1 / arch-C1: `pos_label != 1` does not silently invert the
+# probability-indexed metrics. ---
+
+
+def test_binary_pos_label_zero_does_not_invert_indexed_metrics() -> None:
+    # Same outcome but with the positive class encoded as 0.
+    # y_true=[1,1,1,0,0,0] with pos_label=0 is the mirror of the
+    # known-value binary fixture (positive class index switches).
+    # If a metric still hardcoded `y_proba[:, 1]`, it would return
+    # `1 - correct_value` for ROC-AUC, PR-AUC, and Brier.
+    y_true = np.array([1, 1, 1, 1, 0, 0])
+    y_pred = np.array([1, 1, 0, 0, 1, 0])
+    # column 0 = p(class 0) = p(positive); column 1 = p(class 1).
+    y_proba = np.array(
+        [
+            [0.1, 0.9],
+            [0.2, 0.8],
+            [0.6, 0.4],
+            [0.7, 0.3],
+            [0.4, 0.6],
+            [0.8, 0.2],
+        ]
+    )
+    rec = compute_all(
+        task_type="binary",
+        y_true=y_true,
+        y_pred=y_pred,
+        y_proba=y_proba,
+        pos_label=0,
+        labels=np.array([0, 1]),
+    )
+    assert isinstance(rec, BinaryMetrics)
+    # By construction this is the same outcome as the pos_label=1
+    # known-value fixture (just with class labels flipped). The
+    # pinned values must match exactly.
+    assert rec.accuracy == pytest.approx(3 / 6)
+    assert rec.precision_zd0 == pytest.approx(1 / 3)
+    assert rec.recall_zd0 == pytest.approx(1 / 2)
+    assert rec.f1_zd0 == pytest.approx(2 / 5)
+    assert rec.roc_auc == pytest.approx(0.75)
+    assert rec.pr_auc == pytest.approx(0.75)
+    # Brier and ECE must NOT report `1 - x`: the inverted-column bug
+    # would surface here as Brier ~0.78 instead of ~0.22.
+    expected_brier = (
+        (0.9 - 1) ** 2
+        + (0.8 - 1) ** 2
+        + (0.4 - 1) ** 2
+        + (0.3 - 1) ** 2
+        + (0.6 - 0) ** 2
+        + (0.2 - 0) ** 2
+    ) / 6
+    assert rec.brier == pytest.approx(expected_brier)
+
+
+def test_resolve_pos_index_raises_when_pos_label_missing_from_labels() -> None:
+    # If the caller passes a labels array that doesn't contain
+    # pos_label, the resolver must raise rather than silently
+    # picking column 0 (sklearn `np.where` returns an empty array).
+    with pytest.raises(ValueError, match="pos_label"):
+        compute_all(
+            task_type="binary",
+            y_true=np.array([0, 1]),
+            y_pred=np.array([0, 1]),
+            y_proba=np.array([[0.7, 0.3], [0.2, 0.8]]),
+            pos_label="positive_but_string_not_in_labels",
+            labels=np.array([0, 1]),
+        )
+
+
+# --- R1 / qa-C3: ECE on empty input returns nan. ---
+
+
+def test_compute_ece_q15_returns_nan_on_empty_array() -> None:
+    from benchmarks.metrics.classification import compute_ece_q15
+
+    out = compute_ece_q15(
+        np.array([], dtype=np.int64),
+        np.empty((0, 2)),
+        n_classes=2,
+    )
+    import math
+
+    assert math.isnan(out)

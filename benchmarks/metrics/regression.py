@@ -57,6 +57,11 @@ def compute_mape_or_skip(
     On a pathological input, `mape_value` is `nan` and
     `skip_reason` is one of the three named strings. On a clean
     input, `skip_reason` is `None`.
+
+    Priority on combined pathologies: nan > inf > zero. A `y_true`
+    that contains both a nan and a zero reports
+    `mape_undefined_nan_in_y_true` (the most severe class of input
+    wins).
     """
     y_true_arr = np.asarray(y_true)
     if np.isnan(y_true_arr).any():
