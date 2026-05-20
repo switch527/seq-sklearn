@@ -219,39 +219,68 @@ loaders that need network are marked `network` and gated behind
 
 ### Phase B2: Model registry and adapters
 
-**Goal**: every model the comparison spans is callable through a
-single `SeqSklearnAdapter`-protocol surface; the adapter exposes
-`fit`, `predict`, `predict_proba` (when applicable), `predict_quantiles`
-(when applicable), `supports_proba`. seq-sklearn models, GBMs
-(LightGBM, XGBoost, CatBoost), the classical TSC baseline cluster
-(MiniRocket, Rocket, KNN-DTW, Logistic on hand-crafted features),
-and a sklearn-API extension point that admits any future estimator.
+**Goal**: a single `SeqSklearnAdapter`-protocol surface that every
+benchmark model implements. The protocol exposes `fit`, `predict`,
+`predict_proba` (when applicable), `predict_quantiles` (when
+applicable), and the class-level `supports_proba` flag.
+
+**B2 in scope** (this phase): the protocol + the seq-sklearn
+reference adapter pair (`SeqSklearnTFTClassifierAdapter`,
+`SeqSklearnTFTRegressorAdapter`). The seq-sklearn pair is the
+design's named canary for whether the v1.0.0 façade is genuinely
+usable.
+
+**B2.x in scope** (one branch per family): GBM adapter (LightGBM,
+XGBoost, CatBoost via their sklearn-API), sklearn-passthrough
+extension point, classical TSC family (MiniRocket / Rocket /
+KNN-DTW via aeon — blocked until aeon's sklearn pin loosens; same
+blocker as the UEA dataset loaders). The GBM and sklearn-
+passthrough adapters consume the B3 featurizer; they land after
+Phase B3 ships, because the harness's lag-feature builder is the
+B3 deliverable and ships once for every tabular comparator.
 
 **Modules**:
 
-- `benchmarks/adapters/_base.py` (the `SeqSklearnAdapter` protocol:
-  `name`, `family`, `supports_proba: bool`, `fit`, `predict`,
-  `predict_proba`, `predict_quantiles`, `task_types: tuple[TaskType,
-  ...]`). `ProbaUnsupportedError` typed (B3.2.1; qa-I3).
-- `benchmarks/adapters/seq_sklearn.py`: wraps `TFTClassifier` /
-  `TFTRegressor` from the public façade. F3 `padding_mask`
-  reconciliation per B4.4.
-- `benchmarks/adapters/gbm.py`: LightGBM, XGBoost, CatBoost wrappers
-  consuming the B3 featurized panel. Threshold tuning at fit
-  optional (B3.2 contract).
-- `benchmarks/adapters/tsc.py`: aeon's MiniRocket / Rocket /
-  KNN-DTW wrappers; the F3 reconciliation runs here too.
-- `benchmarks/adapters/sklearn_passthrough.py`: any
-  `BaseEstimator`-API estimator (sklearn, cuML, future) is
-  registrable with a registry entry; no harness change.
-- `benchmarks/registry/models.py`: registers the baselines above.
-- `tests/benchmarks/test_adapter_contract.py`: every registered
-  adapter satisfies the protocol; `supports_proba=False` paths
-  raise `ProbaUnsupportedError` on `predict_proba` (qa-I3).
-- `tests/benchmarks/test_registry_invariants.py`: every registered
-  model carries a one-line `reason` for inclusion (qa-N1) and
-  declares its task-type support so the harness can skip
-  inapplicable cells (B3.2.3, qa-N2).
+Lands in this phase:
+
+- `benchmarks/adapters/_base.py`: the runtime-checkable
+  `SeqSklearnAdapter` protocol with attributes `name`, `family`,
+  `task_types: tuple[TaskType, ...]`, `supports_proba: bool` and
+  methods `fit`, `predict`, `predict_proba`. The typed
+  `ProbaUnsupportedError(NotImplementedError)` (qa-I3 / B3.2.1)
+  for adapters that do not produce class probabilities.
+- `benchmarks/adapters/seq_sklearn.py`: the reference adapter
+  pair. `SeqSklearnTFTClassifierAdapter` wraps the library's
+  `TFTClassifier` from `seq_sklearn.__all__`; the analog
+  `SeqSklearnTFTRegressorAdapter` wraps `TFTRegressor` and also
+  exposes `predict_quantiles` for the `regression_quantile` task
+  type. Both adapters build the library's `TabularConfigParams`
+  from the dataset spec and forward all `fit` / `predict` calls
+  to the underlying estimator unchanged.
+- `benchmarks/adapters/__init__.py`: side-effect import of the
+  seq-sklearn adapter module so `register_model` fires at import.
+- `tests/benchmarks/test_adapter_contract.py`: 11 protocol-only
+  tests covering runtime-checkable `isinstance` against
+  `SeqSklearnAdapter`, adapter-vs-registered-spec metadata
+  consistency, `ProbaUnsupportedError` typed raise, predict-before-
+  fit guards, task-type rejection, and the
+  `ProbaUnsupportedError <: NotImplementedError` subclass contract.
+- `tests/benchmarks/test_seq_sklearn_adapter_smoke.py`: 2 slow
+  end-to-end smokes. Each builds a tiny synthetic panel, fits the
+  adapter with `max_epochs=1`, and asserts `predict` shape +
+  dtype. Proves the adapter actually drives the library through
+  the v1.0.0 façade end to end (the design's canary).
+
+Deferred to Phase B2-followup branches:
+
+- `benchmarks/adapters/gbm.py` (LightGBM, XGBoost, CatBoost via
+  sklearn-API): consumes the Phase B3 featurized panel; lands
+  once B3 ships.
+- `benchmarks/adapters/sklearn_passthrough.py` (extension point):
+  same dependency on B3's featurizer.
+- `benchmarks/adapters/tsc.py` (aeon MiniRocket / Rocket /
+  KNN-DTW): blocked on aeon's `scikit-learn < 1.6` pin; same
+  blocker as the UEA dataset loaders.
 
 **Dependencies**: B1 (the adapter contract takes a `PanelDataset`).
 
