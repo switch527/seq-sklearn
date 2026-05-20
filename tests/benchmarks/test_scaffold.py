@@ -23,10 +23,12 @@ from benchmarks.config import (
     ExperimentSpec,
     ModelSpec,
 )
+from benchmarks.datasets._base import PanelDataset
 from benchmarks.registry import (
     DatasetNotRegisteredError,
     ModelNotRegisteredError,
     get_dataset,
+    get_loader,
     get_model,
     list_datasets,
     list_models,
@@ -37,7 +39,7 @@ from benchmarks.registry import (
 # Tests legitimately exercise `_ConfigLoadError` and `_load_config`;
 # they are module-private helpers but the test gate is one of their two
 # consumers (the other being `main()` itself). Pyright flags the
-# private-from-outside use; we suppress per line.
+# private-from-outside use; suppress per name.
 from benchmarks.run import (
     _ConfigLoadError,  # pyright: ignore[reportPrivateUsage]
     _load_config,  # pyright: ignore[reportPrivateUsage]
@@ -46,6 +48,12 @@ from benchmarks.run import (
 from pydantic import ValidationError
 
 import benchmarks
+
+
+def _stub_loader(_cache_root: Path) -> PanelDataset:
+    """Loader stub for tests that exercise registration only; never
+    invoked because the registry tests do not call `get_loader`."""
+    raise NotImplementedError("stub loader; tests should not invoke it")
 
 
 def test_package_imports() -> None:
@@ -98,12 +106,18 @@ def _valid_dataset_kwargs(
         "modality": "numeric",
         "source_uri": "https://example.com/data.csv",
         "integrity_sha256": "0" * 64,
+        "archive_basename": "data.csv",
         "entity_col": "id",
         "time_col": "t",
         "target_col": "y",
+        "feature_real_cols": ("x",),
+        "feature_categorical_cols": (),
         "lookback": 8,
+        "observation_cutoff_rule": None,
         "densification_policy": None,
         "positive_label": positive_label,
+        "excluded": False,
+        "exclusion_reason": None,
         "citation": "Acme et al. 2020",
     }
 
@@ -140,8 +154,9 @@ def test_dataset_registry_register_lookup_list() -> None:
     spec = DatasetSpec(
         **_valid_dataset_kwargs(name="unique_for_scaffold_test")
     )
-    register_dataset(spec)
+    register_dataset(spec, _stub_loader)
     assert get_dataset("unique_for_scaffold_test") is spec
+    assert get_loader("unique_for_scaffold_test") is _stub_loader
     assert "unique_for_scaffold_test" in list_datasets()
 
 
@@ -150,13 +165,31 @@ def test_dataset_registry_get_missing_raises_typed() -> None:
         get_dataset("__never_registered__")
 
 
+def test_dataset_registry_get_loader_missing_raises_typed() -> None:
+    with pytest.raises(DatasetNotRegisteredError):
+        get_loader("__never_registered__")
+
+
 def test_dataset_registry_duplicate_name_different_spec_raises() -> None:
-    register_dataset(DatasetSpec(**_valid_dataset_kwargs(name="dup_test")))
+    register_dataset(
+        DatasetSpec(**_valid_dataset_kwargs(name="dup_test")), _stub_loader
+    )
     different = DatasetSpec(**_valid_dataset_kwargs(name="dup_test")).model_copy(
         update={"lookback": 9999}
     )
     with pytest.raises(ValueError, match="already registered"):
-        register_dataset(different)
+        register_dataset(different, _stub_loader)
+
+
+def test_dataset_registry_duplicate_name_different_loader_raises() -> None:
+    spec = DatasetSpec(**_valid_dataset_kwargs(name="dup_loader_test"))
+    register_dataset(spec, _stub_loader)
+
+    def _other_loader(_cache_root: Path) -> PanelDataset:
+        raise NotImplementedError
+
+    with pytest.raises(ValueError, match=r"different\s+loader"):
+        register_dataset(spec, _other_loader)
 
 
 def test_model_spec_requires_at_least_one_task_type() -> None:
@@ -219,8 +252,8 @@ def test_cli_dry_run_exits_zero(minimal_config_toml: Path) -> None:
 
 def test_dataset_registry_idempotent_same_spec() -> None:
     spec = DatasetSpec(**_valid_dataset_kwargs(name="idempotent_ds"))
-    register_dataset(spec)
-    register_dataset(spec)  # should not raise
+    register_dataset(spec, _stub_loader)
+    register_dataset(spec, _stub_loader)  # should not raise
     assert get_dataset("idempotent_ds") is spec
 
 
@@ -282,14 +315,16 @@ def test_registry_isolation_canary_a() -> None:
     fixture is missing, the second test runs into the
     duplicate-name guard and fails."""
     register_dataset(
-        DatasetSpec(**_valid_dataset_kwargs(name="isolation_canary"))
+        DatasetSpec(**_valid_dataset_kwargs(name="isolation_canary")),
+        _stub_loader,
     )
     assert "isolation_canary" in list_datasets()
 
 
 def test_registry_isolation_canary_b() -> None:
     register_dataset(
-        DatasetSpec(**_valid_dataset_kwargs(name="isolation_canary"))
+        DatasetSpec(**_valid_dataset_kwargs(name="isolation_canary")),
+        _stub_loader,
     )
     assert "isolation_canary" in list_datasets()
 

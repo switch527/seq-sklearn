@@ -116,39 +116,96 @@ extra installs cleanly.
 
 ### Phase B1: Dataset registry and loaders
 
-**Goal**: every B2 roster entry has a typed, cached loader that
-materializes a panel + label vector in the F2 contract shape, with
-B2.2 integrity-checked archives and B2.3 typed gated-access errors.
-Negative-case datasets from B1.5 are registered as
+**Goal**: the full registry SHAPE lands here (the typed
+`DensificationPolicy` + `DatasetSpec` extension, the
+`PanelDataset` materialized record, the integrity + cache layer,
+the GATED-error pattern) plus a reference loader for each access
+tier so the pattern is exercised end-to-end. The remaining B2
+roster entries land in iterative follow-up branches
+(``benchmark-phase-B1-<dataset>``) gated by the same
+registry-invariants test so the cumulative roster cannot regress
+silently. Negative-case datasets from B1.5 are registered as
 documented exclusions so the rubric stays auditable.
+
+**B1 in scope** (this phase): infrastructure + 2 reference loaders.
+**B1.x in scope** (one branch per loader): every remaining B2 roster
+entry. The classical-TSC entries (UCI-HAR via aeon; BasicMotions,
+JapaneseVowels, UWaveGestureLibrary, LSST, PenDigits, FaceDetection,
+InsectWingbeat via aeon) are blocked until aeon's `scikit-learn` pin
+loosens; the impl plan B0 module list documents the blocker.
 
 **Modules**:
 
-- `benchmarks/datasets/_base.py` (`PanelDataset` pydantic record:
-  `name`, `task_type`, `target_kind`, `size_tier`, `balance`,
-  `modality`, `densification_policy`, `source_uri`, `integrity_sha256`,
-  `gated`, `citation`, `loader` callable; binary entries also carry
-  `positive_label: int | str` per B2.2; a pydantic cross-field
-  validator pins `positive_label` to binary tasks only).
-- `benchmarks/datasets/<name>.py` one file per B2 entry: the loader,
-  the SHA-256 archive guard, the densification per
-  `densification_policy`, the panel-shape transform.
-- `benchmarks/datasets/__init__.py` registers each loader by
-  importing it (auto-registration via decorator from B0).
-- `benchmarks/_io/cache.py` (the local archive cache;
-  `~/.cache/seq-sklearn-benchmarks/` by default, overridable;
-  Parquet for the materialized panel after the first load).
-- `benchmarks/_io/integrity.py` (`DatasetIntegrityError`,
-  `GatedDatasetError` typed errors per B2.2 / B2.3).
+Lands in this phase:
+
+- `benchmarks/config.py` extension: nested `DensificationPolicy`
+  pydantic model with `bin_width`, `aggregation`, `missing_bin_fill`
+  fields; `DatasetSpec` extended per B2.2 with
+  `archive_basename`, `feature_real_cols`, `feature_categorical_cols`,
+  `observation_cutoff_rule`, `excluded`, `exclusion_reason`; the
+  `_positive_label_only_on_binary` validator already from B0 plus
+  new validators `_excluded_carries_reason` (B1.5 pin) and
+  `_feature_cols_disjoint` (a column cannot be both numeric and
+  categorical).
+- `benchmarks/datasets/_base.py`: frozen-slotted `PanelDataset`
+  dataclass (the loaded form: spec + DataFrame + target ndarray)
+  and the `LoaderCallable = Callable[[Path], PanelDataset]` type.
+- `benchmarks/_io/cache.py`: cache-root resolution
+  (`~/.cache/seq-sklearn-benchmarks/` by default; overridable by
+  `SEQ_SKLEARN_BENCHMARKS_CACHE` or `BenchmarkConfig.cache_dir`),
+  archive-path resolution under `<cache_root>/archives/<dataset>/`,
+  Parquet panel-cache path under `<cache_root>/panels/`, the
+  `require_archive` helper that integrity-checks via the spec hash.
+- `benchmarks/_io/integrity.py`: typed `DatasetIntegrityError` +
+  `GatedDatasetUnavailableError` with a shared `DatasetIOError`
+  base; chunked `verify_sha256` (1 MiB chunks so huge archives
+  don't blow process RSS).
+- `benchmarks/datasets/__init__.py`: side-effect imports of every
+  loader module so each module's bottom-of-file
+  `register_dataset(spec, load)` call fires at package import.
+- `benchmarks/registry/datasets.py` extension: companion `_LOADERS`
+  dict + `get_loader(name)` helper; `register_dataset` now takes
+  the loader callable too and rejects same-name-different-loader.
+  The `LoaderCallable` import is `TYPE_CHECKING`-guarded to avoid
+  the circular between `benchmarks.registry` and
+  `benchmarks.datasets`.
+
+Reference loaders landed in this phase:
+
+- `benchmarks/datasets/c_mapss_fd001.py`: NASA C-MAPSS FD001 (OPEN,
+  regression, medium size). Parses the whitespace-separated
+  `train_FD001.txt` from the official zip into an F2 panel; the
+  target is RUL = `max_cycle - cycle` per engine. The integrity
+  hash is a `deadbeef` placeholder until the release engineer
+  pins the canonical archive SHA-256 from the upstream download.
+- `benchmarks/datasets/amex_default.py`: Amex Default Prediction
+  (GATED, binary classification, huge size; the design's flagship).
+  Phase B1 ships the gated-error shape: when the archive is absent
+  the loader raises `GatedDatasetUnavailableError` naming the
+  Kaggle source URI, the archive basename, and the expected cache
+  path. The in-cache parse path is a Phase B1-follow-up because the
+  archive cannot be exercised in CI (Kaggle credentials required).
+
+Tests landed in this phase:
+
 - `tests/benchmarks/test_dataset_registry.py`: every registered
-  dataset carries the full pydantic record (no `None` for required
-  fields); irregular-time entries carry a fully specified
-  `densification_policy` (qa-III-2).
-- `tests/benchmarks/test_loaders_offline.py`: per-dataset offline
-  smoke (`tmp_path`-based cache; a recorded fixture for each
-  archive; the loader path that hits the cache without network).
-- `tests/benchmarks/test_gated_dataset_raises.py`: pin
-  `GatedDatasetError` raise for the gated-access entries (B2.3).
+  dataset resolves to a loader, has a non-empty citation, binary
+  entries carry `positive_label`, every irregular-time entry
+  carries a `densification_policy`, every excluded entry has a
+  reason.
+- `tests/benchmarks/test_gated_dataset_raises.py`: parametrized
+  over the GATED entries (Amex this phase; the parametrize grows
+  as B1.x phases add the other GATED entries); asserts the typed
+  raise + that the error message names the source URI, expected
+  cache path, and archive basename.
+- `tests/benchmarks/test_loaders_offline.py`: per OPEN loader,
+  build a synthetic mini-archive in `tmp_path`, recompute its
+  SHA-256, monkeypatch the spec, and assert F2-shape output.
+  Also asserts the integrity-check fires on a byte-flipped archive
+  and that a missing archive surfaces `FileNotFoundError`.
+- `tests/benchmarks/test_io_layer.py`: cache-root resolution
+  precedence, path creation, `verify_sha256` happy/mismatch/missing
+  paths, `require_archive`, the typed-error-shares-base contract.
 
 **Dependencies**: B0.
 
