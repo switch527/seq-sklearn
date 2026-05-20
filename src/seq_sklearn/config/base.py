@@ -9,7 +9,7 @@ validators.
 
 Both are frozen pydantic v2 models. Mutation is reconciled with
 sklearn's contract via the adapter pattern at
-:mod:`seq_sklearn.config._adapters` (A4 step 3).
+:mod:`seq_sklearn.config.adapters` (A4 step 3).
 """
 
 from typing import Literal, Self

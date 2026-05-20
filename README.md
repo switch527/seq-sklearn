@@ -73,43 +73,75 @@ documentation strategy is
 
 Star or watch the repo to follow the v1 release.
 
-## Planned API (not yet released)
+## Quickstart
 
-This is the target v1 surface. Every model exposes the same
-`<Model>Classifier` / `<Model>Regressor` pair with an identical method
-set, so the snippet below reads the same whichever model you swap in.
-It is shown so the design is legible before code-complete; the import
-will not work until v1 ships.
+A complete, runnable binary classifier on a synthetic panel. This
+is the legible shape of `examples/quickstart.py` and runs end to
+end on CPU; the executable file is what `tests/e2e/test_quickstart.py`
+imports and gates in CI, so this snippet cannot rot.
 
 ```python
-from seq_sklearn import TFTClassifier
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import accuracy_score
 
-clf = TFTClassifier(lookback=12, hidden_size=128)
-clf.fit(X_train, y_train)                    # X: tidy entity-by-period DataFrame
-proba = clf.predict_proba(X_test)
-print(f"AUC: {roc_auc_score(y_test, proba[:, 1]):.3f}")
+from seq_sklearn import SchedulerParams, TabularConfigParams, TFTClassifier
+from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
+
+# 1. A small synthetic panel (real data slots in here unchanged).
+gen = SyntheticPanelGenerator(
+    target_kind="binary",
+    num_entities=160,
+    periods_per_entity=24,
+    signal_strength=0.9,
+    lookback=12,
+    seed=42,
+)
+panel, y = gen.generate(seed=42)
+
+# 2. Declare the panel schema once. The model never guesses columns.
+tabular_config = TabularConfigParams(
+    id_col=gen.id_col,
+    time_col=gen.time_col,
+    static_categorical_cols=tuple(gen.static_categorical_cols),
+    static_real_cols=tuple(gen.static_real_cols),
+    time_varying_real_cols=tuple(gen.time_varying_real_cols),
+    time_varying_categorical_cols=tuple(gen.time_varying_categorical_cols),
+    lookback=gen.lookback,
+    min_periods=1,
+    min_periods_predict=1,
+    max_categorical_cardinality=10_000,
+)
+
+# 3. The classifier is a regular sklearn estimator.
+clf = TFTClassifier(
+    task_type="binary",
+    tabular_config=tabular_config,
+    scheduler=SchedulerParams(name="cosine_with_warmup", warmup_steps=50),
+    hidden_size=64,
+    attention_heads=4,
+    max_epochs=60,
+    batch_size=64,
+    val_fraction=0.2,
+    cal_fraction=0.0,
+    precision="32-true",
+    verbose=False,
+    seed=42,
+)
+clf.fit(panel, y)
+print(f"accuracy: {accuracy_score(y, clf.predict(panel)):.3f}")
 ```
 
 Every estimator implements the sklearn contract, so it composes into
-`Pipeline`, `GridSearchCV`, `cross_val_score`, and Optuna search
-unchanged:
-
-```python
-from sklearn.pipeline import Pipeline
-
-pipe = Pipeline([("clf", TFTClassifier(lookback=12))]).fit(X_train, y_train)
-```
+`Pipeline`, `GridSearchCV`, `cross_val_score`, and the Optuna
+integration unchanged.
 
 Where a model has introspectable internals, they come back as a typed
-output, not a separate analysis step. TFT exposes variable selection and
-attention; later recurrent models expose their states through the same
-shape:
+output, not a separate analysis step. TFT exposes variable selection
+and attention:
 
 ```python
-out = clf.predict_with_attention(X_test)     # frozen dataclass
-out.variable_selection_weights               # which features mattered, per step
-out.temporal_attention                       # which timesteps mattered
+out = clf.predict_with_attention(panel)      # AttentionOutput dataclass
+out.var_selection_weights                    # which features mattered, per step
+out.attention_weights                        # which timesteps mattered
 ```
 
 ## What ships in v1

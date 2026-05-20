@@ -14,7 +14,7 @@ import pytest
 import torch
 from pydantic import ValidationError
 
-from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
+from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
 from tests._test_models._dummy_estimator import (
     _DummySequenceClassifier,
     _DummySequenceRegressor,

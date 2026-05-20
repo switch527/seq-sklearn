@@ -21,7 +21,7 @@ import pandas as pd
 import pytest
 import torch
 
-from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
+from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
 from tests._test_models._dummy_estimator import _DummySequenceClassifier
 
 _REPO = Path(__file__).resolve().parents[2]

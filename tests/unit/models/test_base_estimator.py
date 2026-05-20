@@ -13,7 +13,7 @@ import pytest
 import sklearn
 import sklearn.exceptions
 
-from seq_sklearn.config._adapters import OptimizerParams, TabularConfigParams
+from seq_sklearn.config.adapters import OptimizerParams, TabularConfigParams
 from seq_sklearn.errors import ConfigError, NotFittedError
 from tests._test_models._dummy_estimator import (
     _DummySequenceClassifier,
@@ -109,7 +109,7 @@ def test_loss_default_injection_per_task_type(task: str, expected: str) -> None:
 
 
 def test_explicit_loss_adapter_overrides_default() -> None:
-    from seq_sklearn.config._adapters import LossParams
+    from seq_sklearn.config.adapters import LossParams
 
     est = _clf(loss=LossParams(strategy="focal"))
     assert est._build_config().loss.strategy == "focal"

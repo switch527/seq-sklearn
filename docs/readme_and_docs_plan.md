@@ -128,20 +128,23 @@ benchmarks or a fake figure; label the API preview as forthcoming.
 **Sphinx + numpydoc + autosummary/autodoc + sphinx-gallery, PyData
 Sphinx Theme, NumPy-style docstrings, hosted on Read the Docs.**
 
-Rationale: the sklearn-compatible, time-series-ML cluster is
+Rationale (the ratified Sphinx-over-mkdocs reconciliation; the prior
+mkdocs interim resolution was overturned at Phase 12 R1):
+the sklearn-compatible, time-series-ML cluster is
 near-unanimously Sphinx (sklearn, sktime, aeon, skorch, tslearn, darts,
 pytorch-forecasting, Optuna). NumPy docstring style + numpydoc is the de
 facto ecosystem standard and effectively mandatory to read as a sklearn
 citizen. `intersphinx` gives free cross-references into sklearn / numpy /
 torch / pandas object inventories, which a wrapper-style library needs
-constantly and which mkdocstrings cannot match. `sphinx-gallery`
+constantly and which mkdocstrings cannot match (the sphinx analog is
+autodoc + intersphinx). `sphinx-gallery`
 executes every example on build (docs + free regression test) and is
 sklearn's single biggest long-tail SEO asset. RTD removes the
 versioning CI burden for a small maintainer. MkDocs Material is the
-better general-purpose 2025 choice but loses on every factor that
-matters for *this* niche. This decision should feed the architecture
-doc and the `/design-review` loop per the repo workflow, not be silently
-adopted.
+superseded option here: a better general-purpose 2025 choice but loses
+on every factor that matters for *this* niche. This decision should
+feed the architecture doc and the `/design-review` loop per the repo
+workflow, not be silently adopted.
 
 ### Information architecture (the sklearn triad)
 
@@ -220,9 +223,12 @@ Tier 3, ongoing:
 
 ## 6. Open decisions for the review loop
 
-- Stack choice (Sphinx over mkdocs+mkdocstrings) should be ratified in
-  the architecture doc and run through `/design-review`, since
-  requirements.md N6 left it open and the architecture phase owns it.
+- Stack choice (Sphinx over mkdocs+mkdocstrings): RATIFIED at Phase 12
+  design-review R1 (user decision over the earlier interim mkdocs
+  resolution; rationale: peer-cluster credibility for vast adoption +
+  sphinx-gallery + intersphinx). architecture A12, requirements
+  N6/Q12/Q16, and the `[docs]` extra are reconciled to Sphinx. This
+  doc is now the authoritative stack-rationale reference.
 - Logo/wordmark: needs a design pass; placeholder text wordmark
   acceptable for the interim README.
 - JOSS vs arXiv-only vs both: recommend both; confirm with maintainer

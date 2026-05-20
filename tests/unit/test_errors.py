@@ -81,7 +81,7 @@ def test_export_onnx_raises_without_extra(monkeypatch: pytest.MonkeyPatch) -> No
     from seq_sklearn.hardware import HardwareTier
 
     monkeypatch.setattr("seq_sklearn.training.trainer.detect", lambda: HardwareTier.CPU)
-    from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
+    from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
     from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
     from seq_sklearn.models.transformer.tft.classifier import TFTClassifier
 
@@ -146,7 +146,7 @@ def test_export_onnx_wraps_lowering_failure(
     from seq_sklearn.hardware import HardwareTier
 
     monkeypatch.setattr("seq_sklearn.training.trainer.detect", lambda: HardwareTier.CPU)
-    from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
+    from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
     from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
     from seq_sklearn.models.transformer.tft.classifier import TFTClassifier
 

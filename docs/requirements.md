@@ -230,7 +230,7 @@ The library uses **semantic versioning** strictly. `MAJOR.MINOR.PATCH`:
 The **public API** is exactly:
 
 - What `seq_sklearn/__init__.py` re-exports.
-- What is documented in the API reference under `docs/api/`.
+- What is documented in the API reference under `docs/reference/`.
 - Module attributes reached without a leading underscore in the import
   path (e.g. `seq_sklearn.tuning.suggest_params` is public;
   `seq_sklearn._validate.check_y` is not).
@@ -246,10 +246,12 @@ attribute is **internal** and not covered by the stability guarantee.
 | STABLE | `TabularToSequence`: fit/transform/inverse_transform | |
 | STABLE | `seq_sklearn.hardware.detect`, `HardwareTier` | enum values may be added; existing values stable |
 | STABLE | `seq_sklearn.model_selection.EntityTimeSeriesSplit` | |
+| STABLE | `seq_sklearn.config.adapters.{TabularConfigParams, OptimizerParams, SchedulerParams, LossParams, SamplerParams, TFTAdvancedParams}` | the sklearn-compatible nested-config adapters (A4 step 3); the only way to construct a configured estimator, so on the public surface. Field additions follow the F7 ALPHA→BETA→STABLE promotion path |
 | BETA | `TFTClassifier.export_onnx`, `TFTRegressor.export_onnx` | dependency on `[onnx]` extra; export shape may evolve |
 | BETA | `predict_with_attention`, `AttentionOutput`, `RegressionAttentionOutput` | fields may be added in MINOR releases; consult attribute access, not tuple position |
 | ALPHA | `seq_sklearn.tuning.suggest_params` default search space | search-space defaults may change without MINOR bump; pass an explicit search space for stable behavior |
 | INTERNAL | `seq_sklearn._*` modules | not part of the public API |
+| INTERNAL | `seq_sklearn.config.{optimizer, scheduler, loss, sampler}` family pydantic sub-config modules | frozen pydantic configs reached via the adapter `.to_pydantic()` call; users never import these directly. The STABLE surface is the `*Params` adapters at `seq_sklearn.config.adapters` (re-exported from `seq_sklearn`) |
 
 ### Per-hyperparameter stability tiers
 
@@ -1901,7 +1903,7 @@ version; macOS and Windows nightly-only.
 2. `pyright` strict mode
 3. `pytest -m "not slow and not perf and not gpu"` with coverage gates
 4. `pytest tests/deploy/` (wheel-install smoke)
-5. Documentation build (mkdocs or sphinx, decided in architecture phase)
+5. Documentation build (`sphinx-build -W`; Sphinx stack, Q12/Q16)
 
 **Nightly workflow.** Full suite including `slow`, `perf`, and the
 macOS/Windows matrix. GPU tests run when a self-hosted runner is
@@ -1935,8 +1937,13 @@ follow-up.
   | `safetensors` | `>=0.5` | save/load format (F4) |
 
   Optional extras pinned similarly: `onnx>=1.18`, `onnxruntime>=1.21`
-  for `[onnx]`; `mkdocs>=1.6,<2`, `mkdocs-material>=9.7,<10`,
-  `mkdocstrings[python]>=0.27`, `griffe-pydantic>=1.3` for `[docs]`.
+  for `[onnx]`; `sphinx>=8.1,<9`, `pydata-sphinx-theme>=0.16,<0.17`,
+  `numpydoc>=1.8,<2`, `myst-parser>=4.0,<5`,
+  `sphinx-copybutton>=0.5,<0.6`, `sphinx-sitemap>=2.6,<3` (the six
+  live base pins), plus `sphinx-gallery>=0.18,<0.19` and
+  `autodoc-pydantic>=2.2,<3` added by Phase 12 PA.2, for `[docs]`
+  (Sphinx stack, Q12/Q16; capped bounds per the N3 upper-bound
+  policy; the prior mkdocs pins are superseded).
 
 - **Upper-bound policy.** Lower bounds by default; an upper bound is
   added preemptively ONLY when one of (a) a documented breaking
@@ -2076,9 +2083,13 @@ F11.
 - `docs/` folder: this requirements doc, the architecture doc, longer-form guides.
 - `docs/examples/` with runnable Python scripts (preferred over
   notebooks for CI testability).
-- API reference auto-generated from docstrings. Tool decided in the
-  architecture phase (mkdocs + mkdocstrings, or sphinx). Documentation
-  build is gated in CI.
+- API reference auto-generated from docstrings. Tool RESOLVED:
+  Sphinx + numpydoc + autosummary/autodoc + sphinx-gallery, PyData
+  Sphinx Theme, hosted on Read the Docs (the near-unanimous stack of
+  the sklearn / time-series-ML peer cluster; ratified by the user
+  over the earlier mkdocs resolution, see Q12/Q16 and
+  `docs/readme_and_docs_plan.md`). Documentation build is gated in
+  CI via `sphinx-build -W`.
 
 ### N7: Performance budgets
 
@@ -2157,10 +2168,18 @@ decision. Items still open are OPEN and feed the design-review loop.
 11. **Calibration.** RESOLVED: temperature default with platt /
     isotonic / none alternatives in F5.
 
-12. **Documentation tool choice.** OPEN. mkdocs + mkdocstrings vs.
-    sphinx. Decide in the architecture phase. Both are viable; the
-    deciding factor will be how heavily the API reference relies on
-    autodoc vs. authored prose.
+12. **Documentation tool choice.** RESOLVED (superseding the earlier
+    interim mkdocs resolution in Q16): **Sphinx + numpydoc +
+    autosummary/autodoc + sphinx-gallery, PyData Sphinx Theme, Read
+    the Docs.** Deciding factor for vast adoption: the direct peer
+    cluster (scikit-learn, sktime, aeon, skorch, tslearn, darts) is
+    near-unanimously Sphinx, so matching it is a credibility signal
+    to exactly the target audience; sphinx-gallery closes the
+    executable-examples-gallery gap; intersphinx gives free
+    cross-references into sklearn/numpy/torch. User-ratified over
+    mkdocs (Phase 12 design-review R1). See
+    `docs/readme_and_docs_plan.md` (the stack-rationale doc, now
+    ratified) and architecture A12 (rewritten to Sphinx).
 
 13. **Recurrent family base implementation timing.** RESOLVED:
     skeleton ships in v1 as an INTERNAL-tier abstract base class
@@ -2186,11 +2205,15 @@ decision. Items still open are OPEN and feed the design-review loop.
     `(t4, torch-latest)` as the public baselines, with optional
     self-hosted cells added by contributors.
 
-16. **Documentation toolchain.** RESOLVED: mkdocs + mkdocs-material +
-    mkdocstrings (python handler) + `griffe-pydantic` for pydantic v2
-    field-table rendering. Pin `mkdocs<2` (the 2.0 release was a
-    breaking rewrite). Pin `mkdocs-material<10`. Source:
-    `docs/research/mkdocstrings.md`. Was Q12.
+16. **Documentation toolchain.** SUPERSEDED by the Q12 re-resolution.
+    The earlier interim resolution here (mkdocs + mkdocs-material +
+    mkdocstrings + `griffe-pydantic`) is overturned: the toolchain is
+    **Sphinx + numpydoc + autosummary/autodoc + sphinx-gallery,
+    PyData Sphinx Theme, Read the Docs** (see Q12 and architecture
+    A12). pydantic v2 field tables render via `autodoc-pydantic`
+    (the Sphinx analog of griffe-pydantic). Rationale: peer-cluster
+    credibility for vast adoption + sphinx-gallery + intersphinx;
+    user-ratified at Phase 12 design-review R1. Was Q12.
 
 17. **TFT block flow verification.** RESOLVED. The LSTM init order,
     static-context vector consumption, interpretable-attention
@@ -2414,7 +2437,9 @@ Round 1 (design-review swarm):
   architecture phase. N1's pinning to opset 17 and the note about the
   math backend of scaled_dot_product_attention narrow the surface;
   the full op list is an implementation detail.
-- **Q12** (mkdocs vs. sphinx): OPEN, decided in architecture phase.
+- **Q12** (mkdocs vs. sphinx): RESOLVED to Sphinx (see open-question
+  12 / 16; user-ratified Phase 12 R1, superseding the interim mkdocs
+  resolution).
 - **Q15** (perf-benchmark baseline hardware cells): OPEN, decided
   when CI infra lands.
 - **Architecture-reviewer I6** (quantiles validator location): minor
@@ -2563,9 +2588,14 @@ brief under `docs/research/`):
   `safetensors>=0.5`, `mkdocs<2` after hostile 2.0 rewrite). Upper-bound
   policy amended to allow preemptive caps in three named cases.
   Sources: every doc under `docs/research/`.
-- **Q12 (docs toolchain) RESOLVED.** mkdocs + mkdocs-material +
-  mkdocstrings + griffe-pydantic. Critical pin `mkdocs<2`. Source:
-  `docs/research/mkdocstrings.md`.
+- **Q12 (docs toolchain) RESOLVED.** Sphinx + numpydoc +
+  autosummary/autodoc + sphinx-gallery, PyData Sphinx Theme, Read
+  the Docs (autodoc-pydantic for pydantic v2 field tables). The
+  earlier mkdocs + mkdocstrings + griffe-pydantic resolution was
+  SUPERSEDED, user-ratified at Phase 12 design-review R1 for
+  sklearn/time-series peer-cluster adoption credibility. See
+  open-question 12/16, architecture A12,
+  `docs/readme_and_docs_plan.md`.
 
 Gemini final pass (cross-family review on requirements doc):
 

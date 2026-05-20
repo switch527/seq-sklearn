@@ -13,7 +13,7 @@ both concrete classes compose, instead of being duplicated per file
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
 
-from seq_sklearn.config._adapters import (
+from seq_sklearn.config.adapters import (
     LossParams,
     OptimizerParams,
     SamplerParams,

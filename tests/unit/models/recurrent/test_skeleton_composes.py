@@ -14,7 +14,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
+from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
 from seq_sklearn.config.base import BaseModelConfig
 from seq_sklearn.data.tabular_to_sequence import TabularToSequence
 from seq_sklearn.models._classifier import BaseSequenceClassifier

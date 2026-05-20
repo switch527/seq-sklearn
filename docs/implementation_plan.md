@@ -110,8 +110,8 @@ runs an empty test suite green.
 - `.github/workflows/pr.yml` (lint, type, test-unit, test-deploy,
   docs, snapshot-guard jobs per A19; tests jobs are no-ops until
   Phase 1 lands real tests; the docs job is a no-op script until
-  Phase 12 lands `mkdocs.yml`, then flips to `mkdocs build
-  --strict`).
+  Phase 12 flips it to `sphinx-build -W` (HTML + `-b doctest`); the
+  Sphinx stack is ratified, see Phase 12).
 - `.github/workflows/nightly.yml` skeleton per A19.
 - `scripts/check_snapshots.sh` per A14.
 - `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`,
@@ -207,9 +207,10 @@ module (`_adapters.py`).
   (`attention_heads divides hidden_size`) live here. The base-
   class validators (`quantiles strictly increasing in (0, 1)`,
   validity-matrix check) live on `BaseModelConfig`.
-- `src/seq_sklearn/config/_adapters.py` (renamed from
-  `_params_adapter.py` per architecture A4): six BaseEstimator
-  adapters, one per nested pydantic sub-config. Every adapter
+- `src/seq_sklearn/config/adapters.py` (renamed from
+  `_params_adapter.py` per architecture A4, then un-underscored in
+  Phase 12 R1 once A3 promoted the six adapters to STABLE): six
+  BaseEstimator adapters, one per nested pydantic sub-config. Every adapter
   `__init__` carries the `*` keyword-only marker (mandatory per A4;
   without it the ALPHA → BETA promotion path silently breaks
   positional callers).
@@ -1306,28 +1307,45 @@ contrived 20% slowdown.
 
 **Modules**:
 
-- `mkdocs.yml` with the A12 plugin recipe (`griffe-pydantic`,
-  `mkdocs-material`, `mkdocs-gen-files`, `mkdocs-literate-nav`,
-  `mkdocs-section-index`).
-- `docs/index.md` (rewritten from README quickstart).
-- `docs/observability.md` (F11 event-payload reference).
-- `docs/guides/`: getting_started, panel_data, calibration,
-  optuna_search, hardware_and_precision per A12.
-- `docs/examples/optuna_search.py`,
-  `docs/examples/mlflow_search.py` (F7 and F11 references).
-- `docs/api/`: auto-generated via mkdocstrings; the literate-nav
-  index drives the table of contents.
+- `docs/conf.py` extended to the A12 Sphinx recipe (numpydoc +
+  autosummary + intersphinx + `sphinx.ext.doctest` + autodoc-pydantic
+  + sphinx-gallery + sphinx-copybutton + sphinx-sitemap + myst), the
+  Sphinx stack ratified at Phase 12 R1 (NOT mkdocs; see
+  `docs/phase12_docs_release.md` P-0).
+- `docs/index.md` (value prop + above-the-fold quickstart, embedding
+  `examples/quickstart.py` by `literalinclude`).
+- `docs/reference/observability` (F11 event-payload reference).
+- Diátaxis `tutorial/ how-to/ reference/ explanation/ about/ design/`
+  trees per A12 and the Phase 12 plan.
+- `docs/examples/` sphinx-gallery (executed `.py`, incl. the F7/F11
+  references), curated small set, CPU + `max_epochs=1`.
+- `docs/reference/`: API via autosummary + numpydoc; config via
+  autodoc-pydantic.
 - `README.md` rewritten with the one-screen quickstart that
-  `tests/e2e/test_quickstart.py` imports.
+  `tests/e2e/test_quickstart.py` imports (AST-equivalent to
+  `examples/quickstart.py`'s `run_quickstart` body).
 - `CHANGELOG.md` updated with the v1.0.0 entry.
-- The `mkdocs build --strict` job in the PR workflow turns from a
-  skeleton into a real gate.
+- The `pr.yml` docs job turns from a no-op into a real
+  `sphinx-build -W` gate (HTML + `-b doctest`).
+- `src/seq_sklearn/__init__.py` wired to the architecture-A3
+  ("Public-API surface") re-export block (`TFTClassifier`,
+  `TFTRegressor`,
+  `TabularToSequence`/`Config`, `TFTConfig`,
+  `EntityTimeSeriesSplit`, `HardwareTier`/`detect`, the six error
+  classes, `AttentionOutput`/`RegressionAttentionOutput`,
+  `suggest_params`, `optuna_trial_guard`), with `__version__` from
+  `importlib.metadata.version("seq-sklearn")`; `pyproject.toml`
+  version bumped from `0.0.0` to the v1.0.0 release version. This
+  is release-prep that was a Phase-8<->12 seam never owned by any
+  prior phase's tests (see Phase 12 plan R13/PE.4 +
+  `test_public_api_surface`).
 
 **Dependencies**: Phases 1-11.
 
-**Deliverable tests**: `mkdocs build --strict` exits 0; the
-docstring-examples test (`pytest --doctest-modules src/seq_sklearn/`
-per N1) passes; the quickstart in CI passes.
+**Deliverable tests**: `sphinx-build -W --keep-going` exits 0; the
+`-b doctest` pass exits 0; the docstring-examples test
+(`pytest --doctest-modules src/seq_sklearn/` per N1) passes; the
+quickstart in CI passes.
 
 **Release checklist step (criterion 9, N7 absolute budgets)**: run
 `pytest -m "gpu and slow" tests/perf/test_n7_absolute.py` once on an
@@ -1337,10 +1355,10 @@ criterion 9 (`docs/requirements.md`); it is intentionally excluded
 from PR and nightly CI (the N7 reference workload exceeds the CI
 envelope) and is owned here, not by Phase 11's relative gate.
 
-**Done when**: the docs site renders, the API reference shows the
-pydantic field tables via griffe-pydantic, and the release
-checklist (acceptance criteria 1-11 in requirements, including the
-criterion-9 N7-absolute step above) is complete.
+**Done when**: the docs site renders under `sphinx-build -W`, the
+API reference shows the pydantic field tables via autodoc-pydantic,
+and the release checklist (acceptance criteria 1-11 in requirements,
+including the criterion-9 N7-absolute step above) is complete.
 
 ## Future-proofing for v2 / v3
 
@@ -1452,10 +1470,12 @@ The phases above lock contracts that v2 and v3 inherit unchanged:
   states the upstream callback is not shipped and why. No code
   enforcement is feasible because the user's Trainer is theirs to
   configure; the protection is documentation.
-- **R8: docs build flakiness from `griffe-pydantic` 1.3 rendering
-  of `Mapping[str, int]`** (Phase 12). Mitigation: A20 item 4
-  tracks the verification; the docs job runs `mkdocs build
-  --strict` and a render regression fails CI.
+- **R8: docs build flakiness from `autodoc-pydantic` rendering
+  of `Mapping[str, int]`** (Phase 12; reconciled to the Sphinx
+  stack, R1). Mitigation: A20 item 4 tracks the verification; the
+  docs job runs `sphinx-build -W` and the Phase 12
+  `test_autodoc_pydantic_field_tables_rendered` fails CI on a render
+  regression.
 
 ## PR workflow per phase
 
@@ -1599,10 +1619,26 @@ Round 1 (design-review swarm):
   `RecurrentSequenceEstimator` (abstract class), `config/recurrent.py`,
   and the compose test from Phase 7 to Phase 6 so the cross-family
   contract locks before TFT specifics land.
-- **Phase 0 docs CI job had no `mkdocs.yml` until Phase 12 (arch
-  r1-I9).** Phase 0 entry now notes the docs job is a no-op script
-  until Phase 12 lands the config, at which point it flips to
-  `mkdocs build --strict`.
+- **Phase 0 docs CI job is a no-op until Phase 12 (arch r1-I9;
+  reconciled to Sphinx, Phase 12 R1).** Phase 0 entry notes the docs
+  job is a no-op script until Phase 12 flips it to
+  `sphinx-build -W` (HTML + `-b doctest`).
+- **Public-API façade (architecture A3 `__all__`, "Public-API
+  surface") was an unowned
+  seam between Phase 8 and Phase 12 (Phase 12 S6 finding).** Phase 8
+  delivered the functional public classes at their module paths and
+  the Optuna integration, but the literal package-level re-export in
+  `src/seq_sklearn/__init__.py` was never wired (stayed at the
+  Phase-0 placeholder `__all__ = []`, `__version__ = "0.0.0"`). The
+  gap survived 11 phases because nothing in the 95-file suite
+  imported via the façade: tests use the deep module paths,
+  `check_estimator` validates classes handed to it directly,
+  coverage measures lines-executed not surface-correctness, and
+  design-review grades plans not live `src/`. The fix is folded
+  into Phase 12 as release-prep (PE.4 + the owning
+  `test_public_api_surface`), user-ratified at the Phase 12 S6 scope
+  question; no behavior change, re-export only of
+  already-`check_estimator`-passing classes.
 - **`strict_mode_globals` autouse fixture deferred to Phase 9 but
   required in Phase 4 (qa r1-I1).** Moved to Phase 4's local
   `tests/unit/training/conftest.py`.

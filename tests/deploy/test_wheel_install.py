@@ -23,7 +23,7 @@ _SMOKE = """
 import numpy as np
 import seq_sklearn  # noqa: F401
 import seq_sklearn.inference.onnx  # noqa: F401
-from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
+from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator
 from seq_sklearn.models.transformer.tft.classifier import TFTClassifier
 

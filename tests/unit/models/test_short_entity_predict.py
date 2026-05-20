@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 import torch
 
-from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams
+from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
 from seq_sklearn.errors import ConfigError
 from seq_sklearn.logging import Event
 from tests._test_models._dummy_estimator import (

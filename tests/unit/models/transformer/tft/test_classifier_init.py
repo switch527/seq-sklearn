@@ -12,7 +12,7 @@ import inspect
 import pytest
 import sklearn.base
 
-from seq_sklearn.config._adapters import OptimizerParams, TabularConfigParams
+from seq_sklearn.config.adapters import OptimizerParams, TabularConfigParams
 from seq_sklearn.config.base import BaseModelConfig
 from seq_sklearn.config.tft import TFTConfig
 from seq_sklearn.models.transformer.tft.classifier import TFTClassifier

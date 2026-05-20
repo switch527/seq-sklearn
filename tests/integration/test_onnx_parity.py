@@ -19,7 +19,7 @@ import torch
 pytest.importorskip("onnx")
 ort = pytest.importorskip("onnxruntime")
 
-from seq_sklearn.config._adapters import SchedulerParams, TabularConfigParams  # noqa: E402
+from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams  # noqa: E402
 from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator  # noqa: E402
 from seq_sklearn.errors import NotFittedError  # noqa: E402
 from seq_sklearn.inference.onnx import _OnnxForward  # noqa: E402

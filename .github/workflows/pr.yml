@@ -52,8 +52,8 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --extra dev
-      - run: uv run pytest -m "not slow and not perf and not gpu" --cov
+      - run: uv sync --extra dev --extra docs
+      - run: uv run pytest -m "not slow and not perf and not gpu" --cov --doctest-modules src/seq_sklearn/
 
   test-deploy:
     runs-on: ubuntu-latest
@@ -82,18 +82,21 @@ jobs:
 
   docs:
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # qa R1-I1: a hung sphinx-build or doctest is bounded.
     steps:
       - uses: actions/checkout@v4
-      - name: Docs job (no-op until Phase 12 lands mkdocs.yml)
-        run: |
-          if [ -f mkdocs.yml ]; then
-            echo "Building mkdocs site..."
-            # Phase 12 wires this to: uv run mkdocs build --strict
-            exit 0
-          else
-            echo "mkdocs.yml not present yet; docs gate is a no-op until Phase 12."
-            exit 0
-          fi
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
+      - name: Sync with dev + docs extras
+        run: uv sync --extra dev --extra docs
+      - name: Build site (warnings-as-errors)
+        run: uv run sphinx-build -W --keep-going -b html docs docs/_build/html
+      - name: Doctest pass
+        run: uv run sphinx-build -W -b doctest docs docs/_build/doctest
+      - name: tests/docs/ gate roster
+        run: uv run pytest tests/docs/ -q -p no:cacheprovider
 
   snapshot-guard:
     runs-on: ubuntu-latest
