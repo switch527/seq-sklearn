@@ -104,3 +104,47 @@ def test_c_mapss_fd001_missing_archive_raises_file_not_found(
     than silently no-op'ing."""
     with pytest.raises(FileNotFoundError):
         c_mapss_module.load(tmp_path)
+
+
+def test_c_mapss_fd001_nan_entity_id_raises_typed() -> None:
+    """qa-I1: a malformed file whose first column does not parse as
+    numeric produces a NaN entity_id; the loader raises
+    `DatasetIOError` at the parse boundary instead of silently
+    casting NaN to int downstream."""
+    from benchmarks._io.integrity import DatasetIOError
+
+    # Pandas parses the literal string "NaN" in the first column as
+    # NaN; the guard catches the misalignment and raises typed.
+    bad_text = (
+        "1 1 0.1 0.1 0.1 " + " ".join("0.0" for _ in range(21)) + "\n"
+        "NaN 2 0.2 0.2 0.2 " + " ".join("0.0" for _ in range(21)) + "\n"
+    )
+    with pytest.raises(DatasetIOError, match="missing entity_id"):
+        c_mapss_module._read_fd001_table(bad_text)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_c_mapss_fd001_zip_missing_train_file_raises_typed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """qa-I2: a valid zip that omits `train_FD001.txt` surfaces a
+    typed `DatasetIOError` from the loader rather than a generic
+    `KeyError` from zipfile."""
+    import hashlib
+
+    from benchmarks._io.integrity import DatasetIOError
+
+    spec = c_mapss_module._SPEC  # pyright: ignore[reportPrivateUsage]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("README.txt", b"this zip omits the train file")
+    archive_bytes = buf.getvalue()
+    sha = hashlib.sha256(archive_bytes).hexdigest()
+
+    target = archive_path(tmp_path, spec.name, spec.archive_basename)
+    target.write_bytes(archive_bytes)
+    patched_spec = spec.model_copy(update={"integrity_sha256": sha})
+    monkeypatch.setattr(c_mapss_module, "_SPEC", patched_spec)
+
+    with pytest.raises(DatasetIOError, match=r"train_FD001\.txt"):
+        c_mapss_module.load(tmp_path)

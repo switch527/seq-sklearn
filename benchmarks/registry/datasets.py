@@ -15,12 +15,16 @@ from typing import TYPE_CHECKING
 from benchmarks.config import DatasetSpec
 
 if TYPE_CHECKING:
-    # `LoaderCallable` lives in `benchmarks.datasets._base`, a submodule
-    # of `benchmarks.datasets`. The registration sites (each loader
-    # module) live in the same submodule and call `register_dataset`
-    # at import time, which is the cycle this guarded import sidesteps:
-    # at runtime we accept any callable; pyright still gets the typed
-    # signature via TYPE_CHECKING.
+    # `LoaderCallable` lives in `benchmarks.datasets._base`. The
+    # runtime cycle goes the other way: `benchmarks.registry` is
+    # imported FIRST (by tests, by `benchmarks.run`), then
+    # `benchmarks.datasets.__init__` triggers loader-module imports
+    # which call `register_dataset` here. If this module imports
+    # `LoaderCallable` at module-top, the chain becomes
+    # `registry -> datasets._base -> datasets/__init__.py -> loader
+    # module -> registry.register_dataset (not yet defined) -> fail`.
+    # The TYPE_CHECKING guard keeps pyright's typed-signature view
+    # while the runtime import order stays acyclic.
     from benchmarks.datasets._base import LoaderCallable
 
 _REGISTRY: dict[str, DatasetSpec] = {}

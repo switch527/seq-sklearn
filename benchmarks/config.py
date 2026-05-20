@@ -87,7 +87,11 @@ class DatasetSpec(BaseModel):
     @model_validator(mode="after")
     def _positive_label_only_on_binary(self) -> "DatasetSpec":
         """B2.2: `positive_label` is required on binary specs and
-        absent on multiclass and regression specs."""
+        absent on multiclass and regression specs. Excluded specs
+        (B1.5 negatives) are exempt: `positive_label` carries no
+        semantic load for a dataset that's never used."""
+        if self.excluded:
+            return self
         if self.task_type == "binary":
             if self.positive_label is None:
                 raise ValueError(

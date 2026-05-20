@@ -14,14 +14,23 @@ entry's shape, so the iteration is gated, not silent.
 
 # Importing each loader module registers its spec at module load
 # time. The harness only needs to import `benchmarks.datasets` once.
-# These imports are pure side-effect: each module's bottom calls
-# `register_dataset` and adds itself to the live registry.
-from benchmarks.datasets import amex_default, c_mapss_fd001
+# Pyright's "unused import" diagnostic fires on these symbols
+# because their value is the side effect of the import (each module
+# calls `register_dataset` at module load); `__all__` below is the
+# contract that re-exports the names. Per-symbol suppression because
+# the from-line `pyright: ignore` does not propagate.
+from benchmarks.datasets import (
+    amex_default,  # pyright: ignore[reportUnusedImport]
+    c_mapss_fd001,  # pyright: ignore[reportUnusedImport]
+)
+from benchmarks.datasets._base import (
+    LoaderCallable,  # pyright: ignore[reportUnusedImport]
+    PanelDataset,  # pyright: ignore[reportUnusedImport]
+)
 
-__all__: list[str] = ["amex_default", "c_mapss_fd001"]
-
-# Silence "unused name" diagnostics on the side-effect modules; the
-# `__all__` listing above is the contract that they are re-exported.
-_ = (amex_default, c_mapss_fd001)
-
-__all__: list[str] = []
+__all__ = [
+    "LoaderCallable",
+    "PanelDataset",
+    "amex_default",
+    "c_mapss_fd001",
+]

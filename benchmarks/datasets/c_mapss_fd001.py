@@ -94,9 +94,12 @@ def _read_fd001_table(text: str) -> pd.DataFrame:
         names=list(_RAW_COLUMNS),
         engine="python",
     )
-    # The official files have two trailing empty columns from the
-    # whitespace-padding convention; pandas drops them already, but
-    # an `entity_id` that's NaN would slip through. Guard explicitly.
+    # `sep=r"\s+"` collapses consecutive whitespace, so trailing
+    # whitespace at line ends produces no extra tokens. If a mirror
+    # ever ships an off-shape file (extra tokens, missing leading
+    # entity-id column) the misalignment surfaces as a NaN
+    # `entity_id`. Guard explicitly so the failure is typed at the
+    # parse boundary rather than miscast to int downstream.
     if bool(df["entity_id"].isna().any()):
         raise DatasetIOError(
             f"{_NAME}: parsed file has rows with missing entity_id; "

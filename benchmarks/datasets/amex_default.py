@@ -44,8 +44,13 @@ _SPEC = DatasetSpec(
     entity_col="customer_ID",
     time_col="S_2",
     target_col="target",
-    feature_real_cols=("__placeholder_real__",),
-    feature_categorical_cols=("__placeholder_cat__",),
+    # Empty until the in-cache parse-on-presence path lands in a
+    # Phase B1 follow-up; the archive declares the canonical
+    # numeric + categorical column split (`D_*`, `S_*`, `P_*`,
+    # `B_*`, `R_*`) and the loader will populate these from the
+    # parsed schema rather than a hand-typed list.
+    feature_real_cols=(),
+    feature_categorical_cols=(),
     lookback=13,
     observation_cutoff_rule=(
         "Per the competition rules, features are read from up to 13 "

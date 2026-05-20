@@ -150,6 +150,58 @@ def test_dataset_spec_integrity_sha_pattern_enforced() -> None:
         DatasetSpec(**bad)
 
 
+def test_dataset_spec_excluded_without_reason_raises() -> None:
+    """B1.5: `excluded=True` requires a non-empty `exclusion_reason`."""
+    bad = _valid_dataset_kwargs()
+    bad["excluded"] = True
+    bad["exclusion_reason"] = None
+    with pytest.raises(ValueError, match="non-empty `exclusion_reason`"):
+        DatasetSpec(**bad)
+
+
+def test_dataset_spec_excluded_with_blank_reason_raises() -> None:
+    """`excluded=True, exclusion_reason=''` is rejected (the blank
+    string is the degenerate version of None and fails the same
+    invariant)."""
+    bad = _valid_dataset_kwargs()
+    bad["excluded"] = True
+    bad["exclusion_reason"] = ""
+    with pytest.raises(ValueError, match="non-empty `exclusion_reason`"):
+        DatasetSpec(**bad)
+
+
+def test_dataset_spec_active_with_exclusion_reason_raises() -> None:
+    """B1.5: an active spec (`excluded=False`) must NOT carry an
+    `exclusion_reason`; pydantic rejects the stale-reason shape."""
+    bad = _valid_dataset_kwargs()
+    bad["excluded"] = False
+    bad["exclusion_reason"] = "stale reason from a previous edit"
+    with pytest.raises(ValueError, match="exclusion_reason is set"):
+        DatasetSpec(**bad)
+
+
+def test_dataset_spec_overlapping_feature_cols_raises() -> None:
+    """B2.2: a column cannot be both numeric and categorical."""
+    bad = _valid_dataset_kwargs()
+    bad["feature_real_cols"] = ("x", "y")
+    bad["feature_categorical_cols"] = ("y", "z")
+    with pytest.raises(ValueError, match="appear in both"):
+        DatasetSpec(**bad)
+
+
+def test_dataset_spec_excluded_binary_without_positive_label_ok() -> None:
+    """code-I2: excluded specs are exempt from the
+    `_positive_label_only_on_binary` validator; an excluded binary
+    spec with `positive_label=None` validates cleanly because it
+    will never be used in any experiment."""
+    kw = _valid_dataset_kwargs(task_type="binary")
+    kw["excluded"] = True
+    kw["exclusion_reason"] = "one-row-per-entity; fails B1.3"
+    spec = DatasetSpec(**kw)
+    assert spec.excluded is True
+    assert spec.positive_label is None
+
+
 def test_dataset_registry_register_lookup_list() -> None:
     spec = DatasetSpec(
         **_valid_dataset_kwargs(name="unique_for_scaffold_test")
