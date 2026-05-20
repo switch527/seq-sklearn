@@ -3,12 +3,15 @@
 Usage:
 
     python -m benchmarks.run --config <config.toml> --dry-run
+    python -m benchmarks.run --config <config.toml> --experiment=raw_loss
 
-Phase B0 ships the argparse + config-load + banner; later phases
-wire `--experiment` to the per-experiment driver modules
-(`benchmarks/experiments/raw_loss.py`, `ensemble.py`, etc.). The
-`--dry-run` flag exits 0 after validation without running anything,
-and is the path the scaffold test exercises.
+Phase B0 shipped the argparse + config-load + banner; Phase B5
+wires `--experiment=raw_loss` to the raw-loss experiment driver
+and writes a Markdown leaderboard next to the manifest shards.
+Phases B6-B8 will add the remaining dispatch arms.
+
+The `--dry-run` flag exits 0 after validation without running
+anything, and is the path the scaffold test exercises.
 """
 
 import argparse
@@ -19,8 +22,17 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+# Side-effect import: pulling `benchmarks.adapters` triggers each
+# adapter module's `register_model(...)` + `register_adapter_factory
+# (...)` calls so the registry is populated before the experiment
+# driver inspects it. The same import pattern lives in the scaffold
+# test.
+import benchmarks.adapters  # noqa: F401  # pyright: ignore[reportUnusedImport]
+import benchmarks.datasets  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from benchmarks.config import BenchmarkConfig
+from benchmarks.experiments import build_run_environment, run_raw_loss
 from benchmarks.registry import list_datasets, list_models
+from benchmarks.report.raw_loss import render_from_dir
 
 logger = logging.getLogger(__name__)
 
@@ -137,12 +149,39 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("dry-run: config validates; exiting before any experiment runs")
         return 0
 
-    # Phase B5+ will wire the per-experiment driver dispatch here.
-    logger.error(
-        "experiment driver not yet implemented (Phase B5+); pass --dry-run "
-        "until then"
-    )
-    return 2
+    output_root: Path = args.output if args.output is not None else config.output_dir
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    requested = args.experiment
+    declared_kinds = {e.kind for e in config.experiments}
+    kinds = sorted(declared_kinds) if requested == "all" else [requested]
+
+    for kind in kinds:
+        if kind != "raw_loss":
+            logger.error(
+                "experiment driver for kind=%s not yet implemented "
+                "(Phase B6+); only `raw_loss` ships in Phase B5",
+                kind,
+            )
+            return 2
+        env = build_run_environment(profile="standard")
+        result = run_raw_loss(config, output_root=output_root, env=env)
+        logger.info(
+            "raw_loss complete: %d cells run, %d task-mismatch, "
+            "%d quantile-followup, %d adapter-error, %d already-complete "
+            "(run_id=%s)",
+            result.cells_attempted,
+            result.cells_skipped_task_mismatch,
+            result.cells_skipped_quantile_followup,
+            result.cells_skipped_adapter_error,
+            result.cells_already_complete,
+            result.run_id,
+        )
+        leaderboard_md = render_from_dir(output_root)
+        leaderboard_path = output_root / "leaderboard.md"
+        leaderboard_path.write_text(leaderboard_md, encoding="utf-8")
+        logger.info("leaderboard written to %s", leaderboard_path)
+    return 0
 
 
 if __name__ == "__main__":

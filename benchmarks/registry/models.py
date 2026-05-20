@@ -1,14 +1,40 @@
-"""Model registry: name -> `ModelSpec`.
+"""Model registry: name -> (`ModelSpec`, adapter factory).
 
-Phase B2 will populate this via `register_model(spec)` calls inside
-each adapter module (`benchmarks/adapters/seq_sklearn.py`,
-`adapters/gbm.py`, `adapters/tsc.py`, ...). The registry is
-import-time-populated when those modules are imported.
+Phase B2 populated the `ModelSpec` half (registry of metadata).
+Phase B5 adds the parallel adapter-factory map so the experiment
+driver can instantiate an adapter from its registered name. Each
+adapter module (`benchmarks/adapters/seq_sklearn.py`,
+`adapters/gbm.py`, ...) calls both `register_model(spec)` and
+`register_adapter_factory(name, factory)` at module-import time;
+the two halves stay in lockstep because the no-deep-imports test
+in `tests/benchmarks/test_scaffold.py` imports the adapters package
+which triggers both registrations.
+
+The factory signature is intentionally narrow per B3.2.1: the
+harness calls `factory(spec=dataset_spec, hyperparameters=...)` and
+treats the result as a `SeqSklearnAdapter`. Concrete adapter
+classes either match this signature directly (the dataclass kwargs
+shape suffices) or wrap themselves in a small `_make_*` adapter
+function declared next to the class.
 """
 
-from benchmarks.config import ModelSpec
+from collections.abc import Callable
+from typing import Any
+
+from benchmarks.adapters._base import SeqSklearnAdapter
+from benchmarks.config import DatasetSpec, ModelSpec
+
+# The factory protocol: a callable that returns an adapter ready to
+# run protocol introspection (`name`, `family`, `task_types`,
+# `supports_proba`) before `fit` is called. The dataset spec is
+# REQUIRED because adapters carry per-dataset state (`tabular_config`
+# is built from the spec at the B3.2.2 boundary). Hyperparameters
+# are optional; the HPO driver (B8) feeds suggested params here.
+AdapterFactory = Callable[..., SeqSklearnAdapter]
+
 
 _REGISTRY: dict[str, ModelSpec] = {}
+_ADAPTER_FACTORIES: dict[str, AdapterFactory] = {}
 
 
 class ModelNotRegisteredError(KeyError):
@@ -30,6 +56,36 @@ def register_model(spec: ModelSpec) -> ModelSpec:
     return spec
 
 
+def register_adapter_factory(name: str, factory: AdapterFactory) -> AdapterFactory:
+    """Register a factory callable for the model named `name`.
+
+    Idempotent only if the factory object is identical; a different
+    factory under the same name raises so a silent overwrite during
+    module-import-time registration cannot happen.
+
+    Raises:
+        ModelNotRegisteredError: no `ModelSpec` is registered under
+            this name. The factory and the spec must be co-located
+            in the same adapter module; this guard catches the case
+            where one registration is forgotten.
+    """
+    if name not in _REGISTRY:
+        raise ModelNotRegisteredError(
+            f"register_adapter_factory: no ModelSpec registered under "
+            f"{name!r}; register the spec first (the spec carries the "
+            f"task_types / supports_proba metadata the harness reads "
+            f"before calling the factory)"
+        )
+    existing = _ADAPTER_FACTORIES.get(name)
+    if existing is not None and existing is not factory:
+        raise ValueError(
+            f"adapter factory for {name!r} already registered with a "
+            f"different callable; refusing to overwrite"
+        )
+    _ADAPTER_FACTORIES[name] = factory
+    return factory
+
+
 def get_model(name: str) -> ModelSpec:
     """Look up a model by name; raises `ModelNotRegisteredError`."""
     try:
@@ -39,6 +95,41 @@ def get_model(name: str) -> ModelSpec:
             f"no model registered under name {name!r}; "
             f"registered models: {sorted(_REGISTRY)}"
         ) from exc
+
+
+def get_adapter_factory(name: str) -> AdapterFactory:
+    """Look up the adapter factory for `name`.
+
+    Raises:
+        ModelNotRegisteredError: no factory is registered. Either
+            the model name is wrong or the adapter module hasn't been
+            imported (registrations are import-time side effects).
+    """
+    try:
+        return _ADAPTER_FACTORIES[name]
+    except KeyError as exc:
+        raise ModelNotRegisteredError(
+            f"no adapter factory registered under name {name!r}; "
+            f"registered factories: {sorted(_ADAPTER_FACTORIES)}"
+        ) from exc
+
+
+def instantiate_adapter(
+    name: str,
+    *,
+    spec: DatasetSpec,
+    hyperparameters: dict[str, Any] | None = None,
+) -> SeqSklearnAdapter:
+    """Build an adapter by registered name.
+
+    Thin convenience over `get_adapter_factory(name)(spec=..., ...)`
+    so the experiment driver can write
+    `instantiate_adapter("tft_classifier", spec=ds_spec)` without
+    threading the factory variable.
+    """
+    return get_adapter_factory(name)(
+        spec=spec, hyperparameters=hyperparameters or {}
+    )
 
 
 def list_models() -> tuple[str, ...]:

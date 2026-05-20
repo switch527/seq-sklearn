@@ -514,6 +514,37 @@ registered model emits a leaderboard. Per the design's compute
 tiering, the actual full-roster run happens once on the workstation;
 CI runs the synthetic 2x3 cell only.
 
+**B5-followup deferrals** (carried into B6 / later):
+
+- The seq-sklearn regressor adapter exposes `predict_quantiles`
+  but the `SeqSklearnAdapter` Protocol does NOT carry a
+  `quantile_levels: tuple[float, ...] | None` attribute, so the
+  pinball-column labels (`pinball_q{level}`) cannot be assembled
+  from the protocol surface. The B5 driver emits
+  `skipped_reason="regression_quantile_b5_followup"` for every
+  `regression_quantile` cell. The followup branch extends the
+  Protocol with `quantile_levels` and lands the pinball reporting.
+- `benchmarks.metrics.resource.measure_fit` accepts injected CUDA
+  callables (`cuda_reset_callable`, `cuda_peak_callable`); B5's
+  driver always passes `cuda_available=False` because the harness
+  has no CUDA detection layer yet. B6 wires
+  `torch.cuda.reset_peak_memory_stats` /
+  `torch.cuda.max_memory_allocated` from the harness's environment
+  detector so deep-model rows carry `peak_cuda_bytes`.
+- Out-of-fold prediction persistence (B6.2.1) is NOT in the B5
+  shard schema; the manifest carries metrics only. B6 (ensemble)
+  adds a per-cell `predictions/` sibling directory with the
+  prediction tensors (y_pred / y_proba / y_quantiles) so the
+  pairwise correlation analysis has the inputs it needs.
+- `_DEFAULT_N_SPLITS=5` is hardcoded in the driver. B5's
+  `BenchmarkConfig` does NOT carry an `n_splits` knob; B6 adds it
+  to the per-experiment spec for sensitivity sweeps.
+- Library + benchmarks git SHA recording uses a best-effort
+  `git rev-parse HEAD` subprocess; "unknown" is recorded on
+  non-checkout invocations. B7's profile field tightens the
+  hardware-tier identifier from the current free-form string
+  ("cpu" | "gpu_single") to the library's `HardwareTier` enum.
+
 ### Phase B6: Experiment 2, ensemble complementarity (B6.2)
 
 **Goal**: B6.2 error correlation / ensemble complementarity for

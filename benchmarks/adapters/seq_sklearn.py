@@ -24,8 +24,9 @@ from benchmarks.adapters._base import (
     ProbaUnsupportedError,
     QuantilesUnsupportedError,
 )
+from benchmarks.adapters._base import SeqSklearnAdapter
 from benchmarks.config import DatasetSpec, ModelSpec, TaskType
-from benchmarks.registry.models import register_model
+from benchmarks.registry.models import register_adapter_factory, register_model
 from seq_sklearn import (
     NotFittedError,
     SchedulerParams,
@@ -259,3 +260,35 @@ _REGRESSOR_SPEC = ModelSpec(
 
 register_model(_CLASSIFIER_SPEC)
 register_model(_REGRESSOR_SPEC)
+
+
+# Adapter factories used by the experiment driver to instantiate
+# adapters from a registered name. The dataclass `__init__` accepts
+# `spec` and `hyperparameters` as keyword arguments, so wrapping in
+# small helper callables keeps the registry's `AdapterFactory`
+# signature uniform (kwargs-only with hyperparameters defaulting to
+# an empty dict when the caller passes None).
+
+
+def _make_tft_classifier(
+    *,
+    spec: DatasetSpec,
+    hyperparameters: dict[str, Any] | None = None,
+) -> SeqSklearnAdapter:
+    return SeqSklearnTFTClassifierAdapter(
+        spec=spec, hyperparameters=hyperparameters or {}
+    )
+
+
+def _make_tft_regressor(
+    *,
+    spec: DatasetSpec,
+    hyperparameters: dict[str, Any] | None = None,
+) -> SeqSklearnAdapter:
+    return SeqSklearnTFTRegressorAdapter(
+        spec=spec, hyperparameters=hyperparameters or {}
+    )
+
+
+register_adapter_factory(_CLASSIFIER_SPEC.name, _make_tft_classifier)
+register_adapter_factory(_REGRESSOR_SPEC.name, _make_tft_regressor)
