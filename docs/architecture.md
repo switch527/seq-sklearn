@@ -144,9 +144,9 @@ tests/
 ```
 docs/
   index.md                          Diátaxis landing + literalinclude(quickstart)
-  requirements.md                   v1 contract (authoritative; design/)
-  architecture.md                   this file (design/)
-  implementation_plan.md            phase plan (design/)
+  requirements.md                   v1 contract (authoritative; toctreed under design/)
+  architecture.md                   this file (toctreed under design/)
+  implementation_plan.md            phase plan (toctreed under design/)
   conf.py                           Sphinx config
   tutorial/                         Diátaxis tutorial tier (linear, finishable)
   how-to/                           Diátaxis how-to tier (goal-framed recipes)

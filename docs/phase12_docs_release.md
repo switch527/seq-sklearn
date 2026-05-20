@@ -811,3 +811,61 @@ the six adapter classes; CHANGELOG `Added` entry calls out the
 `from seq_sklearn import ...` (the documented STABLE form); this
 ledger added; `__init__.py` docstring updated to reference the
 `## A3:` heading rather than a stale line range.
+
+### S7 Round 3
+
+Architecture-reviewer raised two CRITICAL, two IMPROVEMENT, one
+NITPICK; code + qa + style all APPROVE with zero findings. Resolved
+in commit `cfec103`:
+
+- arch-C1 (CPU N7 silently records GPU number): added a
+  `torch.cuda.is_available()` skip-gate inside the CPU test so it
+  refuses to run on a CUDA-equipped box; release_checklist + CHANGELOG
+  both document `CUDA_VISIBLE_DEVICES=''` as mandatory.
+- arch-C2 (`imbalanced_classes.md` wrong adapter): the human-reading
+  python snippet imported `SamplerConfig` (frozen pydantic family
+  sub-config) instead of `SamplerParams` (BaseEstimator adapter), so
+  `clone()` + `to_pydantic()` would have raised. Rewrote the import,
+  the kwarg, and the prose references.
+- arch-I1 (A1 docs tree stale): rewrote `docs/architecture.md:143-159`
+  to match the live Diátaxis filesystem.
+- arch-I2 (INTERNAL-tier reconciliation): added an explicit row to
+  the requirements per-module stability table declaring
+  `seq_sklearn.config.{optimizer, scheduler, loss, sampler}` INTERNAL.
+- arch-N1 (test_public_api_surface line range): rewrote the
+  `_INTERNAL_TIER_FORBIDDEN` docstring to reference the `## A3:`
+  section semantically rather than coordinates.
+
+### S7 Round 4 (CONSENSUS REACHED)
+
+All four agents APPROVE with zero CRITICAL. Two NITPICKs cleared:
+
+- code-N1: `test_n7_cpu_inference_latency` docstring command line
+  prepended with `CUDA_VISIBLE_DEVICES=''` to match the skip-message
+  and release_checklist.
+- arch-N1: A1 docs-tree labels rewritten from `(design/)` to
+  `(toctreed under design/)` since the files physically live at
+  `docs/` top-level and `docs/design/index.md` is a toctree facade.
+
+Two IMPROVEMENTs deferred with reasons:
+
+- qa-I1 (extend `test_quickstart_block_imports_real_public_symbols`
+  to all how-to plain-python blocks): deferred. Reason: the facade
+  test + adapter unit tests + Sphinx-doctest `{testcode}` blocks
+  already catch any rename in the named symbols. Adding a parametrized
+  AST walker over `docs/how-to/*.md` would tighten coverage on
+  illustrative blocks but the failure mode (a stale import in a
+  how-to plain block) is low-severity. Track as a follow-up.
+- arch-I1 (`docs/reference/config.md` callout): pre-existing,
+  pre-R3. The pydantic family sub-config classes (`OptimizerConfig`,
+  `SchedulerConfig`, `LossConfig`, `SamplerConfig`) are rendered via
+  `autopydantic_model` on the reference page; with the new R3
+  INTERNAL-tier row, a reader could mistake them for importable
+  STABLE classes. A 2-3 line callout clarifying that these are the
+  *spec* for the STABLE `*Params` adapter fields would close the
+  loop. Deferred to the next docs-polish pass.
+
+CONSENSUS REACHED after 4 rounds. Final tally: 0 CRITICAL,
+0 IMPROVEMENT outstanding (2 deferred with reasons), 0 NITPICK.
+Cleared for the gated Gemini code final-pass (deferred per user
+direction); v1.0.0-blocking work on Phase 12 is complete.

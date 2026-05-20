@@ -119,7 +119,10 @@ def test_n7_cpu_inference_latency(perf_determinism: None) -> None:
     runs incidentally on a developer laptop where the strict per-batch
     budget is unmeasurable; the release engineer sets the env var on
     the release-reference CPU and runs
-    ``pytest -m slow tests/perf/test_n7_absolute.py::test_n7_cpu_inference_latency``.
+    ``CUDA_VISIBLE_DEVICES='' SEQ_SKLEARN_N7_CPU=1 pytest -m slow tests/perf/test_n7_absolute.py::test_n7_cpu_inference_latency``
+    (the ``CUDA_VISIBLE_DEVICES=''`` prefix is mandatory; Lightning
+    auto-selects CUDA otherwise and would silently record a GPU
+    number under the CPU budget).
     """
     import os
 
