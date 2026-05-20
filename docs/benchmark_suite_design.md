@@ -136,8 +136,14 @@ caches identically.
 - **B2.2** Each `DatasetSpec` declares: access tier, content hash,
   entity column, time/step column, feature columns with declared
   dtype (numeric vs categorical), target column, task type, the
-  observation cutoff rule (B1.4), a default lookback, and a
-  densification policy. The densification policy is required because the
+  observation cutoff rule (B1.4), a default lookback, a
+  densification policy, and (binary tasks only) a `positive_label`
+  field naming the class that the imbalanced/event-of-interest
+  framing treats as positive. `positive_label` is the value passed
+  to sklearn's `pos_label=` for binary `precision_score` /
+  `recall_score` / `f1_score` (B5.1); it is required on binary
+  specs and absent on multiclass and regression specs (a pydantic
+  cross-field validator pins this). The densification policy is required because the
   library (`docs/requirements.md` F2) treats consecutive panel rows as
   consecutive periods regardless of elapsed wall-clock time; for the
   irregular-time datasets in the roster (PhysioNet-2012, PTB-XL,
@@ -350,30 +356,73 @@ not reimplement them.
 
 - **B5.1 (classification).** Primary: `sklearn.metrics.log_loss`
   (natural log, normalized mean, `labels=` passed explicitly so absent
-  classes do not shift the value). Secondary: Brier score, pinned as
-  `sklearn.metrics.brier_score_loss` for binary and, for multiclass, the
-  unweighted mean over classes of the one-vs-rest per-class
-  `brier_score_loss`, i.e.
-  `mean_k brier_score_loss(y == k, p[:, k])` (no extra division by K
-  beyond that mean; normalized by N inside each call); a known-value
-  test fixes a 3-class 4-sample matrix. `roc_auc_score`
-  (`multi_class="ovr"`, macro); `average_precision_score` for PR-AUC
-  (sklearn step-function definition, not trapezoid); balanced accuracy;
-  MCC. Calibration: expected calibration error with the
-  binning pinned to 15 equal-**mass** bins (quantile bins), the variant
-  recorded in the metric name (`ece_q15`). ECE is reported for the deep
-  model on two arms that hold the training fold fixed: the library is
-  always configured to draw the calibration fold (so train size is
-  identical), and the only toggle is whether the fitted calibrator is
-  applied. This avoids the F2 fold-collapse confound (architecture A5:
-  with `calibration_strategy='none'` and no threshold tuning the cal
-  fold folds back into train, which would otherwise make the
-  "uncalibrated" arm train on more data).
-- **B5.2 (regression).** Primary: RMSE (`root_mean_squared_error`).
-  Secondary: MAE; R² (`r2_score`); pinball loss at the library's
-  configured quantile levels using the convention
-  `mean(max(q·(y−ŷ), (q−1)·(y−ŷ)))` (lower is better), the same
-  convention `sklearn.metrics.mean_pinball_loss` uses.
+  classes do not shift the value). Loss-first ranking: the leaderboard
+  in B6.1 is ordered by this and only this; every metric below is
+  reported in the secondary table and does NOT re-rank.
+  Secondary metrics, grouped:
+  - **Threshold-dependent.** `sklearn.metrics.accuracy_score`,
+    `precision_score`, `recall_score`, `f1_score`. The decision is
+    taken via the adapter's `predict()` (the library default: argmax
+    over `predict_proba` for binary and multiclass; equivalent to a
+    fixed 0.5 threshold for binary), NOT via a tuned threshold; the
+    point of these metrics in B5 is the practitioner-familiar
+    operating-point reading, not the optimal one. These four metrics
+    are computed for every adapter regardless of `supports_proba`
+    since they consume `predict()` only; the B3.2.1 exclusion is
+    scoped to the probability-based metrics it names.
+    For multiclass each of `precision`, `recall`, `f1` is reported
+    under BOTH `macro` and `weighted` averages with the suffix in
+    the metric name (`precision_macro_zd0`, `precision_weighted_zd0`,
+    ...) so a reader cannot mistake one for the other; the convention
+    is embedded in the metric name itself (no sidecar). Binary uses
+    `average="binary"` and reports a single value per metric with
+    only the `_zd0` suffix (`precision_zd0`, no averaging suffix);
+    `pos_label` is pulled from the per-dataset
+    `DatasetSpec.positive_label` field (B2.2) so the imbalanced
+    binary datasets in the roster (mortality, default, churn, fraud,
+    abnormal) score the minority event as positive instead of
+    silently defaulting to `1`.
+    The `_zd0` suffix encodes `zero_division=0` in the metric name
+    on every form (binary and multiclass) for the same reason ECE
+    uses `ece_q15`: a single read of the metric name names the
+    convention.
+  - **Rank-based.** `roc_auc_score` (`multi_class="ovr"`, macro);
+    `average_precision_score` for PR-AUC (sklearn step-function
+    definition, not trapezoid); balanced accuracy; MCC.
+  - **Strictly-proper secondary.** Brier score, pinned as
+    `sklearn.metrics.brier_score_loss` for binary and, for multiclass,
+    the unweighted mean over classes of the one-vs-rest per-class
+    `brier_score_loss`, i.e.
+    `mean_k brier_score_loss(y == k, p[:, k])` (no extra division by K
+    beyond that mean; normalized by N inside each call); a known-value
+    test fixes a 3-class 4-sample matrix.
+  - **Calibration.** Expected calibration error with the
+    binning pinned to 15 equal-**mass** bins (quantile bins), the
+    variant recorded in the metric name (`ece_q15`). ECE is reported
+    for the deep model on two arms that hold the training fold fixed:
+    the library is always configured to draw the calibration fold (so
+    train size is identical), and the only toggle is whether the
+    fitted calibrator is applied. This avoids the F2 fold-collapse
+    confound (architecture A5: with `calibration_strategy='none'` and
+    no threshold tuning the cal fold folds back into train, which
+    would otherwise make the "uncalibrated" arm train on more data).
+- **B5.2 (regression).** Primary: RMSE (`root_mean_squared_error`);
+  the B6.1 leaderboard ranks by this and only this. Secondary:
+  MAE; R² (`r2_score`); MAPE
+  (`sklearn.metrics.mean_absolute_percentage_error`) with a typed
+  pre-check in `benchmarks/metrics/regression.py` that emits `nan`
+  and records a skip reason when MAPE is not well-defined on the
+  vector. Three named skip reasons cover the input pathologies:
+  `mape_undefined_zero_in_y_true` (any `y_true == 0`; sklearn
+  divides by `max(|y_true|, epsilon)` on every row so a single zero
+  silently distorts the GLOBAL number, not just that row, which is
+  why an any-zero skip is the principled response rather than a
+  threshold), `mape_undefined_nan_in_y_true` (any `np.isnan(y_true)`),
+  and `mape_undefined_inf_in_y_true` (any `np.isinf(y_true)`).
+  Then pinball loss at the library's configured quantile levels
+  using the convention `mean(max(q·(y−ŷ), (q−1)·(y−ŷ)))` (lower is
+  better), the same convention `sklearn.metrics.mean_pinball_loss`
+  uses.
 - **B5.3** Resource metrics on every run: wall-clock fit seconds,
   peak process RSS and peak CUDA memory, and per-sample inference
   latency (median and p95) measured separately from throughput-batched
@@ -650,3 +699,93 @@ deferred Gemini for capacity).
 - Deferred: D1, D2, D3, D4 below, each with a one-line reason. v1
   explicitly does not normalize HPO search-space size across model
   families (stated in B6.4.0); the asymmetry is reported, not removed.
+
+Round 4 (B5 delta, user-requested metric extension; addressed
+through a single delta-review round):
+
+The user-facing metric set in B5.1 / B5.2 is expanded with the
+practitioner-familiar threshold-dependent classification metrics
+and a regression-side error-rate metric. The loss-first ranking
+principle is unchanged: every added metric is reported in the
+secondary table; the primary leaderboard order does NOT change.
+
+- B5.1 adds `accuracy_score`, `precision_score`, `recall_score`,
+  `f1_score`. Binary uses `average="binary"` with
+  `pos_label=spec.positive_label` (new B2.2 field); multiclass
+  reports BOTH `macro` and `weighted` under suffixed metric names
+  with the convention embedded as `*_macro_zd0` / `*_weighted_zd0`
+  (the `_zd0` suffix names the `zero_division=0` convention the
+  same way `ece_q15` names ECE's binning). The decision is the
+  adapter's `predict()` (argmax of `predict_proba`, the library
+  default); no threshold tuning at this stage. These four metrics
+  are computed for every adapter regardless of `supports_proba`
+  since they consume `predict()` only. Loss-first ranking
+  unchanged.
+- B5.2 adds MAPE (`mean_absolute_percentage_error`) with three
+  named typed skip reasons that cover every pathological input:
+  `mape_undefined_zero_in_y_true` (any zero; sklearn's epsilon
+  applies to every row globally so an any-zero skip is the
+  principled response rather than a row-level mask),
+  `mape_undefined_nan_in_y_true`, and
+  `mape_undefined_inf_in_y_true`. Each emits `nan` for the metric
+  value plus the reason string on the row.
+- B2.2 adds `positive_label: int | str` on binary specs (absent on
+  multiclass and regression; pydantic cross-field validator pins
+  this) so the imbalanced binary datasets in the roster (mortality,
+  default, churn, fraud, abnormal) score the minority event as
+  positive instead of silently defaulting to sklearn's `1`.
+- The Phase B4 owning test
+  `tests/benchmarks/test_metrics_known_values.py` carries three
+  inline-arithmetic fixtures (no derivation from a prior sklearn
+  run): a 2-class 6-sample binary fixture with unequal class
+  counts (4/2) that exercises `average="binary"` with the spec's
+  `positive_label`; a 3-class 4-sample multiclass fixture with
+  class 2 fully ABSENT from `y_true` (only classes 0 and 1 appear)
+  so the `zero_division=0` branch fires non-trivially in
+  `precision_macro_zd0` / `precision_weighted_zd0`, AND with
+  unequal counts (2/1/1) so `macro` and `weighted` produce
+  different values; an 8-sample regression vector with at least one
+  negative `y_true` so MAPE's denominator is real on every row.
+- Two new owning tests pin the record shape and the macro/weighted
+  distinguishability:
+  `tests/benchmarks/test_metrics_records.py` asserts the
+  multiclass record carries `*_macro_zd0` + `*_weighted_zd0` and
+  does NOT carry bare names; the regression record carries `mape`
+  plus a `mape_skip_reason: str | None` field; the binary record
+  carries `*_zd0` (no suffix).
+  `tests/benchmarks/test_macro_vs_weighted_distinguishable.py`
+  asserts `f1_macro_zd0 != f1_weighted_zd0` on the unequal-counts
+  fixture, proving the two averages travel separate code paths.
+- `tests/benchmarks/test_mape_pathologies.py` parametrizes over
+  the three pathological inputs (zero / nan / inf in `y_true`)
+  with the typed skip-reason string asserted on each.
+
+Delta-review R1 resolutions (architecture 0C/4I/2N; qa 4C/3I/1N;
+style APPROVE 0/0/0): all CRITICAL + IMPROVEMENT folded in above.
+The four qa CRITICALs and the four arch IMPROVEMENTs overlapped on
+the same root causes (binary-fixture absence, zero_division-branch
+unexercised, MAPE pathologies undocumented, MetricsRecord field
+shape unpinned, `pos_label` unspecified, `supports_proba` scope
+ambiguous, MAPE skip rationale missing, `zero_division` convention
+ambiguous in the manifest), all resolved by:
+1. Adding `positive_label` to `DatasetSpec` (B2.2).
+2. Specifying `predict()`-only computation regardless of
+   `supports_proba` (B5.1).
+3. Adding the binary 6-sample fixture + the class-absent
+   3-class fixture + the unequal-count `macro != weighted`
+   invariant + the inline regression arithmetic + the
+   `*_zd0` suffix.
+4. Naming the three MAPE skip reasons and the sklearn-epsilon
+   rationale.
+5. Replacing impl-plan B5-B8 phase heading em-dashes with commas
+   (style-reviewer's out-of-scope CRITICAL observation; fixed
+   pre-emptively).
+Style APPROVE held on the B5 prose itself. Nitpicks (impl-plan
+goals line listing single names without suffix, manifest
+metric-name convention) folded in.
+
+Consensus on the B5 delta: CRITICAL: 0, IMPROVEMENT: 0
+outstanding, NITPICK: 0. The delta is ready for the Gemini
+final-pass alongside the rest of the design doc (which was
+already consensus through R3); Gemini was deferred per user
+direction.
