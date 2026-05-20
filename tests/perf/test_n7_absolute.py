@@ -127,6 +127,21 @@ def test_n7_cpu_inference_latency(perf_determinism: None) -> None:
         pytest.skip("set SEQ_SKLEARN_N7_CPU=1 on a release-reference CPU to record the criterion-9 CPU inference budget")
 
     import numpy as np
+    import torch
+
+    # The CPU N7 number must be measured on a CPU. Lightning auto-
+    # selects CUDA when present, so a release-engineer running this
+    # on a GPU-equipped box without unsetting CUDA visibility would
+    # silently record a GPU number under the CPU budget. Refuse to
+    # run unless CUDA is hidden (`CUDA_VISIBLE_DEVICES=""` is the
+    # standard env-var form, but `not torch.cuda.is_available()` is
+    # the strict observable).
+    if torch.cuda.is_available():
+        pytest.skip(
+            "CUDA is visible to this process; the CPU N7 budget must be "
+            "measured on a CPU device. Run with `CUDA_VISIBLE_DEVICES='' "
+            "SEQ_SKLEARN_N7_CPU=1 pytest ...` to record the number."
+        )
 
     from seq_sklearn.config.adapters import SchedulerParams, TabularConfigParams
     from seq_sklearn.data.synthetic.generator import SyntheticPanelGenerator

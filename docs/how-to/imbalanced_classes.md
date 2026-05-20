@@ -7,25 +7,24 @@ of impact:
 1. **Use proper scoring rules at evaluation time.** Accuracy is
    misleading; report log-loss, ROC-AUC, PR-AUC, or Brier instead.
 2. **Sample with awareness of the prior.** seq-sklearn's
-   `SamplerConfig` supports class-balanced batches without resampling
-   the whole panel.
+   `SamplerParams` adapter supports class-balanced batches without
+   resampling the whole panel.
 3. **Calibrate the probabilities.** A raw model that's
    discrimination-good can still be miscalibrated; pass
    `cal_fraction > 0` to use temperature scaling.
 
 ## Class-balanced sampling
 
-`SamplerConfig` is part of `TFTClassifier`'s training-side config.
+`SamplerParams` is part of `TFTClassifier`'s training-side config.
 The simplest balanced setting:
 
 ```python
-from seq_sklearn import TFTClassifier
-from seq_sklearn.config.sampler import SamplerConfig
+from seq_sklearn import SamplerParams, TFTClassifier
 
 clf = TFTClassifier(
     task_type="binary",
     tabular_config=...,             # the schema
-    sampler=SamplerConfig(strategy="balanced_by_class"),
+    sampler=SamplerParams(strategy="balanced_by_class"),
     cal_fraction=0.1,               # 10% held out for calibration
     max_epochs=80,                  # more epochs for tail classes
 )
@@ -65,7 +64,7 @@ versions may ship a `pos_weight` config field.
 ## Quick checklist
 
 - [ ] Use ROC-AUC / PR-AUC / log-loss to evaluate, not accuracy.
-- [ ] Set `sampler=SamplerConfig(strategy="balanced_by_class")`.
+- [ ] Set `sampler=SamplerParams(strategy="balanced_by_class")`.
 - [ ] Set `cal_fraction=0.1` or so to enable temperature calibration.
 - [ ] Tune the decision threshold post-hoc on a held-out set.
 

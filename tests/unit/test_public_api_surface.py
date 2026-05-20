@@ -23,7 +23,9 @@ import seq_sklearn
 _ARCH_DOC = Path(__file__).resolve().parents[2] / "docs" / "architecture.md"
 
 # Architecture A3 names that are INTERNAL-tier and must never leak into
-# the public surface (per docs/architecture.md:253-257).
+# the public surface (per the `## A3:` section's INTERNAL-tier prose
+# in docs/architecture.md, which lists `RecurrentSequenceEstimator{,Config}`
+# as the named INTERNAL-tier symbols in v1).
 _INTERNAL_TIER_FORBIDDEN: frozenset[str] = frozenset(
     {"RecurrentSequenceEstimator", "RecurrentSequenceEstimatorConfig"}
 )

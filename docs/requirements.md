@@ -251,6 +251,7 @@ attribute is **internal** and not covered by the stability guarantee.
 | BETA | `predict_with_attention`, `AttentionOutput`, `RegressionAttentionOutput` | fields may be added in MINOR releases; consult attribute access, not tuple position |
 | ALPHA | `seq_sklearn.tuning.suggest_params` default search space | search-space defaults may change without MINOR bump; pass an explicit search space for stable behavior |
 | INTERNAL | `seq_sklearn._*` modules | not part of the public API |
+| INTERNAL | `seq_sklearn.config.{optimizer, scheduler, loss, sampler}` family pydantic sub-config modules | frozen pydantic configs reached via the adapter `.to_pydantic()` call; users never import these directly. The STABLE surface is the `*Params` adapters at `seq_sklearn.config.adapters` (re-exported from `seq_sklearn`) |
 
 ### Per-hyperparameter stability tiers
 

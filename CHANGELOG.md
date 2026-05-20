@@ -93,10 +93,12 @@ The four N7 numbers below are recorded at release time from two
 manual runs per [the release checklist](release_checklist.md):
 `SEQ_SKLEARN_N7_GPU=1 pytest -m "gpu and slow" tests/perf/test_n7_absolute.py`
 on an A100/T4/4090 for the three GPU/training numbers, and
-`SEQ_SKLEARN_N7_CPU=1 pytest -m slow tests/perf/test_n7_absolute.py::test_n7_cpu_inference_latency`
-on the release-reference CPU for the inference-latency number.
-Both env-var gates exist so the strict per-batch budgets never
-assert incidentally on a non-reference device. Each `*_INFER_MS`
+`CUDA_VISIBLE_DEVICES='' SEQ_SKLEARN_N7_CPU=1 pytest -m slow tests/perf/test_n7_absolute.py::test_n7_cpu_inference_latency`
+on the release-reference CPU for the inference-latency number
+(`CUDA_VISIBLE_DEVICES=''` is mandatory on a CUDA-equipped box;
+Lightning auto-selects CUDA otherwise, silently recording a GPU
+number). Both env-var gates exist so the strict per-batch budgets
+never assert incidentally on a non-reference device. Each `*_INFER_MS`
 budget is the *whole 1024-window batch* (not per-sample), matching
 the requirements wording verbatim.
 
