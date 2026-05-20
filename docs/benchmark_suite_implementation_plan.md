@@ -408,12 +408,13 @@ the multiclass averaging strategy spelled out.
     `pos_label=spec.positive_label`. Pinned values for
     `accuracy`, `precision_zd0`, `recall_zd0`, `f1_zd0`,
     `log_loss`, `roc_auc`, PR-AUC, MCC, Brier (binary).
-  - A 3-class 4-sample multiclass fixture with class 2 fully
-    ABSENT from `y_true` (only classes 0 and 1 in `y_true`) so the
+  - A 3-class 4-sample multiclass fixture with class 2 NEVER
+    predicted in `y_pred` (TP=FP=0 for class 2) so the
     `zero_division=0` branch fires non-trivially in
-    `precision_macro_zd0` and `precision_weighted_zd0`; the
-    fixture also has unequal counts (2/1/1) so `macro` and
-    `weighted` produce different values. Pinned values for
+    `precision_macro_zd0` and `precision_weighted_zd0`. Class 2 is
+    kept in `y_true` (supports 2/1/1) so the ROC-AUC OVR pathway
+    has a positive per class; the unequal counts also drive
+    `macro != weighted`. Pinned values for
     `accuracy`, `precision_macro_zd0`, `precision_weighted_zd0`,
     `recall_*`, `f1_*`, `log_loss`, Brier multiclass.
   - An 8-sample regression vector with at least one negative
@@ -451,6 +452,30 @@ fixture.
 the user-requested extension, every metric is pinned by an oracle
 test, and the record type is the single object the rest of the
 harness emits.
+
+**B4-followup deferrals** (carried into B5 / B6):
+
+- The resource module's torch hooks (`cuda_reset_callable`,
+  `cuda_peak_callable`) are injected as `Callable`s so the metrics
+  module does not import torch; the harness wires them when CUDA
+  is visible. The harness itself arrives in B6.
+- `peak_rss_bytes` reports `getrusage().ru_maxrss`, which is bytes
+  on Linux and kilobytes on macOS. The harness normalizes to bytes
+  before manifest emission per the B7 envelope-tier check.
+- `compute_roc_auc` on multiclass uses sklearn's default behavior
+  (classes from `y_true`); if a fold has a class absent from
+  `y_true`, sklearn raises. B6 routes the per-fold call through a
+  try / except that records the metric as `nan` with a typed skip
+  reason analogous to the MAPE pathway. This was scoped out of B4
+  to keep the module sklearn-API thin.
+- `compute_ece_q15` with small `N` (< 15 samples) leaves a subset
+  of the 15 equal-mass quantile bins empty; the empty-bin
+  `if not mask.any(): continue` guard at the top of the bin loop
+  handles this branch but is not exercised by an explicit
+  small-`N` test. B5 / B6 fixtures all carry many more than 15
+  samples per fold, so the branch is structurally safe; if a
+  future small-dataset roster lands, add a parametrized small-`N`
+  ECE oracle test alongside the existing empty-array test.
 
 ### Phase B5: Experiment 1, raw loss comparison (deliverable)
 
