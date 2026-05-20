@@ -104,3 +104,19 @@ def test_fit_resource_is_frozen_and_forbids_extra() -> None:
     rec = FitResource(wall_seconds=1.0, peak_rss_bytes=1024, peak_cuda_bytes=None)
     with pytest.raises(ValidationError):
         rec.wall_seconds = 2.0  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def test_inference_latency_is_frozen_and_forbids_extra() -> None:
+    # Parity with FitResource: the same ConfigDict contract applies.
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        InferenceLatency(
+            median_ms=1.0,
+            p95_ms=2.0,
+            n_reps=20,
+            extra_field=1,  # pyright: ignore[reportCallIssue]
+        )
+    rec = InferenceLatency(median_ms=1.0, p95_ms=2.0, n_reps=20)
+    with pytest.raises(ValidationError):
+        rec.median_ms = 2.0  # pyright: ignore[reportAttributeAccessIssue]

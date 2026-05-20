@@ -468,6 +468,14 @@ harness emits.
   try / except that records the metric as `nan` with a typed skip
   reason analogous to the MAPE pathway. This was scoped out of B4
   to keep the module sklearn-API thin.
+- `compute_ece_q15` with small `N` (< 15 samples) leaves a subset
+  of the 15 equal-mass quantile bins empty; the empty-bin
+  `if not mask.any(): continue` guard at the top of the bin loop
+  handles this branch but is not exercised by an explicit
+  small-`N` test. B5 / B6 fixtures all carry many more than 15
+  samples per fold, so the branch is structurally safe; if a
+  future small-dataset roster lands, add a parametrized small-`N`
+  ECE oracle test alongside the existing empty-array test.
 
 ### Phase B5: Experiment 1, raw loss comparison (deliverable)
 

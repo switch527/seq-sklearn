@@ -319,3 +319,85 @@ def test_compute_ece_q15_returns_nan_on_empty_array() -> None:
     import math
 
     assert math.isnan(out)
+
+
+def test_compute_ece_q15_multiclass_returns_nan_on_empty_array() -> None:
+    # R2 / qa-I4: the n == 0 early return is shared between binary
+    # and multiclass entries; the multiclass entry path builds
+    # `probs = y_proba.max(axis=1)` and `argmax = y_proba.argmax(axis=1)`
+    # before hitting the n == 0 guard. Pins that the guard fires
+    # for the multiclass path too.
+    from benchmarks.metrics.classification import compute_ece_q15
+
+    out = compute_ece_q15(
+        np.array([], dtype=np.int64),
+        np.empty((0, 3)),
+        n_classes=3,
+    )
+    import math
+
+    assert math.isnan(out)
+
+
+# --- R2 / qa-I1, qa-I2: `_resolve_pos_index` fallback path and
+# `compute_roc_auc` pos_label=None branch. ---
+
+
+def test_resolve_pos_index_uses_y_true_when_labels_is_none() -> None:
+    # When `labels` is not supplied, `_resolve_pos_index` falls back
+    # to `np.unique(y_true)`. With a clean binary fixture this still
+    # returns the correct positive column, but if pos_label is not
+    # in `y_true` either, the function must still raise.
+    with pytest.raises(ValueError, match="pos_label"):
+        compute_all(
+            task_type="binary",
+            y_true=np.array([0, 1, 0, 1]),
+            y_pred=np.array([0, 1, 0, 1]),
+            y_proba=np.array([[0.7, 0.3], [0.2, 0.8], [0.7, 0.3], [0.2, 0.8]]),
+            pos_label=99,  # absent from np.unique(y_true) = [0, 1]
+            labels=None,
+        )
+
+
+def test_compute_roc_auc_binary_pos_label_none_uses_y_true_directly() -> None:
+    # R2 / qa-I2: `compute_roc_auc`'s direct-call `pos_label=None`
+    # branch (the historical-behavior path) is exercised here.
+    # `_compute_binary` always supplies pos_label, so this test
+    # protects the lower-level API contract.
+    from benchmarks.metrics.classification import compute_roc_auc
+
+    y_true = np.array([0, 0, 0, 0, 1, 1])
+    y_proba = np.array(
+        [
+            [0.9, 0.1],
+            [0.8, 0.2],
+            [0.4, 0.6],
+            [0.3, 0.7],
+            [0.6, 0.4],
+            [0.2, 0.8],
+        ]
+    )
+    out = compute_roc_auc(y_true, y_proba, n_classes=2, pos_label=None, pos_index=1)
+    assert out == pytest.approx(0.75)
+
+
+# --- R2 / qa-I3: regression_quantile path forwards the MAPE skip
+# reason from `_compute_regression_quantile`. ---
+
+
+def test_compute_all_regression_quantile_propagates_mape_skip_reason() -> None:
+    y_true = np.array([1.0, 0.0, 3.0, 4.0])
+    y_pred = np.array([1.1, 0.1, 3.0, 4.0])
+    y_quantiles = np.stack([y_pred - 0.5, y_pred, y_pred + 0.5], axis=1)
+    rec = compute_all(
+        task_type="regression_quantile",
+        y_true=y_true,
+        y_pred=y_pred,
+        y_quantiles=y_quantiles,
+        quantiles=(0.1, 0.5, 0.9),
+    )
+    assert isinstance(rec, RegressionQuantileMetrics)
+    import math
+
+    assert math.isnan(rec.mape)
+    assert rec.mape_skip_reason == "mape_undefined_zero_in_y_true"
