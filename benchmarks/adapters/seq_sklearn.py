@@ -15,23 +15,56 @@ any drift into `seq_sklearn._*`.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 import numpy as np
 import pandas as pd
 
-from benchmarks.adapters._base import ProbaUnsupportedError
-from benchmarks.config import DatasetSpec, ModelSpec
+from benchmarks.adapters._base import (
+    ProbaUnsupportedError,
+    QuantilesUnsupportedError,
+)
+from benchmarks.config import DatasetSpec, ModelSpec, TaskType
 from benchmarks.registry.models import register_model
 from seq_sklearn import (
+    NotFittedError,
     SchedulerParams,
     TabularConfigParams,
     TFTClassifier,
     TFTRegressor,
 )
 
-# Default scheduler matches the docs how-to:
-# cosine_with_warmup with a short warmup.
+# Keys that name the adapter's bind-from-spec contract and the
+# library's wiring; user `hyperparameters` must not override these,
+# because the adapter's task-type guard and the registry's metadata
+# all read from the spec, and a hyperparameter override would
+# silently bypass the alignment. The Phase B8 HPO driver feeds
+# `suggest_params` output verbatim into `hyperparameters`, so this
+# is the exact path that would otherwise hit a confusing run-time
+# crash inside the library.
+_LOCKED_HYPERPARAMETER_KEYS: frozenset[str] = frozenset(
+    {"task_type", "tabular_config", "scheduler", "verbose"}
+)
+
+
+def _check_locked_keys(adapter_name: str, hyperparameters: dict[str, Any]) -> None:
+    """Raise `ValueError` when `hyperparameters` overlap with the
+    bind-from-spec contract keys."""
+    overlap = set(hyperparameters) & _LOCKED_HYPERPARAMETER_KEYS
+    if overlap:
+        raise ValueError(
+            f"{adapter_name}: hyperparameters {sorted(overlap)} are "
+            f"bound by the adapter from the dataset spec and cannot be "
+            f"overridden; remove them from `hyperparameters`"
+        )
+
+
+# Default scheduler. `SchedulerParams` is a sklearn `BaseEstimator`
+# adapter (mutable, not frozen pydantic), so sharing one instance
+# across adapters is safe ONLY because every consumer treats it as
+# read-only state (`TFTClassifier.__init__` assigns the passed
+# object to `self.scheduler` without mutating it). Do not mutate
+# this module-level instance in adapter code.
 _DEFAULT_SCHEDULER = SchedulerParams(name="cosine_with_warmup", warmup_steps=50)
 
 
@@ -67,24 +100,33 @@ class SeqSklearnTFTClassifierAdapter:
     the task type) plus any TFT hyperparameter overrides. The
     estimator is built lazily at `fit` time so the adapter can be
     instantiated cheaply by the harness for protocol introspection.
+    Metadata attributes (`name`, `family`, `task_types`,
+    `supports_proba`) are `ClassVar` so they cannot be silently
+    mutated per-instance and match the protocol's class-attribute
+    declarations exactly.
     """
+
+    # Class-level metadata (Protocol contract); pinned ClassVar so
+    # neither a stray instance assignment nor a hyperparameter
+    # passthrough can drift them from the registered ModelSpec.
+    name: ClassVar[str] = "tft_classifier"
+    family: ClassVar[str] = "seq_sklearn"
+    task_types: ClassVar[tuple[TaskType, ...]] = ("binary", "multiclass")
+    supports_proba: ClassVar[bool] = True
 
     spec: DatasetSpec
     hyperparameters: dict[str, Any] = field(default_factory=dict)
 
-    name: str = "tft_classifier"
-    family: str = "seq_sklearn"
-    task_types: tuple[str, ...] = ("binary", "multiclass")
-    supports_proba: bool = True
-
     _est: TFTClassifier | None = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        _check_locked_keys(self.name, self.hyperparameters)
 
     def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:
         if self.spec.task_type not in self.task_types:
             raise ValueError(
-                f"SeqSklearnTFTClassifierAdapter does not support "
-                f"task_type={self.spec.task_type!r}; supported: "
-                f"{self.task_types}"
+                f"{self.name} does not support task_type="
+                f"{self.spec.task_type!r}; supported: {self.task_types}"
             )
         kwargs: dict[str, Any] = {
             "task_type": self.spec.task_type,
@@ -99,17 +141,26 @@ class SeqSklearnTFTClassifierAdapter:
 
     def predict(self, panel: pd.DataFrame) -> np.ndarray:
         if self._est is None:
-            raise RuntimeError(
+            raise NotFittedError(
                 f"{self.name}: predict() called before fit(); call fit() first"
             )
         return self._est.predict(panel)
 
     def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:
         if self._est is None:
-            raise RuntimeError(
+            raise NotFittedError(
                 f"{self.name}: predict_proba() called before fit(); call fit() first"
             )
         return self._est.predict_proba(panel)
+
+    def predict_quantiles(self, panel: pd.DataFrame) -> np.ndarray:  # noqa: ARG002
+        # `panel` matches the protocol signature; classifier
+        # adapters do not produce quantile predictions.
+        raise QuantilesUnsupportedError(
+            f"{self.name}: classifier adapters do not produce "
+            f"quantile predictions; the harness's quantile-based "
+            f"metrics are only routed to regression_quantile adapters"
+        )
 
 
 @dataclass
@@ -118,25 +169,32 @@ class SeqSklearnTFTRegressorAdapter:
 
     Supports both point and quantile regression. ``supports_proba``
     is False (regression has no class probabilities); the harness's
-    probability-based metrics are skipped for this family.
+    probability-based metrics are skipped for this family. The
+    quantile-prediction path activates when the spec declares
+    ``task_type="regression_quantile"``.
     """
+
+    name: ClassVar[str] = "tft_regressor"
+    family: ClassVar[str] = "seq_sklearn"
+    task_types: ClassVar[tuple[TaskType, ...]] = (
+        "regression_point",
+        "regression_quantile",
+    )
+    supports_proba: ClassVar[bool] = False
 
     spec: DatasetSpec
     hyperparameters: dict[str, Any] = field(default_factory=dict)
 
-    name: str = "tft_regressor"
-    family: str = "seq_sklearn"
-    task_types: tuple[str, ...] = ("regression_point", "regression_quantile")
-    supports_proba: bool = False
-
     _est: TFTRegressor | None = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        _check_locked_keys(self.name, self.hyperparameters)
 
     def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:
         if self.spec.task_type not in self.task_types:
             raise ValueError(
-                f"SeqSklearnTFTRegressorAdapter does not support "
-                f"task_type={self.spec.task_type!r}; supported: "
-                f"{self.task_types}"
+                f"{self.name} does not support task_type="
+                f"{self.spec.task_type!r}; supported: {self.task_types}"
             )
         kwargs: dict[str, Any] = {
             "task_type": self.spec.task_type,
@@ -151,15 +209,14 @@ class SeqSklearnTFTRegressorAdapter:
 
     def predict(self, panel: pd.DataFrame) -> np.ndarray:
         if self._est is None:
-            raise RuntimeError(
+            raise NotFittedError(
                 f"{self.name}: predict() called before fit(); call fit() first"
             )
         return self._est.predict(panel)
 
     def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:  # noqa: ARG002
-        # `panel` matches the protocol signature; this regressor
-        # adapter never returns probabilities so the parameter is
-        # intentionally unused.
+        # `panel` matches the protocol signature; regressors never
+        # return probabilities.
         raise ProbaUnsupportedError(
             f"{self.name}: regression adapters do not produce class "
             f"probabilities; check `supports_proba` before calling"
@@ -169,7 +226,7 @@ class SeqSklearnTFTRegressorAdapter:
         """Quantile predictions when fit with `task_type=
         'regression_quantile'`."""
         if self._est is None:
-            raise RuntimeError(
+            raise NotFittedError(
                 f"{self.name}: predict_quantiles() called before fit()"
             )
         return self._est.predict_quantiles(panel)

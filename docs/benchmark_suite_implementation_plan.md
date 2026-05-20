@@ -233,7 +233,7 @@ usable.
 **B2.x in scope** (one branch per family): GBM adapter (LightGBM,
 XGBoost, CatBoost via their sklearn-API), sklearn-passthrough
 extension point, classical TSC family (MiniRocket / Rocket /
-KNN-DTW via aeon — blocked until aeon's sklearn pin loosens; same
+KNN-DTW via aeon, blocked until aeon's sklearn pin loosens; same
 blocker as the UEA dataset loaders). The GBM and sklearn-
 passthrough adapters consume the B3 featurizer; they land after
 Phase B3 ships, because the harness's lag-feature builder is the
@@ -279,8 +279,8 @@ Deferred to Phase B2-followup branches:
 - `benchmarks/adapters/sklearn_passthrough.py` (extension point):
   same dependency on B3's featurizer.
 - `benchmarks/adapters/tsc.py` (aeon MiniRocket / Rocket /
-  KNN-DTW): blocked on aeon's `scikit-learn < 1.6` pin; same
-  blocker as the UEA dataset loaders.
+  KNN-DTW): blocked on aeon's `scikit-learn < 1.6` pin; the same
+  blocker that holds the UEA dataset loaders.
 
 **Dependencies**: B1 (the adapter contract takes a `PanelDataset`).
 

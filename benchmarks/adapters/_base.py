@@ -42,6 +42,18 @@ class ProbaUnsupportedError(NotImplementedError):
     """
 
 
+class QuantilesUnsupportedError(NotImplementedError):
+    """Adapter does not expose quantile predictions.
+
+    Raised by ``predict_quantiles`` on classifier adapters and on
+    point-regression adapters. The Phase B4 metrics layer inspects
+    ``adapter.task_types`` and only routes quantile-based metrics
+    (pinball loss at the configured levels) to adapters that admit
+    ``regression_quantile``; this typed error covers the bypass
+    path.
+    """
+
+
 @runtime_checkable
 class SeqSklearnAdapter(Protocol):
     """The benchmark-harness adapter contract.
@@ -91,5 +103,16 @@ class SeqSklearnAdapter(Protocol):
         Returns shape ``(len(panel), n_classes)``. Raises
         :class:`ProbaUnsupportedError` on adapters with
         ``supports_proba=False``.
+        """
+        ...
+
+    def predict_quantiles(self, panel: pd.DataFrame) -> np.ndarray:
+        """Quantile predictions for `regression_quantile` adapters.
+
+        Returns shape ``(len(panel), n_quantiles)`` where the
+        ordering matches the adapter's configured quantile levels.
+        Raises :class:`QuantilesUnsupportedError` on classifier
+        adapters and on point-regression adapters; the harness's
+        metric router inspects ``adapter.task_types`` to decide.
         """
         ...

@@ -12,11 +12,13 @@ conformance test so the cumulative roster cannot regress silently.
 from benchmarks.adapters import seq_sklearn  # pyright: ignore[reportUnusedImport]
 from benchmarks.adapters._base import (
     ProbaUnsupportedError,  # pyright: ignore[reportUnusedImport]
+    QuantilesUnsupportedError,  # pyright: ignore[reportUnusedImport]
     SeqSklearnAdapter,  # pyright: ignore[reportUnusedImport]
 )
 
 __all__ = [
     "ProbaUnsupportedError",
+    "QuantilesUnsupportedError",
     "SeqSklearnAdapter",
     "seq_sklearn",
 ]

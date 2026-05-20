@@ -20,13 +20,19 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
-from benchmarks.adapters._base import ProbaUnsupportedError, SeqSklearnAdapter
+from benchmarks.adapters._base import (
+    ProbaUnsupportedError,
+    QuantilesUnsupportedError,
+    SeqSklearnAdapter,
+)
 from benchmarks.adapters.seq_sklearn import (
     SeqSklearnTFTClassifierAdapter,
     SeqSklearnTFTRegressorAdapter,
 )
 from benchmarks.config import DatasetSpec
 from benchmarks.registry import get_model, list_models
+
+from seq_sklearn import NotFittedError
 
 
 def _make_minimal_dataset_spec(
@@ -103,13 +109,25 @@ def test_tft_regressor_adapter_predict_proba_raises_typed() -> None:
         adapter.predict_proba(pd.DataFrame({"entity_id": [1], "cycle": [1]}))
 
 
-def test_tft_classifier_adapter_predict_before_fit_raises() -> None:
+def test_tft_classifier_adapter_predict_before_fit_raises_typed() -> None:
+    """arch-I3: the adapter raises the library's typed
+    `NotFittedError` (re-exported from `seq_sklearn`) so a caller
+    can `except NotFittedError` across every adapter family."""
     spec = _make_minimal_dataset_spec(task_type="binary")
     adapter = SeqSklearnTFTClassifierAdapter(spec=spec)
-    with pytest.raises(RuntimeError, match="before fit"):
+    with pytest.raises(NotFittedError, match="before fit"):
         adapter.predict(pd.DataFrame())
-    with pytest.raises(RuntimeError, match="before fit"):
+    with pytest.raises(NotFittedError, match="before fit"):
         adapter.predict_proba(pd.DataFrame())
+
+
+def test_tft_regressor_adapter_predict_before_fit_raises_typed() -> None:
+    """Mirror of the classifier test for the regressor; closes
+    the qa-I1 symmetric-coverage gap."""
+    spec = _make_minimal_dataset_spec(task_type="regression_point")
+    adapter = SeqSklearnTFTRegressorAdapter(spec=spec)
+    with pytest.raises(NotFittedError, match="before fit"):
+        adapter.predict(pd.DataFrame())
 
 
 def test_tft_classifier_adapter_rejects_unsupported_task_type() -> None:
@@ -135,11 +153,68 @@ def test_tft_regressor_adapter_rejects_classification_task_type() -> None:
         )
 
 
-def test_tft_regressor_adapter_predict_quantiles_before_fit_raises() -> None:
+def test_tft_regressor_adapter_predict_quantiles_before_fit_raises_typed() -> None:
     spec = _make_minimal_dataset_spec(task_type="regression_quantile")
     adapter = SeqSklearnTFTRegressorAdapter(spec=spec)
-    with pytest.raises(RuntimeError, match="before fit"):
+    with pytest.raises(NotFittedError, match="before fit"):
         adapter.predict_quantiles(pd.DataFrame())
+
+
+def test_tft_classifier_adapter_predict_quantiles_raises_typed() -> None:
+    """code-C1 / arch-I1: classifier adapters raise the typed
+    `QuantilesUnsupportedError` when asked for quantile
+    predictions, mirroring the `predict_proba` pattern."""
+    spec = _make_minimal_dataset_spec(task_type="binary")
+    adapter = SeqSklearnTFTClassifierAdapter(spec=spec)
+    with pytest.raises(QuantilesUnsupportedError, match="quantile"):
+        adapter.predict_quantiles(pd.DataFrame({"entity_id": [1], "cycle": [1]}))
+
+
+def test_quantiles_unsupported_error_is_subclass_of_not_implemented() -> None:
+    """Parallel to qa-I3 / `ProbaUnsupportedError`: callers catching
+    `NotImplementedError` also catch the typed subclass."""
+    assert issubclass(QuantilesUnsupportedError, NotImplementedError)
+
+
+@pytest.mark.parametrize(
+    ("adapter_cls", "task_type"),
+    [
+        (SeqSklearnTFTClassifierAdapter, "binary"),
+        (SeqSklearnTFTRegressorAdapter, "regression_point"),
+    ],
+)
+def test_adapter_rejects_locked_hyperparameter_keys(
+    adapter_cls: type, task_type: str
+) -> None:
+    """arch-C1: `hyperparameters` cannot override the
+    bind-from-spec contract keys (`task_type`, `tabular_config`,
+    `scheduler`, `verbose`). The check fires at `__post_init__`,
+    not at `fit`, so a Phase B8 HPO driver that pipes
+    `suggest_params` output verbatim still sees a clean
+    construction-time error."""
+    spec = _make_minimal_dataset_spec(task_type=task_type)
+    for locked_key in ("task_type", "tabular_config", "scheduler", "verbose"):
+        with pytest.raises(ValueError, match=locked_key):
+            adapter_cls(spec=spec, hyperparameters={locked_key: "garbage"})
+
+
+def test_tft_classifier_adapter_metadata_is_classvar_not_instance() -> None:
+    """arch-I2 / code-C2 / arch-I4: the metadata
+    (`name`, `family`, `task_types`, `supports_proba`) lives on the
+    class, not the instance, so it cannot drift per-adapter-instance.
+    The class attributes also satisfy the Protocol's declared
+    `tuple[TaskType, ...]` shape (not the widened `tuple[str, ...]`).
+    """
+    spec = _make_minimal_dataset_spec(task_type="binary")
+    adapter = SeqSklearnTFTClassifierAdapter(spec=spec)
+    # Reading from class and instance both work; the value is the
+    # same object.
+    assert (
+        SeqSklearnTFTClassifierAdapter.name
+        == adapter.name
+        == "tft_classifier"
+    )
+    assert SeqSklearnTFTClassifierAdapter.task_types == ("binary", "multiclass")
 
 
 def test_every_registered_seq_sklearn_model_has_a_reason() -> None:
