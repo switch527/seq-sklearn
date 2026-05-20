@@ -307,8 +307,10 @@ Lands in this phase:
   for sensitivity sweeps). Non-positive overrides raise typed.
 - `benchmarks/protocol/split.py` (B4.1a): thin wrapper around the
   library's `EntityTimeSeriesSplit` (A9.1); binds `id_col` /
-  `time_col` from the dataset spec; exposes `make_splitter` +
-  `iter_folds` for the experiment driver.
+  `time_col` from the dataset spec; exposes `make_splitter`.
+  Callers invoke `splitter.split(panel)` directly (the library's
+  splitter already matches the sklearn protocol; an extra wrapper
+  would have added API surface without justification).
 - `benchmarks/protocol/featurize.py` (B4.3): the GBM /
   sklearn-passthrough lag-feature builder. Produces one row per
   panel row with L lagged columns per real / categorical feature;
@@ -320,11 +322,11 @@ Lands in this phase:
   the same fingerprint (qa-C4); the `L_resolved + 1` direction-2
   perturbation flips it (qa-NEW-N1).
 - `benchmarks/protocol/__init__.py`: package facade re-exporting
-  `fingerprint_folds`, `iter_folds`, `lag_featurize`,
-  `make_splitter`, `resolve_lookback`.
-- `tests/benchmarks/test_protocol.py`: 22 tests covering each
+  `fingerprint_folds`, `lag_featurize`, `make_splitter`,
+  `resolve_lookback`.
+- `tests/benchmarks/test_protocol.py`: 28 tests covering each
   protocol leaf plus the B4.5 leakage invariants
-  (`test_iter_folds_test_target_window_not_in_train`,
+  (`test_iter_folds_test_target_window_is_history_only_overlap`,
   `test_lag_featurize_train_perturbation_outside_lookback_changes_train_only`).
   Coverage: 100% line + 100% branch on every protocol module.
 

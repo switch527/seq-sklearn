@@ -32,6 +32,26 @@ import numpy as np
 import pandas as pd
 
 from benchmarks.config import DatasetSpec
+from benchmarks.protocol.lookback import resolve_lookback
+
+
+def _check_panel_time_ordered_per_entity(
+    panel: pd.DataFrame, entity_col: str, time_col: str
+) -> None:
+    """Raise `ValueError` when any entity's rows are not in
+    non-decreasing time order. ``groupby().shift(k)`` is
+    row-positional, not time-positional, so an out-of-order panel
+    produces silently wrong lags; we fail fast at the module
+    boundary per the `.claude/rules/python.md` validation contract.
+    """
+    for entity_id, group in panel.groupby(entity_col, sort=False):
+        if not group[time_col].is_monotonic_increasing:
+            raise ValueError(
+                f"lag_featurize: panel rows for entity {entity_id!r} are "
+                f"not in non-decreasing {time_col!r} order; sort the "
+                f"panel by ({entity_col!r}, {time_col!r}) before "
+                f"calling lag_featurize"
+            )
 
 
 def _lag_real_column(
@@ -77,9 +97,19 @@ def _lag_categorical_column(
 
 
 def lag_featurize(
-    panel: pd.DataFrame, spec: DatasetSpec, lookback: int
+    panel: pd.DataFrame,
+    spec: DatasetSpec,
+    *,
+    lookback_override: int | None = None,
 ) -> pd.DataFrame:
     """Build the flat lag-feature matrix.
+
+    The lookback depth ``L`` is the same `L_resolved` per B4.1b: by
+    default ``spec.lookback``, overridable via
+    ``lookback_override`` for Phase B5+ sensitivity sweeps. The
+    binding goes through :func:`benchmarks.protocol.lookback.resolve_lookback`
+    so the featurizer and the splitter cannot drift on the resolved
+    value.
 
     Returns a DataFrame with one row per panel row, columns
     ``{col}_lag{k}`` for each `(time-varying col, k in [0, L))`
@@ -90,16 +120,22 @@ def lag_featurize(
     input ``panel.index``.
 
     Raises:
-        ValueError: ``lookback < 1`` or the entity column is
-            missing from ``panel``.
+        ValueError: ``lookback_override`` is non-positive, the
+            entity column is missing from ``panel``, or any
+            entity's rows are not in non-decreasing time order
+            (the lag-by-row-position contract requires per-entity
+            time ordering).
         KeyError: any of the spec's feature columns is missing from
             ``panel``.
     """
-    if lookback < 1:
-        raise ValueError(f"lag_featurize: lookback must be >= 1; got {lookback}")
+    lookback = resolve_lookback(spec, override=lookback_override)
     if spec.entity_col not in panel.columns:
         raise ValueError(
             f"lag_featurize: entity_col {spec.entity_col!r} missing from panel"
+        )
+    if spec.time_col not in panel.columns:
+        raise ValueError(
+            f"lag_featurize: time_col {spec.time_col!r} missing from panel"
         )
     missing = [
         c
@@ -110,6 +146,7 @@ def lag_featurize(
         raise KeyError(
             f"lag_featurize: feature columns missing from panel: {missing}"
         )
+    _check_panel_time_ordered_per_entity(panel, spec.entity_col, spec.time_col)
 
     blocks: list[pd.DataFrame] = []
     for col in spec.feature_real_cols:

@@ -22,11 +22,6 @@ inside CV folds explicit:
   rule when needed.
 """
 
-from collections.abc import Iterator
-
-import numpy as np
-import pandas as pd
-
 from benchmarks.config import DatasetSpec
 from seq_sklearn import EntityTimeSeriesSplit
 
@@ -43,6 +38,9 @@ def make_splitter(
 
     Reads `entity_col` / `time_col` from the spec; uses the resolved
     lookback per `benchmarks.protocol.lookback.resolve_lookback`.
+    Callers invoke ``splitter.split(panel)`` directly to iterate
+    folds; the library's `EntityTimeSeriesSplit.split` already
+    matches the sklearn splitter contract.
     """
     return EntityTimeSeriesSplit(
         n_splits=n_splits,
@@ -52,11 +50,3 @@ def make_splitter(
         id_col=spec.entity_col,
         time_col=spec.time_col,
     )
-
-
-def iter_folds(
-    splitter: EntityTimeSeriesSplit, panel: pd.DataFrame
-) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-    """Forward to ``splitter.split(panel)``, returning
-    ``(train_idx, test_idx)`` per fold."""
-    yield from splitter.split(panel)
