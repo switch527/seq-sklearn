@@ -553,6 +553,24 @@ CI runs the synthetic 2x3 cell only.
   field so a leaderboard reader does not see two identical SHAs
   and misread it as redundancy.
 
+**B5 R3-residual nitpicks** (not blocking ship; recorded for B6+):
+
+- `_optional_scalar_columns` discriminates `float | None` vs
+  `int | None` via `str(annotation)` equality, which depends on
+  pydantic's annotation-repr stability. B6 can swap to a typed
+  introspection (e.g. `typing.get_args` + `Union[X, None]` check)
+  once the schema grows to other optional scalar dtypes.
+- `_strip_below_floor_rows`'s int-y_pred branch (classifier-only
+  point prediction with no probabilities) is unreachable from
+  every current adapter and is left as a defensive no-op; if a
+  future adapter ships with `supports_proba=False` on a
+  classification task, the precedence skip catches the cell
+  before this branch matters.
+- The B6 impl-plan entry should ledger the new
+  `cells_skipped_proba_runtime_unavailable` counter alongside the
+  existing four skip categories so a reader of the result summary
+  knows the full set without consulting the source.
+
 ### Phase B6: Experiment 2, ensemble complementarity (B6.2)
 
 **Goal**: B6.2 error correlation / ensemble complementarity for

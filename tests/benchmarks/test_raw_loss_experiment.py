@@ -1338,6 +1338,35 @@ def test_runtime_proba_unsupported_emits_typed_skip(
     )
 
 
+# --- R3 / qa-IMP: runtime-proba skip rows carry the partial fit
+# resource (fit completed before predict_proba raised) but no
+# latency (the timing block runs only AFTER the runtime-proba check). ---
+
+
+def test_runtime_proba_skip_row_has_fit_resource_but_no_latency(
+    fake_registry: list[PanelDataset], tmp_path: Path
+) -> None:
+    del fake_registry
+    config = _make_config(
+        datasets=("fake_binary",),
+        models=("fake_runtime_proba_error",),
+        seeds=(0,),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    run_raw_loss(config, output_root=tmp_path / "out", env=env)
+    manifest = load_run(tmp_path / "out")
+    # `wall_seconds` and `peak_rss_bytes` carry the genuine fit
+    # measurement; the metric layer never ran so the latency triple
+    # is null. Pins the docstring contract on `_build_row`.
+    assert bool(manifest["wall_seconds"].notna().all())
+    assert bool(manifest["peak_rss_bytes"].notna().all())
+    assert bool(manifest["median_predict_ms"].isna().all())
+    assert bool(manifest["p95_predict_ms"].isna().all())
+    assert bool(manifest["n_predict_reps"].isna().all())
+
+
 # --- R2 / code-IMP: a predict-time adapter crash routes to
 # adapter_error (the existing test only exercises fit-time). ---
 

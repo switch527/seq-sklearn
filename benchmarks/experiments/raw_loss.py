@@ -101,6 +101,17 @@ _DEFAULT_LATENCY_WARMUP = 3
 _RAW_LOSS_VARIANT = "default"
 _HPO_TIER_RAW_LOSS = "none"
 
+# Skipped-reason prefixes: each constant is BOTH the leading token
+# of the per-row `skipped_reason` string AND the dispatch key the
+# outer-loop counter classifier consults. Keeping the strings in
+# one place prevents the row-build site and the counter site from
+# drifting apart (R3 arch-IMP).
+_SKIP_REASON_TASK_TYPE_MISMATCH = "task_type_mismatch"
+_SKIP_REASON_PROBA_UNAVAILABLE = "probabilities_required_for_classification"
+_SKIP_REASON_PROBA_RUNTIME_UNAVAILABLE = "probabilities_required_but_runtime_unavailable"
+_SKIP_REASON_QUANTILE_FOLLOWUP = "regression_quantile_b5_followup"
+_SKIP_REASON_ADAPTER_ERROR = "adapter_error"
+
 
 class RunEnvironment(BaseModel):
     """Per-run environment metadata recorded on every result row.
@@ -281,10 +292,14 @@ def _build_row(
     """Assemble a `ResultRow` from the per-cell pieces.
 
     `metrics_dump` is `None` on skipped cells; the metric columns
-    default to None on `ResultRow`. `fit_resource` and `latency` are
-    also `None` on skipped cells. `n_below_floor_dropped` counts the
-    A9.1 lookback-floor rows the harness stripped before the metric
-    call; `None` on skipped cells.
+    default to None on `ResultRow`. `fit_resource` is `None` on
+    spec-mismatch and pre-fit skip paths but is PRESERVED on the
+    `probabilities_required_but_runtime_unavailable` skip (fit
+    completed before `predict_proba` raised). `latency` is `None`
+    on every skipped cell because the timing loop runs only after
+    the runtime-proba check at the metric-call boundary. `n_below_
+    floor_dropped` counts the A9.1 lookback-floor rows the harness
+    stripped before the metric call; `None` on skipped cells.
     """
     fields: dict[str, Any] = {
         "library_git_sha": env.library_git_sha,
@@ -407,7 +422,7 @@ def _run_one_cell(
             split_fingerprint=split_fingerprint,
             l_resolved=l_resolved,
             started_at_utc=started_at_utc,
-            skipped_reason="regression_quantile_b5_followup",
+            skipped_reason=_SKIP_REASON_QUANTILE_FOLLOWUP,
             metrics_dump=None,
             fit_resource=None,
             latency=None,
@@ -448,7 +463,7 @@ def _run_one_cell(
                 l_resolved=l_resolved,
                 started_at_utc=started_at_utc,
                 skipped_reason=(
-                    "probabilities_required_but_runtime_unavailable: "
+                    f"{_SKIP_REASON_PROBA_RUNTIME_UNAVAILABLE}: "
                     f"model={model_name} declared supports_proba=True but "
                     "predict_proba raised ProbaUnsupportedError at runtime"
                 ),
@@ -537,7 +552,7 @@ def _run_one_cell(
             split_fingerprint=split_fingerprint,
             l_resolved=l_resolved,
             started_at_utc=started_at_utc,
-            skipped_reason=f"adapter_error: {type(exc).__name__}: {exc}",
+            skipped_reason=f"{_SKIP_REASON_ADAPTER_ERROR}: {type(exc).__name__}: {exc}",
             metrics_dump=None,
             fit_resource=None,
             latency=None,
@@ -762,9 +777,9 @@ def run_raw_loss(
                             l_resolved=l_resolved,
                             started_at_utc=_utc_now(),
                             skipped_reason=(
-                                f"task_type_mismatch: model.task_types="
-                                f"{model_spec.task_types} dataset.task_type="
-                                f"{spec.task_type}"
+                                f"{_SKIP_REASON_TASK_TYPE_MISMATCH}: "
+                                f"model.task_types={model_spec.task_types} "
+                                f"dataset.task_type={spec.task_type}"
                             ),
                             metrics_dump=None,
                             fit_resource=None,
@@ -783,7 +798,7 @@ def run_raw_loss(
                             l_resolved=l_resolved,
                             started_at_utc=_utc_now(),
                             skipped_reason=(
-                                "probabilities_required_for_classification: "
+                                f"{_SKIP_REASON_PROBA_UNAVAILABLE}: "
                                 f"model={model_name} declares "
                                 f"supports_proba=False"
                             ),
@@ -808,10 +823,10 @@ def run_raw_loss(
                         )
                         if row.skipped_reason is None:
                             attempted += 1
-                        elif row.skipped_reason.startswith("regression_quantile_b5_followup"):
+                        elif row.skipped_reason.startswith(_SKIP_REASON_QUANTILE_FOLLOWUP):
                             skipped_quantile_followup += 1
                         elif row.skipped_reason.startswith(
-                            "probabilities_required_but_runtime_unavailable"
+                            _SKIP_REASON_PROBA_RUNTIME_UNAVAILABLE
                         ):
                             skipped_proba_runtime_unavailable += 1
                         else:
