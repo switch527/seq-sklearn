@@ -14,8 +14,10 @@ The primary loss is task-type-dependent:
   "skipped" with a `regression_quantile_b5_followup` footnote.
 
 Aggregation policy:
-- Per (dataset, model), report the mean across seeds + folds for
-  the primary, plus mean+std for the visible secondary metrics.
+- Per (dataset, model), report the mean+std across seeds + folds
+  for the primary loss; report the mean only for the visible
+  secondary metrics (per-metric std deferred to B6 when a CD
+  diagram lands alongside).
 - Skipped cells (any non-None `skipped_reason`) are excluded from
   the rank but listed in a "Skipped cells" footnote so a reader
   knows whether a model "lost" or was "skipped".
@@ -91,7 +93,7 @@ class LeaderboardEntry(BaseModel):
     """One row of the per-dataset leaderboard.
 
     The `primary_loss_mean` / `primary_loss_std` pair is the rank
-    key; the `n_seeds` / `n_folds_evaluated` pair reports the
+    key; the `n_seeds` / `n_cells_evaluated` pair reports the
     aggregation denominator so a reader can spot a thin sample.
     """
 
@@ -104,7 +106,7 @@ class LeaderboardEntry(BaseModel):
     primary_loss_mean: float
     primary_loss_std: float
     n_seeds: int
-    n_folds_evaluated: int  # excluding skipped cells
+    n_cells_evaluated: int  # excluding skipped cells
     n_skipped: int  # cells with a non-None skipped_reason
 
 
@@ -148,7 +150,7 @@ def rank_by_primary_loss(manifest: pd.DataFrame) -> list[LeaderboardEntry]:
                     primary_loss_mean=float("nan"),
                     primary_loss_std=float("nan"),
                     n_seeds=int(block["seed"].nunique()),
-                    n_folds_evaluated=0,
+                    n_cells_evaluated=0,
                     n_skipped=n_skipped,
                 )
             )
@@ -165,7 +167,7 @@ def rank_by_primary_loss(manifest: pd.DataFrame) -> list[LeaderboardEntry]:
                 if len(primary_series) > 1
                 else 0.0,
                 n_seeds=int(ok["seed"].nunique()),
-                n_folds_evaluated=len(ok),
+                n_cells_evaluated=len(ok),
                 n_skipped=n_skipped,
             )
         )
@@ -216,7 +218,7 @@ def _render_dataset_block(
         "Rank",
         "Model",
         f"{primary_metric} (mean ± std)",
-        "n_folds",
+        "n_cells",
         *secondary_cols,
         *_RESOURCE_COLUMNS,
     ]
@@ -242,7 +244,7 @@ def _render_dataset_block(
                 if not pd.isna(entry.primary_loss_mean)
                 else "(all skipped)"
             ),
-            str(entry.n_folds_evaluated),
+            str(entry.n_cells_evaluated),
         ]
         for col in secondary_cols:
             if col not in ok_block.columns:

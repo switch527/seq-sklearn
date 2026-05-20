@@ -539,11 +539,19 @@ CI runs the synthetic 2x3 cell only.
 - `_DEFAULT_N_SPLITS=5` is hardcoded in the driver. B5's
   `BenchmarkConfig` does NOT carry an `n_splits` knob; B6 adds it
   to the per-experiment spec for sensitivity sweeps.
-- Library + benchmarks git SHA recording uses a best-effort
-  `git rev-parse HEAD` subprocess; "unknown" is recorded on
-  non-checkout invocations. B7's profile field tightens the
-  hardware-tier identifier from the current free-form string
-  ("cpu" | "gpu_single") to the library's `HardwareTier` enum.
+- Library git SHA recording uses a best-effort `git rev-parse HEAD`
+  subprocess; "unknown" is recorded on non-checkout invocations.
+  B7's profile field tightens the hardware-tier identifier from
+  the current free-form string ("cpu" | "gpu_single") to the
+  library's `HardwareTier` enum.
+- B5 records ONE git SHA (`library_git_sha`); design B8.1 names
+  two (`library_git_sha` + `benchmarks_git_sha`) in anticipation
+  of a future repo split. The library and benchmarks live in the
+  same repo today, so the second SHA is identically the first.
+  The repo-split branch reintroduces `benchmarks_git_sha` to the
+  `RunEnvironment` + `ResultRow` schema; B5 ships with the single
+  field so a leaderboard reader does not see two identical SHAs
+  and misread it as redundancy.
 
 ### Phase B6: Experiment 2, ensemble complementarity (B6.2)
 

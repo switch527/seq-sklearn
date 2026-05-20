@@ -26,7 +26,7 @@ from benchmarks.adapters._base import (
     SeqSklearnAdapter,
 )
 from benchmarks.config import DatasetSpec, ModelSpec, TaskType
-from benchmarks.registry.models import register_adapter_factory, register_model
+from benchmarks.registry.models import register_adapter
 from seq_sklearn import (
     NotFittedError,
     SchedulerParams,
@@ -251,10 +251,6 @@ _REGRESSOR_SPEC = ModelSpec(
     ),
 )
 
-register_model(_CLASSIFIER_SPEC)
-register_model(_REGRESSOR_SPEC)
-
-
 # Adapter factories used by the experiment driver to instantiate
 # adapters from a registered name. The dataclass `__init__` accepts
 # `spec` and `hyperparameters` as keyword arguments, so wrapping in
@@ -290,5 +286,5 @@ def _make_tft_regressor(
     )
 
 
-register_adapter_factory(_CLASSIFIER_SPEC.name, _make_tft_classifier)
-register_adapter_factory(_REGRESSOR_SPEC.name, _make_tft_regressor)
+register_adapter(_CLASSIFIER_SPEC, _make_tft_classifier)
+register_adapter(_REGRESSOR_SPEC, _make_tft_regressor)

@@ -46,7 +46,6 @@ def _minimal_row(
     """Build a `ResultRow` with the smallest valid field set."""
     return ResultRow(
         library_git_sha="lib_sha_00000000",
-        benchmarks_git_sha="bench_sha_00000000",
         run_id="run-uuid-test",
         started_at_utc="2026-05-20T00:00:00+00:00",
         dataset_name=dataset_name,
@@ -269,7 +268,6 @@ def test_result_row_forbids_extra_fields() -> None:
     with pytest.raises(ValidationError):
         ResultRow(
             library_git_sha="lib_sha",
-            benchmarks_git_sha="bench_sha",
             run_id="run",
             started_at_utc="2026-05-20T00:00:00+00:00",
             dataset_name="ds_a",
@@ -292,3 +290,91 @@ def test_result_row_is_frozen() -> None:
     row = _minimal_row()
     with pytest.raises(ValidationError):
         row.log_loss = 0.99  # pyright: ignore[reportAttributeAccessIssue]
+
+
+# --- R1 / qa-N1: cell_key separator rejection covers EVERY token. ---
+
+
+@pytest.mark.parametrize(
+    ("kw_with_bad_value", "expected_match"),
+    [
+        ({"model_name": "broken__model"}, "separator"),
+        ({"variant": "broken__variant"}, "separator"),
+    ],
+)
+def test_cell_key_rejects_double_underscore_in_other_tokens(
+    kw_with_bad_value: dict[str, str], expected_match: str
+) -> None:
+    base: dict[str, object] = {
+        "dataset_name": "ds_a",
+        "model_name": "model_x",
+        "seed": 0,
+        "variant": "default",
+        "fold_index": 0,
+    }
+    base.update(kw_with_bad_value)
+    with pytest.raises(CellKeyError, match=expected_match):
+        cell_key(**base)  # type: ignore[arg-type]
+
+
+# --- R1 / qa-C5: B7.2 crash-between-shard-and-sentinel resumability. ---
+
+
+def test_shard_present_without_sentinel_is_treated_as_incomplete(tmp_path: Path) -> None:
+    # Simulate a crash AFTER the shard rename but BEFORE the
+    # sentinel write: write the shard manually, then check
+    # `is_cell_complete`. The cell must NOT be considered complete
+    # so the runner re-computes it on the next attempt.
+    row = _minimal_row(log_loss=0.5)
+    key = row.cell_key()
+    # Materialize the shard without a sentinel by calling write_cell
+    # then removing the sentinel file the helper produced.
+    write_cell(tmp_path, row)
+    sentinel_path(tmp_path, key).unlink()
+    assert shard_path(tmp_path, key).exists()
+    assert not is_cell_complete(tmp_path, key)
+    # The orphan shard remains until the next write overwrites it
+    # atomically (verified by `test_second_write_is_idempotent_on_same_cell`).
+
+
+# --- R1 / qa-I8: results/ exists but no shards is distinct from no results/ dir. ---
+
+
+def test_load_run_returns_empty_when_results_dir_exists_but_is_empty(
+    tmp_path: Path,
+) -> None:
+    # Create `results/` explicitly with no parquet files inside.
+    (tmp_path / "results").mkdir()
+    manifest = load_run(tmp_path)
+    assert manifest.empty
+
+
+# --- R1 / code-I1: float | None columns are float64, not object, in shards. ---
+
+
+def test_shard_dtype_is_float64_for_optional_metric_columns(tmp_path: Path) -> None:
+    # A skipped row has every metric column = None. Write one and
+    # read it back; assert the dtype is `float64` (NaN for None) not
+    # `object`. Without the dtype coercion the parquet shard's
+    # column would be `object`, which then trips a pandas concat
+    # FutureWarning when paired with a numeric-typed successful row.
+    skipped = _minimal_row(skipped_reason="task_type_mismatch", log_loss=None)
+    write_cell(tmp_path, skipped)
+    manifest = load_run(tmp_path)
+    assert manifest["log_loss"].dtype == "float64"
+    assert manifest["accuracy"].dtype == "float64"
+    assert manifest["rmse"].dtype == "float64"
+
+
+def test_concat_skipped_and_successful_shards_does_not_warn(tmp_path: Path) -> None:
+    import warnings
+
+    write_cell(tmp_path, _minimal_row(log_loss=None, skipped_reason="skip_a"))
+    write_cell(
+        tmp_path,
+        _minimal_row(dataset_name="ds_b", log_loss=0.42, skipped_reason=None),
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        manifest = load_run(tmp_path)
+    assert len(manifest) == 2

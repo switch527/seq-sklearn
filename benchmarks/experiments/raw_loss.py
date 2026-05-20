@@ -54,13 +54,18 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict
 
-from benchmarks.adapters._base import ProbaUnsupportedError, SeqSklearnAdapter
+from benchmarks.adapters._base import (
+    ProbaUnsupportedError,
+    QuantilesUnsupportedError,
+    SeqSklearnAdapter,
+)
 from benchmarks.config import BenchmarkConfig, DatasetSpec, ExperimentSpec, TaskType
 from benchmarks.datasets._base import PanelDataset
 from benchmarks.manifest import (
     ResultRow,
     cell_key,
     is_cell_complete,
+    list_completed_keys,
     metrics_to_row_fields,
     write_cell,
 )
@@ -100,16 +105,21 @@ class RunEnvironment(BaseModel):
     """Per-run environment metadata recorded on every result row.
 
     Built once at the top of `run_raw_loss` and threaded into every
-    `ResultRow` so the B8.1 reproducibility contract (library +
-    benchmarks SHA, run_id, profile, hardware tier) is captured
-    uniformly across cells.
+    `ResultRow` so the B8.1 reproducibility contract (library SHA,
+    run_id, profile, hardware tier) is captured uniformly across
+    cells.
+
+    B5 ships a single `library_git_sha` because the benchmarks live
+    in the same repo as the library; B8.1 design names two SHAs in
+    anticipation of a future repo split. The second field is a
+    B5-followup that re-introduces `benchmarks_git_sha` at the split
+    point.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run_id: str
     library_git_sha: str
-    benchmarks_git_sha: str
     hardware_tier: str  # B5 reports "cpu" or "gpu_single"; B7 tightens
     profile: str  # "smoke" | "standard" | "full"
 
@@ -129,6 +139,7 @@ class RawLossExperimentResult(BaseModel):
     run_id: str
     cells_attempted: int  # adapter actually fit
     cells_skipped_task_mismatch: int  # dataset.task_type not in model.task_types
+    cells_skipped_proba_unavailable: int  # classification cell whose model has supports_proba=False
     cells_skipped_quantile_followup: int  # regression_quantile pending B5-followup
     cells_skipped_adapter_error: int  # adapter raised at fit / predict / proba
     cells_already_complete: int  # sentinel present at scan time
@@ -167,22 +178,18 @@ def build_run_environment(
     profile: str,
     hardware_tier: str = "cpu",
     library_repo_root: Path | None = None,
-    benchmarks_repo_root: Path | None = None,
 ) -> RunEnvironment:
     """Capture the per-run environment metadata.
 
-    `library_repo_root` and `benchmarks_repo_root` default to the
-    library + benchmarks repos discovered relative to this module;
-    the caller can override (e.g. tests) to pin a fixed SHA.
+    `library_repo_root` defaults to the repo root discovered relative
+    to this module; the caller can override (e.g. tests) to pin a
+    fixed SHA.
     """
     if library_repo_root is None:
         library_repo_root = Path(__file__).resolve().parents[2]
-    if benchmarks_repo_root is None:
-        benchmarks_repo_root = Path(__file__).resolve().parents[2]
     return RunEnvironment(
         run_id=str(uuid.uuid4()),
         library_git_sha=_resolve_git_sha(library_repo_root),
-        benchmarks_git_sha=_resolve_git_sha(benchmarks_repo_root),
         hardware_tier=hardware_tier,
         profile=profile,
     )
@@ -265,16 +272,18 @@ def _build_row(
     metrics_dump: dict[str, Any] | None,
     fit_resource: FitResource | None,
     latency: InferenceLatency | None,
+    n_below_floor_dropped: int | None = None,
 ) -> ResultRow:
     """Assemble a `ResultRow` from the per-cell pieces.
 
     `metrics_dump` is `None` on skipped cells; the metric columns
     default to None on `ResultRow`. `fit_resource` and `latency` are
-    also `None` on skipped cells.
+    also `None` on skipped cells. `n_below_floor_dropped` counts the
+    A9.1 lookback-floor rows the harness stripped before the metric
+    call; `None` on skipped cells.
     """
     fields: dict[str, Any] = {
         "library_git_sha": env.library_git_sha,
-        "benchmarks_git_sha": env.benchmarks_git_sha,
         "run_id": env.run_id,
         "started_at_utc": started_at_utc,
         "dataset_name": spec.name,
@@ -290,6 +299,7 @@ def _build_row(
         "profile": env.profile,
         "hpo_tier": _HPO_TIER_RAW_LOSS,
         "skipped_reason": skipped_reason,
+        "n_below_floor_dropped": n_below_floor_dropped,
     }
     if metrics_dump is not None:
         fields.update(metrics_to_row_fields(metrics_dump))
@@ -302,6 +312,44 @@ def _build_row(
         fields["p95_predict_ms"] = latency.p95_ms
         fields["n_predict_reps"] = latency.n_reps
     return ResultRow(**fields)
+
+
+def _strip_below_floor_rows(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_proba: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, int]:
+    """Drop rows whose model output is `nan` (A9.1 lookback-floor).
+
+    The library's deep classifier writes `nan` into `predict_proba`
+    rows for entities below `min_periods_predict` (`src/seq_sklearn/
+    models/_classifier.py`); the regressor follows the same pattern.
+    Feeding `nan` rows into `compute_log_loss` / `compute_roc_auc` /
+    `compute_brier` / `compute_ece_q15` raises a `ValueError` from
+    sklearn that would otherwise be attributed to the adapter.
+
+    Returns the stripped `(y_true, y_pred, y_proba, n_dropped)`. When
+    `y_proba` is supplied, the mask is `any(isnan(y_proba), axis=1)`;
+    otherwise the mask is `isnan(y_pred)` (regression). For an int-
+    typed `y_pred` (classifier point predictions), `isnan` is undefined
+    and we treat every row as in-floor.
+    """
+    if y_proba is not None:
+        mask = np.isnan(y_proba).any(axis=1)
+    elif y_pred.dtype.kind == "f":
+        mask = np.isnan(y_pred)
+    else:
+        mask = np.zeros(len(y_pred), dtype=bool)
+    n_dropped = int(mask.sum())
+    if n_dropped == 0:
+        return y_true, y_pred, y_proba, 0
+    keep = ~mask
+    return (
+        y_true[keep],
+        y_pred[keep],
+        y_proba[keep] if y_proba is not None else None,
+        n_dropped,
+    )
 
 
 def _iter_folds(
@@ -387,11 +435,19 @@ def _run_one_cell(
             n_warmup=_DEFAULT_LATENCY_WARMUP,
         )
 
+        # A9.1 lookback floor: rows belonging to entities below
+        # `min_periods_predict` come back as nan from the deep
+        # models' `predict` / `predict_proba`. The metric layer
+        # raises on nan; strip them first and record the count.
+        y_true_clean, y_pred_clean, y_proba_clean, n_dropped = (
+            _strip_below_floor_rows(test_y, y_pred, y_proba)
+        )
+
         metrics = compute_all(
             task_type=spec.task_type,
-            y_true=test_y,
-            y_pred=y_pred,
-            y_proba=y_proba,
+            y_true=y_true_clean,
+            y_pred=y_pred_clean,
+            y_proba=y_proba_clean,
             pos_label=spec.positive_label,
             labels=labels,
         )
@@ -409,14 +465,21 @@ def _run_one_cell(
             metrics_dump=metrics.model_dump(),
             fit_resource=fit_resource,
             latency=latency,
+            n_below_floor_dropped=n_dropped,
         )
-    except Exception as exc:
-        # Any uncaught adapter error becomes a skipped-reason row.
-        # The bare-Exception is intentional: a single broken adapter
-        # must not abort the harness, and the typed error categories
-        # (Proba/QuantilesUnsupported) were already handled above.
-        # The reason string preserves the exception class name + msg
-        # so a leaderboard reader can triage without re-running.
+    except (
+        RuntimeError,
+        MemoryError,
+        ProbaUnsupportedError,
+        QuantilesUnsupportedError,
+    ) as exc:
+        # Narrowed to the failure modes the harness expects from a
+        # real adapter: torch / numerical (RuntimeError), out-of-
+        # memory (MemoryError), and the typed adapter signals
+        # (`ProbaUnsupportedError` / `QuantilesUnsupportedError`).
+        # Harness-side `ValueError` / `ValidationError` propagate
+        # so a config / data mismatch surfaces loudly instead of
+        # masquerading as "adapter_error".
         logger.warning(
             "run_raw_loss: cell %s/%s seed=%d fold=%d skipped: %s: %s",
             spec.name,
@@ -463,6 +526,37 @@ def _fit_with_seed(
     # only seeding boundary.
     np.random.seed(seed)
     adapter.fit(train_panel, train_y)
+
+
+def _expected_cell_keys(
+    *,
+    dataset_name: str,
+    model_names: Sequence[str],
+    seeds: Sequence[int],
+    n_folds: int,
+) -> set[str]:
+    """Return the set of cell keys the run will produce for a dataset.
+
+    Computed up-front so a fully-resumed dataset's loader can be
+    skipped (arch-I2). `n_folds` is the splitter's fixed `n_splits`;
+    the per-entity row counts can change the live fold count only
+    when an entity has fewer than `lookback + n_splits` periods, in
+    which case the live `folds` list comes back empty and the
+    early-skip is already wrong anyway. B5 ships with the constant
+    fold count; B6 will lift `n_folds` into the experiment spec.
+    """
+    return {
+        cell_key(
+            dataset_name=dataset_name,
+            model_name=model_name,
+            seed=seed,
+            variant=_RAW_LOSS_VARIANT,
+            fold_index=fold_index,
+        )
+        for model_name in model_names
+        for seed in seeds
+        for fold_index in range(n_folds)
+    }
 
 
 def _resolve_labels(panel_dataset: PanelDataset, task_type: TaskType) -> np.ndarray | None:
@@ -520,6 +614,7 @@ def run_raw_loss(
 
     attempted = 0
     skipped_task_mismatch = 0
+    skipped_proba_unavailable = 0
     skipped_quantile_followup = 0
     skipped_adapter_error = 0
     already_complete = 0
@@ -535,6 +630,29 @@ def run_raw_loss(
                 spec.exclusion_reason,
             )
             continue
+
+        # Early loader-skip: if every expected cell key for this
+        # dataset already has a sentinel, the loader is not invoked
+        # (a heavyweight `c_mapss_fd001` / `amex_default` load takes
+        # seconds-to-minutes and the B7.2 contract says skipped cells
+        # are near-zero cost).
+        expected_keys = _expected_cell_keys(
+            dataset_name=dataset_name,
+            model_names=model_names,
+            seeds=seeds,
+            n_folds=_DEFAULT_N_SPLITS,
+        )
+        completed_keys = set(list_completed_keys(output_root))
+        if expected_keys.issubset(completed_keys):
+            logger.info(
+                "run_raw_loss: dataset %s all %d cells already complete; "
+                "skipping loader",
+                dataset_name,
+                len(expected_keys),
+            )
+            already_complete += len(expected_keys)
+            continue
+
         loader = get_loader(dataset_name)
         load_start = time.perf_counter()
         panel_dataset = loader(cache_dir)
@@ -562,6 +680,16 @@ def run_raw_loss(
         for model_name in sorted(model_names):
             model_spec = get_model(model_name)
             applicable = spec.task_type in model_spec.task_types
+            # Pre-call precedence: a classification dataset paired with
+            # a model whose `supports_proba=False` cannot produce the
+            # B4 probability-based metrics; skip with a typed reason
+            # rather than reaching the adapter only to hit a
+            # ValueError inside `compute_all`.
+            proba_required_but_unavailable = (
+                applicable
+                and spec.task_type in {"binary", "multiclass"}
+                and not model_spec.supports_proba
+            )
             for seed in seeds:
                 for fold_index, (train_idx, test_idx) in folds:
                     key_started = time.perf_counter()
@@ -593,6 +721,27 @@ def run_raw_loss(
                                 f"task_type_mismatch: model.task_types="
                                 f"{model_spec.task_types} dataset.task_type="
                                 f"{spec.task_type}"
+                            ),
+                            metrics_dump=None,
+                            fit_resource=None,
+                            latency=None,
+                        )
+                    elif proba_required_but_unavailable:
+                        skipped_proba_unavailable += 1
+                        row = _build_row(
+                            env=env,
+                            spec=spec,
+                            model_name=model_name,
+                            seed=seed,
+                            fold_index=fold_index,
+                            n_folds=n_folds,
+                            split_fingerprint=split_fingerprint,
+                            l_resolved=l_resolved,
+                            started_at_utc=_utc_now(),
+                            skipped_reason=(
+                                "probabilities_required_for_classification: "
+                                f"model={model_name} declares "
+                                f"supports_proba=False"
                             ),
                             metrics_dump=None,
                             fit_resource=None,
@@ -632,6 +781,7 @@ def run_raw_loss(
         run_id=env.run_id,
         cells_attempted=attempted,
         cells_skipped_task_mismatch=skipped_task_mismatch,
+        cells_skipped_proba_unavailable=skipped_proba_unavailable,
         cells_skipped_quantile_followup=skipped_quantile_followup,
         cells_skipped_adapter_error=skipped_adapter_error,
         cells_already_complete=already_complete,

@@ -136,5 +136,30 @@ def instantiate_adapter(
     return get_adapter_factory(name)(spec=spec, hyperparameters=hyperparameters or {})
 
 
+def register_adapter(spec: ModelSpec, factory: AdapterFactory) -> ModelSpec:
+    """Register a model spec + adapter factory atomically.
+
+    `register_model` and `register_adapter_factory` can be called
+    separately, but a partial registration (spec without factory)
+    leaves `_REGISTRY` and `_ADAPTER_FACTORIES` out of sync. This
+    helper wraps the pair: if `register_adapter_factory` raises, the
+    spec registration is rolled back so re-attempting the registration
+    starts from a clean state.
+
+    Adapter modules should prefer this helper over the two-call form
+    so a future I/O step between the two registrations cannot leave
+    the registry inconsistent.
+    """
+    is_new_spec = spec.name not in _REGISTRY
+    register_model(spec)
+    try:
+        register_adapter_factory(spec.name, factory)
+    except Exception:
+        if is_new_spec:
+            _REGISTRY.pop(spec.name, None)
+        raise
+    return spec
+
+
 def list_models() -> tuple[str, ...]:
     return tuple(sorted(_REGISTRY))

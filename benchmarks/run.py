@@ -100,11 +100,11 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code.
 
     Exit codes:
-      - ``0``: dry-run validation succeeded.
+      - ``0``: dry-run validation succeeded, or `--experiment=raw_loss`
+        completed (the leaderboard is at `output_root/leaderboard.md`).
       - ``1``: config load / validation failed.
-      - ``2``: non-dry-run path reached before the experiment driver
-        lands in Phase B5+; the dry-run flag is the only supported
-        invocation in Phase B0.
+      - ``2``: an experiment kind other than `raw_loss` was requested
+        but not yet implemented (Phase B6+).
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    logger.info("seq-sklearn benchmark harness (Phase B0 scaffold)")
+    logger.info("seq-sklearn benchmark harness (Phase B5 raw-loss)")
     logger.info("  config:         %s", args.config)
     logger.info("  experiment:     %s", args.experiment)
     logger.info(

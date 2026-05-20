@@ -22,6 +22,7 @@ from benchmarks.registry.models import (
     get_model,
     instantiate_adapter,
     list_models,
+    register_adapter,
     register_adapter_factory,
     register_model,
 )
@@ -37,6 +38,7 @@ __all__ = [
     "instantiate_adapter",
     "list_datasets",
     "list_models",
+    "register_adapter",
     "register_adapter_factory",
     "register_dataset",
     "register_model",

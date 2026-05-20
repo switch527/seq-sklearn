@@ -29,7 +29,6 @@ import json
 import logging
 import os
 import re
-from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -183,7 +182,6 @@ class ResultRow(BaseModel):
 
     # B8.1 reproducibility metadata.
     library_git_sha: str
-    benchmarks_git_sha: str
     run_id: str
     started_at_utc: str  # ISO-8601 UTC; the runner timestamps at row build
 
@@ -207,6 +205,14 @@ class ResultRow(BaseModel):
 
     # Skipped-cell reason; non-None means the metric columns are absent.
     skipped_reason: str | None = None
+
+    # Number of test-fold rows whose predictions came back as `nan`
+    # (rows from entities below `min_periods_predict` in the deep
+    # models; A9.1 lookback-floor row from the splitter). These rows
+    # are stripped before the metric layer so a single below-floor
+    # row does not corrupt the whole-fold metric; the count is
+    # recorded for B8.1 audit. `None` on skipped cells.
+    n_below_floor_dropped: int | None = None
 
     # Classification metrics (Binary + Multiclass union).
     log_loss: float | None = None
@@ -266,6 +272,13 @@ def write_cell(root: Path, row: ResultRow) -> None:
     """
     key = row.cell_key()
     df = pd.DataFrame([row.model_dump()])
+    # A skipped cell has every metric column `None`; pandas types
+    # those as `object` dtype. When that shard is later concatenated
+    # with a shard whose same column holds floats, pandas emits a
+    # FutureWarning that becomes a dtype error in upcoming releases.
+    # Coerce the metric columns to `float64` so the shard schema is
+    # consistent across skipped and successful cells.
+    df = _coerce_optional_float_columns(df)
     _atomic_write_parquet(df, shard_path(root, key))
     payload = json.dumps(
         {
@@ -315,6 +328,43 @@ def _empty_manifest_dataframe() -> pd.DataFrame:
     """
     columns = pd.Index(list(ResultRow.model_fields.keys()))
     return pd.DataFrame(columns=columns)
+
+
+def _optional_float_columns() -> tuple[str, ...]:
+    """Compute the list of `ResultRow` fields whose annotation is
+    `float | None`.
+
+    Computed by inspection once per process so the column list stays
+    in sync with the schema; adding a new optional-float metric
+    automatically picks it up.
+    """
+    out: list[str] = []
+    for name, info in ResultRow.model_fields.items():
+        annotation = info.annotation
+        # `Optional[float]` and `float | None` both stringify to
+        # "float | None" under pydantic's annotation repr. Cheap
+        # check that does not require typing introspection.
+        if str(annotation) == "float | None":
+            out.append(name)
+    return tuple(out)
+
+
+def _coerce_optional_float_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Cast every `float | None` ResultRow column to `float64`.
+
+    On a skipped row pydantic emits Python `None` for every metric
+    field; pandas types those as `object`. Concatenating an object-
+    typed null column with a float-typed shard from a successful row
+    triggers a `FutureWarning` that becomes an error in pandas 3.x.
+    The cast normalizes to `float64` (NaN for None), which matches
+    the dtype of a successful row.
+    """
+    cols = [c for c in _optional_float_columns() if c in df.columns]
+    if not cols:
+        return df
+    df = df.copy()
+    df[cols] = df[cols].astype("float64")
+    return df
 
 
 def list_completed_keys(root: Path) -> tuple[str, ...]:
@@ -367,15 +417,3 @@ def metrics_to_row_fields(metrics_dump: dict[str, Any]) -> dict[str, Any]:
     if pinball is not None:
         fields["pinball_json"] = pinball_to_json(pinball)
     return fields
-
-
-def iter_shards(root: Path) -> Iterable[Path]:
-    """Yield each shard path under `root/results/` in sorted order.
-
-    Convenience for the report module so it can stream large
-    manifests without materializing the full DataFrame.
-    """
-    dir_ = results_dir(root)
-    if not dir_.exists():
-        return iter(())
-    return iter(sorted(dir_.glob(f"*{_SHARD_SUFFIX}")))

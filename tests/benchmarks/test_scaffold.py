@@ -485,11 +485,25 @@ def test_main_returns_zero_on_dry_run(minimal_config_toml: Path) -> None:
     assert rc == 0
 
 
-def test_main_returns_two_without_dry_run(minimal_config_toml: Path) -> None:
-    """Phase B0 contract: the non-dry-run path returns 2 until the
-    experiment driver lands. Pinning this so a future B5+ wire-up
-    cannot silently re-route exit codes."""
-    rc = main(["--config", str(minimal_config_toml)])
+def test_main_returns_two_for_unimplemented_experiment_kind(tmp_path: Path) -> None:
+    """B5 contract: `--experiment=raw_loss` runs and exits 0; other
+    kinds (`ensemble`, `training_time`, `hpo_uplift`) are not yet
+    implemented in B5 and the CLI returns 2 for them. Pinning this
+    so the B6+ wire-ups cannot silently re-route the exit code."""
+    config_path = tmp_path / "benchmark.toml"
+    # Config declares an `ensemble` experiment so the CLI's
+    # --experiment=ensemble path reaches the not-implemented branch.
+    config_path.write_text(
+        'datasets = ["dummy_dataset"]\n'
+        'models = ["dummy_model"]\n'
+        f'output_dir = "{tmp_path / "out"}"\n'
+        "\n"
+        "[[experiments]]\n"
+        'kind = "ensemble"\n'
+        "seeds = [0]\n",
+        encoding="utf-8",
+    )
+    rc = main(["--config", str(config_path), "--experiment", "ensemble"])
     assert rc == 2
 
 
