@@ -82,10 +82,17 @@ extra in `pyproject.toml`; the wheel-exclusion gate live.
   config-load and a logger banner).
 - `pyproject.toml [project.optional-dependencies] benchmarks` extra:
   pinned dataset-loader deps (`openml>=0.15,<0.16`,
-  `pyarrow>=18,<19` for the on-disk cache), comparator-model deps
-  (`lightgbm`, `xgboost`, `catboost`, `aeon` for the classical TSC
-  baselines, `scikit-learn` already a core dep), Optuna already a
-  core dep for HPO.
+  `pyarrow>=21` for the on-disk cache; the upper bound is open
+  because pyarrow's Python 3.14 wheel support starts at v21 and
+  the cache format is stable across the major-version range),
+  comparator-model deps (`lightgbm`, `xgboost`, `catboost`).
+  `aeon` (for the classical TSC baselines) is intentionally NOT
+  in this extra at v1.0.0 cut: aeon 0.11.x pins
+  `scikit-learn < 1.6` which conflicts with the library's own
+  `scikit-learn >= 1.6` requirement; the Phase B2 TSC adapter
+  documents the manual-install path and a future aeon release
+  that loosens its sklearn pin promotes the dep into a sibling
+  `benchmarks-tsc` extra. Optuna already a core dep for HPO.
 - `tests/benchmarks/__init__.py`, `tests/benchmarks/conftest.py`
   with `tmp_path`-based caches and a session-scoped fake-registry
   fixture for the next phases.

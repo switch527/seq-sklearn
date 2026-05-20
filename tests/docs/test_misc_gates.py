@@ -114,6 +114,7 @@ def test_nonexecutable_block_ratio_bounded() -> None:
         "phase12_docs_release.md",
         "phase_1_refactor_plan.md",
         "benchmark_suite_design.md",
+        "benchmark_suite_implementation_plan.md",
         "refactor_prediction_step.md",
         "hyperparameter_strategy.md",
         "docs_strategy_research.md",

@@ -90,3 +90,27 @@ def test_wheel_installs_and_predicts(tmp_path: Path) -> None:
             f"wheel smoke failed (rc={smoke.returncode}):\n"
             f"STDOUT:\n{smoke.stdout}\nSTDERR:\n{smoke.stderr}"
         )
+
+
+def test_wheel_does_not_ship_benchmarks_package(tmp_path: Path) -> None:
+    """Phase B0: `benchmarks/` is dev-only and must NOT be in the
+    wheel (`docs/benchmark_suite_design.md` B0.3, B-Principles in
+    `docs/benchmark_suite_implementation_plan.md`). Pinning the
+    exclusion at the wheel-shape level prevents an accidental
+    `[tool.hatch.build.targets.wheel].packages` edit from silently
+    shipping the harness.
+    """
+    import zipfile
+
+    env_wheel = os.environ.get("SEQ_SKLEARN_WHEEL")
+    wheel = Path(env_wheel) if env_wheel else _build_wheel(tmp_path)
+    assert wheel.is_file(), f"wheel not found: {wheel}"
+
+    with zipfile.ZipFile(wheel) as zf:
+        names = zf.namelist()
+
+    leaked = [n for n in names if n.startswith("benchmarks/")]
+    assert not leaked, (
+        f"benchmarks/ package leaked into the wheel: {leaked[:10]}"
+        f"{'...' if len(leaked) > 10 else ''}"
+    )

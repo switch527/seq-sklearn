@@ -60,6 +60,24 @@ docs = [
     "autodoc-pydantic>=2.2,<3",
     "matplotlib>=3.9,<4",
 ]
+# Comparative benchmark-suite dependencies (`docs/benchmark_suite_design.md`).
+# NOT shipped in the wheel; the harness is opt-in via this extra. Heavy
+# transitive deps (lightgbm/xgboost/catboost) are pulled in here because
+# the Phase B5+ experiments need them; Phase B0 itself only needs the
+# stdlib, pydantic, and pyarrow for the cache layer. The classical-TSC
+# baseline (`aeon`) is intentionally NOT in any extra: aeon 0.11.x
+# pins scikit-learn < 1.6 which conflicts with the library's own
+# scikit-learn >= 1.6 requirement, and no compatible version exists
+# at v1.0.0 cut. Phase B2's TSC adapter (`benchmarks/adapters/tsc.py`)
+# documents the manual-install path; a future release that loosens
+# aeon's sklearn pin promotes it into a `benchmarks-tsc` sibling extra.
+benchmarks = [
+    "openml>=0.15,<0.16",
+    "pyarrow>=21",
+    "lightgbm>=4.5,<5",
+    "xgboost>=2.1,<3",
+    "catboost>=1.2,<2",
+]
 dev = [
     "ruff>=0.7",
     "pyright>=1.1.390",
