@@ -9,6 +9,7 @@ model registry; both call the decorators here.
 from benchmarks.registry.datasets import (
     DatasetNotRegisteredError,
     get_dataset,
+    get_loader,
     list_datasets,
     register_dataset,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "DatasetNotRegisteredError",
     "ModelNotRegisteredError",
     "get_dataset",
+    "get_loader",
     "get_model",
     "list_datasets",
     "list_models",

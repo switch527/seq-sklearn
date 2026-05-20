@@ -1,13 +1,14 @@
 """Shared fixtures for `tests/benchmarks/`.
 
-Phase B0 ships:
-- ``_isolated_registry`` (autouse): snapshots both registry dicts on
-  entry and restores them on exit, so the scaffold tests can register
-  new specs without leaking state into later tests. Phase B1 imports
-  loader modules that register real dataset names at import time;
-  without this fixture, a `pytest-randomly` reordering would surface
-  intermittent failures once those modules are imported by the test
-  collection.
+Phase B0+B1 ships:
+- ``isolated_registry`` (autouse): snapshots the three registry
+  dicts (datasets `_REGISTRY`, datasets `_LOADERS`, models
+  `_REGISTRY`) on entry and restores them on exit, so the
+  scaffold tests can register new specs without leaking state
+  into later tests. Phase B1 imports loader modules that register
+  real dataset names at import time; without this fixture, a
+  `pytest-randomly` reordering would surface intermittent failures
+  once those modules are imported by the test collection.
 - ``minimal_config_toml`` (per-test): writes a minimal TOML config to
   ``tmp_path`` and returns its path, used by the CLI subprocess test.
 
@@ -25,24 +26,32 @@ from benchmarks.registry import models as _models_reg
 
 @pytest.fixture(autouse=True)
 def isolated_registry() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
-    """Snapshot+restore both registry dicts around every test.
+    """Snapshot+restore the dataset + model registries around every
+    test.
 
-    The registries are module-level dicts, so two tests that register
-    different specs under the same name would otherwise collide. The
-    autouse scope is per-function (the cheapest scope) since each
-    scaffold test mutates the registry at most once. Both registry
-    `_REGISTRY` dicts are module-private; this fixture is the only
-    sanctioned reach-around (`pyright: ignore` covers the four sites).
+    Three module-level dicts must move in lockstep: dataset specs,
+    dataset loaders, and model specs. The Phase B1 `_LOADERS`
+    companion is new; without restoring it, side-effect loader
+    registrations from one test (e.g. registering a stub loader for
+    a unique name) leave `_LOADERS` populated and a same-name
+    registration in a later test trips the duplicate-loader guard
+    spuriously. The autouse scope is per-function (the cheapest
+    scope) since each scaffold test mutates the registry at most
+    once.
     """
     ds_reg = _datasets_reg._REGISTRY  # pyright: ignore[reportPrivateUsage]
+    ds_loaders = _datasets_reg._LOADERS  # pyright: ignore[reportPrivateUsage]
     m_reg = _models_reg._REGISTRY  # pyright: ignore[reportPrivateUsage]
     ds_snapshot = dict(ds_reg)
+    ds_loaders_snapshot = dict(ds_loaders)
     m_snapshot = dict(m_reg)
     try:
         yield
     finally:
         ds_reg.clear()
         ds_reg.update(ds_snapshot)
+        ds_loaders.clear()
+        ds_loaders.update(ds_loaders_snapshot)
         m_reg.clear()
         m_reg.update(m_snapshot)
 
