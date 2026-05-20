@@ -36,6 +36,7 @@ record stays inspectable.
 ../readme_and_docs_plan
 ../docs_strategy_research
 ../benchmark_suite_design
+../benchmark_suite_implementation_plan
 ../hyperparameter_strategy
 ../refactor_prediction_step
 ../phase_1_refactor_plan

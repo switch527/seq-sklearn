@@ -1,0 +1,499 @@
+"""Phase B0 scaffold gates.
+
+What the suite proves:
+
+1. The package imports.
+2. The pydantic config schema validates a minimal payload (including
+   the binary `positive_label` cross-field validator from B2.2).
+3. The registry stubs are wired (decorators import, mappings exist,
+   typed lookup errors fire).
+4. `python -m benchmarks.run --dry-run` exits 0 against the minimal
+   TOML config.
+"""
+
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+from benchmarks.config import (
+    BenchmarkConfig,
+    DatasetSpec,
+    ExperimentSpec,
+    ModelSpec,
+)
+from benchmarks.registry import (
+    DatasetNotRegisteredError,
+    ModelNotRegisteredError,
+    get_dataset,
+    get_model,
+    list_datasets,
+    list_models,
+    register_dataset,
+    register_model,
+)
+
+# Tests legitimately exercise `_ConfigLoadError` and `_load_config`;
+# they are module-private helpers but the test gate is one of their two
+# consumers (the other being `main()` itself). Pyright flags the
+# private-from-outside use; we suppress per line.
+from benchmarks.run import (
+    _ConfigLoadError,  # pyright: ignore[reportPrivateUsage]
+    _load_config,  # pyright: ignore[reportPrivateUsage]
+    main,
+)
+from pydantic import ValidationError
+
+import benchmarks
+
+
+def test_package_imports() -> None:
+    # Pyright doesn't surface `__all__` as a module attribute (known
+    # quirk: it's treated as an export marker, not as runtime state);
+    # `getattr` is the explicit-runtime form.
+    assert getattr(benchmarks, "__all__", None) == []
+
+
+def test_minimal_benchmark_config_validates() -> None:
+    cfg = BenchmarkConfig(
+        datasets=("a",),
+        models=("m",),
+        experiments=(ExperimentSpec(kind="raw_loss"),),
+        output_dir=Path("/tmp/out"),
+    )
+    assert cfg.experiments[0].seeds == (0, 1, 2)
+
+
+def test_extra_forbid_rejects_unknown_field() -> None:
+    with pytest.raises(ValueError, match="extra"):
+        BenchmarkConfig(
+            datasets=("a",),
+            models=("m",),
+            experiments=(ExperimentSpec(kind="raw_loss"),),
+            output_dir=Path("/tmp/out"),
+            wat=42,  # type: ignore[call-arg]
+        )
+
+
+def _valid_dataset_kwargs(
+    *,
+    name: str = "ds",
+    task_type: str = "regression_point",
+    positive_label: int | str | None = None,
+) -> dict[str, Any]:
+    """Helper: a syntactically valid `DatasetSpec` kwargs dict.
+
+    Returns ``dict[str, Any]`` because the pydantic constructor does
+    its own per-field validation; a stricter return type would
+    require a `TypedDict` mirror of `DatasetSpec`, which is duplicate
+    bookkeeping the test does not need.
+    """
+    return {
+        "name": name,
+        "task_type": task_type,
+        "access_tier": "OPEN",
+        "size_tier": "small",
+        "balance": "balanced",
+        "modality": "numeric",
+        "source_uri": "https://example.com/data.csv",
+        "integrity_sha256": "0" * 64,
+        "entity_col": "id",
+        "time_col": "t",
+        "target_col": "y",
+        "lookback": 8,
+        "densification_policy": None,
+        "positive_label": positive_label,
+        "citation": "Acme et al. 2020",
+    }
+
+
+def test_dataset_spec_binary_requires_positive_label() -> None:
+    with pytest.raises(ValueError, match="positive_label"):
+        DatasetSpec(**_valid_dataset_kwargs(task_type="binary"))
+
+
+def test_dataset_spec_binary_accepts_positive_label() -> None:
+    spec = DatasetSpec(
+        **_valid_dataset_kwargs(task_type="binary", positive_label=1)
+    )
+    assert spec.positive_label == 1
+
+
+def test_dataset_spec_non_binary_rejects_positive_label() -> None:
+    with pytest.raises(ValueError, match="binary-only"):
+        DatasetSpec(
+            **_valid_dataset_kwargs(
+                task_type="multiclass", positive_label="event"
+            )
+        )
+
+
+def test_dataset_spec_integrity_sha_pattern_enforced() -> None:
+    bad = _valid_dataset_kwargs()
+    bad["integrity_sha256"] = "not-a-hash"
+    with pytest.raises(ValueError, match="pattern"):
+        DatasetSpec(**bad)
+
+
+def test_dataset_registry_register_lookup_list() -> None:
+    spec = DatasetSpec(
+        **_valid_dataset_kwargs(name="unique_for_scaffold_test")
+    )
+    register_dataset(spec)
+    assert get_dataset("unique_for_scaffold_test") is spec
+    assert "unique_for_scaffold_test" in list_datasets()
+
+
+def test_dataset_registry_get_missing_raises_typed() -> None:
+    with pytest.raises(DatasetNotRegisteredError):
+        get_dataset("__never_registered__")
+
+
+def test_dataset_registry_duplicate_name_different_spec_raises() -> None:
+    register_dataset(DatasetSpec(**_valid_dataset_kwargs(name="dup_test")))
+    different = DatasetSpec(**_valid_dataset_kwargs(name="dup_test")).model_copy(
+        update={"lookback": 9999}
+    )
+    with pytest.raises(ValueError, match="already registered"):
+        register_dataset(different)
+
+
+def test_model_spec_requires_at_least_one_task_type() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        ModelSpec(
+            name="m",
+            family="gbm",
+            task_types=(),
+            supports_proba=True,
+            reason="because",
+        )
+
+
+def test_model_registry_register_lookup_list() -> None:
+    spec = ModelSpec(
+        name="m_for_scaffold_test",
+        family="seq_sklearn",
+        task_types=("binary", "multiclass"),
+        supports_proba=True,
+        reason="library's TFTClassifier; covers the panel-classification arm",
+    )
+    register_model(spec)
+    assert get_model("m_for_scaffold_test") is spec
+    assert "m_for_scaffold_test" in list_models()
+
+
+def test_model_registry_get_missing_raises_typed() -> None:
+    with pytest.raises(ModelNotRegisteredError):
+        get_model("__never_registered__")
+
+
+def test_cli_dry_run_exits_zero(minimal_config_toml: Path) -> None:
+    """End-to-end gate: the published entry point validates a
+    minimal config and exits 0. The subprocess path is the one CI
+    actually runs, so it's the one we test."""
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "benchmarks.run",
+            "--config",
+            str(minimal_config_toml),
+            "--dry-run",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, (
+        f"benchmarks.run --dry-run exited {proc.returncode}\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+
+
+# ----------------------------------------------------------------- #
+# Registry: idempotent same-spec + duplicate-different-spec on model
+# registry + typed-error-subclass contract (qa R1 C1/I1/I3)
+# ----------------------------------------------------------------- #
+
+
+def test_dataset_registry_idempotent_same_spec() -> None:
+    spec = DatasetSpec(**_valid_dataset_kwargs(name="idempotent_ds"))
+    register_dataset(spec)
+    register_dataset(spec)  # should not raise
+    assert get_dataset("idempotent_ds") is spec
+
+
+def test_model_registry_idempotent_same_spec() -> None:
+    spec = ModelSpec(
+        name="idempotent_m",
+        family="gbm",
+        task_types=("binary",),
+        supports_proba=True,
+        reason="idempotent registration smoke",
+    )
+    register_model(spec)
+    register_model(spec)
+    assert get_model("idempotent_m") is spec
+
+
+def test_model_registry_duplicate_name_different_spec_raises() -> None:
+    spec = ModelSpec(
+        name="dup_m",
+        family="gbm",
+        task_types=("binary",),
+        supports_proba=True,
+        reason="initial",
+    )
+    register_model(spec)
+    different = spec.model_copy(update={"supports_proba": False})
+    with pytest.raises(ValueError, match="already registered"):
+        register_model(different)
+
+
+def test_dataset_not_registered_error_is_subclass_of_key_error() -> None:
+    """The typed-catch contract: `except KeyError` must catch our
+    typed error, and `except DatasetNotRegisteredError` must NOT
+    catch a plain `KeyError`."""
+    assert issubclass(DatasetNotRegisteredError, KeyError)
+    with pytest.raises(KeyError):
+        get_dataset("__never_registered__")
+    with pytest.raises(DatasetNotRegisteredError):
+        get_dataset("__never_registered__")
+
+
+def test_model_not_registered_error_is_subclass_of_key_error() -> None:
+    assert issubclass(ModelNotRegisteredError, KeyError)
+    with pytest.raises(KeyError):
+        get_model("__never_registered__")
+    with pytest.raises(ModelNotRegisteredError):
+        get_model("__never_registered__")
+
+
+# ----------------------------------------------------------------- #
+# Registry isolation across tests (arch R1 C1)
+# ----------------------------------------------------------------- #
+
+
+def test_registry_isolation_canary_a() -> None:
+    """Companion of `_b` below. Each test registers the same canary
+    name; if the conftest autouse fixture isolates registry state,
+    both pass regardless of the order `pytest-randomly` picks. If the
+    fixture is missing, the second test runs into the
+    duplicate-name guard and fails."""
+    register_dataset(
+        DatasetSpec(**_valid_dataset_kwargs(name="isolation_canary"))
+    )
+    assert "isolation_canary" in list_datasets()
+
+
+def test_registry_isolation_canary_b() -> None:
+    register_dataset(
+        DatasetSpec(**_valid_dataset_kwargs(name="isolation_canary"))
+    )
+    assert "isolation_canary" in list_datasets()
+
+
+# ----------------------------------------------------------------- #
+# Cross-field validators (qa R1 N1) + BenchmarkConfig sentinel (arch I2)
+# ----------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "task_type",
+    ["multiclass", "regression_point", "regression_quantile"],
+)
+def test_dataset_spec_non_binary_rejects_positive_label_parametrized(task_type: str) -> None:
+    with pytest.raises(ValueError, match="binary-only"):
+        DatasetSpec(
+            **_valid_dataset_kwargs(task_type=task_type, positive_label="x")
+        )
+
+
+def test_benchmark_config_all_sentinel_alone_rejects_mix() -> None:
+    with pytest.raises(ValueError, match="sentinel must appear alone"):
+        BenchmarkConfig(
+            datasets=("all", "amex"),
+            models=("m",),
+            experiments=(ExperimentSpec(kind="raw_loss"),),
+            output_dir=Path("/tmp/out"),
+        )
+
+
+def test_benchmark_config_rejects_duplicate_names() -> None:
+    with pytest.raises(ValueError, match="duplicate entries"):
+        BenchmarkConfig(
+            datasets=("a", "a"),
+            models=("m",),
+            experiments=(ExperimentSpec(kind="raw_loss"),),
+            output_dir=Path("/tmp/out"),
+        )
+
+
+def test_benchmark_config_all_sentinel_alone_rejects_mix_on_models() -> None:
+    """Companion to the datasets-side test, exercising the `models`
+    iteration of `_all_sentinel_alone` so a future edit that strips
+    the loop's models tuple element is caught."""
+    with pytest.raises(ValueError, match="sentinel must appear alone"):
+        BenchmarkConfig(
+            datasets=("a",),
+            models=("all", "gbm"),
+            experiments=(ExperimentSpec(kind="raw_loss"),),
+            output_dir=Path("/tmp/out"),
+        )
+
+
+def test_benchmark_config_rejects_duplicate_names_on_models() -> None:
+    with pytest.raises(ValueError, match="duplicate entries"):
+        BenchmarkConfig(
+            datasets=("a",),
+            models=("m", "m"),
+            experiments=(ExperimentSpec(kind="raw_loss"),),
+            output_dir=Path("/tmp/out"),
+        )
+
+
+def test_benchmark_config_all_sentinel_alone_accepts_solo() -> None:
+    cfg = BenchmarkConfig(
+        datasets=("all",),
+        models=("all",),
+        experiments=(ExperimentSpec(kind="raw_loss"),),
+        output_dir=Path("/tmp/out"),
+    )
+    assert cfg.datasets == ("all",)
+
+
+def test_experiment_spec_rejects_empty_seeds() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        ExperimentSpec(kind="raw_loss", seeds=())
+
+
+# ----------------------------------------------------------------- #
+# _load_config error paths (qa R1 C3)
+# ----------------------------------------------------------------- #
+
+
+def test_load_config_missing_file_raises_typed(tmp_path: Path) -> None:
+    with pytest.raises(_ConfigLoadError, match="not found"):
+        _load_config(tmp_path / "does_not_exist.toml")
+
+
+def test_load_config_malformed_toml_raises_typed(tmp_path: Path) -> None:
+    path = tmp_path / "bad.toml"
+    path.write_text("[[[ not valid", encoding="utf-8")
+    with pytest.raises(_ConfigLoadError, match="not valid TOML"):
+        _load_config(path)
+
+
+def test_load_config_schema_failure_raises_typed(tmp_path: Path) -> None:
+    """Schema-valid TOML but the payload fails pydantic validation
+    (empty `experiments` violates `min_length=1`). The chained
+    exception is the original `ValidationError` so a caller can
+    inspect it if needed."""
+    path = tmp_path / "schema_bad.toml"
+    path.write_text(
+        'datasets = ["a"]\n'
+        'models = ["m"]\n'
+        f'output_dir = "{tmp_path / "out"}"\n'
+        "experiments = []\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(_ConfigLoadError, match="schema validation") as excinfo:
+        _load_config(path)
+    assert isinstance(excinfo.value.__cause__, ValidationError)
+
+
+# ----------------------------------------------------------------- #
+# CLI in-process gates (qa R1 C2; gives run.py real coverage)
+# ----------------------------------------------------------------- #
+
+
+def test_main_returns_zero_on_dry_run(minimal_config_toml: Path) -> None:
+    rc = main(["--config", str(minimal_config_toml), "--dry-run"])
+    assert rc == 0
+
+
+def test_main_returns_two_without_dry_run(minimal_config_toml: Path) -> None:
+    """Phase B0 contract: the non-dry-run path returns 2 until the
+    experiment driver lands. Pinning this so a future B5+ wire-up
+    cannot silently re-route exit codes."""
+    rc = main(["--config", str(minimal_config_toml)])
+    assert rc == 2
+
+
+def test_main_returns_one_on_missing_config(tmp_path: Path) -> None:
+    rc = main(["--config", str(tmp_path / "does_not_exist.toml"), "--dry-run"])
+    assert rc == 1
+
+
+def test_main_returns_one_on_experiment_not_in_config(
+    minimal_config_toml: Path,
+) -> None:
+    """The minimal config declares only `raw_loss`; --experiment=ensemble
+    must error rather than silently no-op."""
+    rc = main(
+        [
+            "--config",
+            str(minimal_config_toml),
+            "--experiment",
+            "ensemble",
+            "--dry-run",
+        ]
+    )
+    assert rc == 1
+
+
+def test_main_accepts_experiment_kind_in_config(minimal_config_toml: Path) -> None:
+    rc = main(
+        [
+            "--config",
+            str(minimal_config_toml),
+            "--experiment",
+            "raw_loss",
+            "--dry-run",
+        ]
+    )
+    assert rc == 0
+
+
+# ----------------------------------------------------------------- #
+# No-deep-imports gate (arch R1 I1): benchmarks must consume the
+# library via its public facade only.
+# ----------------------------------------------------------------- #
+
+
+def test_benchmarks_package_does_not_import_seq_sklearn_internals() -> None:
+    """Walk every `benchmarks/**/*.py` AST and reject any import that
+    reaches into a `seq_sklearn._*` module. Phase B0 has no
+    `seq_sklearn` imports yet, but the gate is the canary for
+    later phases (B2 imports the facade)."""
+    import ast
+
+    root = Path(benchmarks.__file__).resolve().parent
+    leaked: list[str] = []
+    for py in root.rglob("*.py"):
+        tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+        for node in ast.walk(tree):
+            # An `import a, b` statement has multiple aliases; walking
+            # `node.names[0]` only would miss a `, seq_sklearn._foo` in
+            # the second position. Iterate every alias.
+            mods: list[str] = []
+            if isinstance(node, ast.ImportFrom):
+                if node.module is not None:
+                    mods.append(node.module)
+            elif isinstance(node, ast.Import):
+                mods.extend(alias.name for alias in node.names)
+            else:
+                continue
+            for mod in mods:
+                if not mod.startswith("seq_sklearn."):
+                    continue
+                head = mod.split(".", 2)[1]
+                if head.startswith("_"):
+                    leaked.append(f"{py.relative_to(root.parent)}: {mod}")
+    assert not leaked, (
+        f"benchmarks/ must consume the library via the public facade "
+        f"only; deep imports into seq_sklearn._* found: {leaked}"
+    )
+
+
