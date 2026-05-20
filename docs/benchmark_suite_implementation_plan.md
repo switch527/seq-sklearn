@@ -299,38 +299,66 @@ featurizer for GBMs (B4.3), and the raw-MTS wrapper for TSC (B4.4).
 `SeqSklearnAdapter` configures `val_split_strategy="time_ordered"`
 (arch-IIb). The B4.5 named leakage / window-binding tests are live.
 
-**Modules**:
+Lands in this phase:
 
-- `benchmarks/protocol/split.py`: wraps `EntityTimeSeriesSplit` per
-  A9.1; folds + per-entity time-expanding semantics; the seed and
-  the fingerprint surface.
-- `benchmarks/protocol/featurize.py` (B4.3): the GBM lag-feature
-  builder consuming the per-entity windows; F2 invariants asserted.
-- `benchmarks/protocol/mts.py` (B4.4): raw-MTS reshape for TSC,
-  with F3 `padding_mask` -> aeon convention adapter.
 - `benchmarks/protocol/lookback.py` (B4.1b): the single
-  `L_resolved` resolver, sourced from the dataset spec, asserted
-  identical across split / model / featurizer / mts.
-- `benchmarks/protocol/fingerprint.py` (B8.1): the SHA-256 split
-  fingerprint over canonical fold indices.
-- `tests/benchmarks/test_split_protocol.py`: B4.5 named tests
-  (`test_train_perturbation_changes_train_only`,
-  `test_target_window_in_test_does_not_appear_in_train`,
-  `test_seq_sklearn_adapter_val_split_strategy_is_time_ordered`).
-- `tests/benchmarks/test_lookback_binding.py`: the L_resolved
-  identity invariant across all four consumers.
-- `tests/benchmarks/test_fingerprint_stability.py`: identical
-  config -> identical fingerprint; one-row mutation flips it
-  (qa-C4).
+  `L_resolved` resolver. Reads `spec.lookback` by default; admits
+  an explicit override (Phase B5+ wires per-experiment overrides
+  for sensitivity sweeps). Non-positive overrides raise typed.
+- `benchmarks/protocol/split.py` (B4.1a): thin wrapper around the
+  library's `EntityTimeSeriesSplit` (A9.1); binds `id_col` /
+  `time_col` from the dataset spec; exposes `make_splitter` +
+  `iter_folds` for the experiment driver.
+- `benchmarks/protocol/featurize.py` (B4.3): the GBM /
+  sklearn-passthrough lag-feature builder. Produces one row per
+  panel row with L lagged columns per real / categorical feature;
+  warm-up rows zero-imputed for real features and `""` for
+  categoricals; a `missing_lag_count` tracking column. Pure
+  transform (no fit state); F2 invariants asserted.
+- `benchmarks/protocol/fingerprint.py` (B8.1): SHA-256 of the
+  canonical fold serialization. Identical config + panel produces
+  the same fingerprint (qa-C4); the `L_resolved + 1` direction-2
+  perturbation flips it (qa-NEW-N1).
+- `benchmarks/protocol/__init__.py`: package facade re-exporting
+  `fingerprint_folds`, `iter_folds`, `lag_featurize`,
+  `make_splitter`, `resolve_lookback`.
+- `tests/benchmarks/test_protocol.py`: 22 tests covering each
+  protocol leaf plus the B4.5 leakage invariants
+  (`test_iter_folds_test_target_window_not_in_train`,
+  `test_lag_featurize_train_perturbation_outside_lookback_changes_train_only`).
+  Coverage: 100% line + 100% branch on every protocol module.
+
+Deferred to Phase B3-followup:
+
+- `benchmarks/protocol/mts.py` (B4.4): raw-MTS reshape for TSC,
+  with F3 `padding_mask` -> aeon convention adapter. Blocked on
+  the same aeon `scikit-learn < 1.6` pin that holds the TSC
+  adapters; lands once aeon's pin loosens or a compatible alt
+  ships.
+- `tests/benchmarks/test_lookback_binding.py` (cross-consumer
+  identity invariant across all four consumers): lands once
+  Phase B3-followup wires the GBM adapter through the featurizer
+  and the TSC adapter through the MTS reshape, so the test has
+  four consumers to assert identity over. Today the featurizer
+  + splitter + deep-model adapter consume the L value directly
+  from the experiment driver, so binding-vs-spec is enforced at
+  the call site rather than the test layer.
 
 **Dependencies**: B1, B2.
 
 **Deliverable tests**: split contract, featurizer F2 invariants,
-mts F3 invariants, lookback identity, fingerprint stability.
+lookback identity, fingerprint stability, the two B4.5 leakage
+invariants. The third B4.5 named test
+(`test_seq_sklearn_adapter_val_split_strategy_is_time_ordered`)
+lands once `val_split_strategy="time_ordered"` is added to the
+seq-sklearn adapter's `fit` kwargs in Phase B3-followup; the
+library already defaults to time-ordered, so the assertion is
+written but pending the adapter-side hook.
 
 **Done when**: a benchmark run on any registered dataset emits a
-fingerprinted split and the deep / GBM / TSC arms all consume the
-same lookback.
+fingerprinted split and the deep / GBM arms both consume the
+same lookback. TSC consumer arrives with the MTS-reshape
+follow-up.
 
 ### Phase B4: Metrics
 
