@@ -44,6 +44,24 @@ __all__ = [
 _ExtraInput = Mapping[str, ExtraValue] | None
 
 
+def _as_str_tuple(v: object) -> tuple[str, ...]:
+    """Coerce a column-list input to a `tuple[str, ...]`.
+
+    Plain ``tuple(v)`` silently iterates a bare ``str`` character by
+    character (``tuple("store_id")`` -> ``('s', 't', 'o', ...)``) which
+    pydantic's ``tuple[str, ...]`` validation then accepts as a
+    well-typed tuple, and the failure surfaces much later as an opaque
+    missing-column error at fit time. Reject the bare-string form
+    explicitly with a typed error at construction time.
+    """
+    if isinstance(v, str):
+        raise TypeError(
+            "expected a tuple of column names, got a bare str "
+            f"{v!r}; wrap it in a tuple: ({v!r},)"
+        )
+    return tuple(v)  # type: ignore[arg-type]
+
+
 class TabularConfigParams(BaseEstimator):
     """Mutable mirror of :class:`TabularToSequenceConfig`.
 
@@ -129,10 +147,10 @@ class TabularConfigParams(BaseEstimator):
         return TabularToSequenceConfig(
             id_col=self.id_col,
             time_col=self.time_col,
-            static_categorical_cols=tuple(self.static_categorical_cols),
-            static_real_cols=tuple(self.static_real_cols),
-            time_varying_real_cols=tuple(self.time_varying_real_cols),
-            time_varying_categorical_cols=tuple(self.time_varying_categorical_cols),
+            static_categorical_cols=_as_str_tuple(self.static_categorical_cols),
+            static_real_cols=_as_str_tuple(self.static_real_cols),
+            time_varying_real_cols=_as_str_tuple(self.time_varying_real_cols),
+            time_varying_categorical_cols=_as_str_tuple(self.time_varying_categorical_cols),
             lookback=self.lookback,
             prediction_step=self.prediction_step,
             min_periods=self.min_periods,

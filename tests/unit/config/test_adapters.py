@@ -92,6 +92,30 @@ def test_to_pydantic_propagates_validation_errors() -> None:
         adapter.to_pydantic()
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "static_categorical_cols",
+        "static_real_cols",
+        "time_varying_real_cols",
+        "time_varying_categorical_cols",
+    ],
+)
+def test_to_pydantic_rejects_bare_string_for_column_tuple(field: str) -> None:
+    """A bare ``str`` for any column-tuple field is rejected at
+    :meth:`to_pydantic` time with a typed ``TypeError``.
+
+    Without this guard ``tuple(adapter_field)`` would iterate a string
+    character by character, producing a tuple of single-character names
+    that pydantic's ``tuple[str, ...]`` validation accepts, and the
+    failure would surface as an opaque missing-column error at fit
+    time. Pinned per Phase 12 Gemini final-pass IMPROVEMENT-1.
+    """
+    adapter = TabularConfigParams(**{field: "store_id"})  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="bare str"):
+        adapter.to_pydantic()
+
+
 def test_tabular_config_params_embed_dims_none_default_is_empty_mapping() -> None:
     adapter = TabularConfigParams()
     cfg = adapter.to_pydantic()

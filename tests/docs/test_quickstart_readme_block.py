@@ -101,8 +101,12 @@ def test_quickstart_block_executes(monkeypatch: pytest.MonkeyPatch) -> None:
     # and `periods_per_entity=<N>` with small ints. This keeps the
     # source legible while making the test cheap; the e2e quickstart
     # remains the heavy-fit gate.
-    block = re.sub(r"max_epochs=\d+", "max_epochs=1", block)
-    block = re.sub(r"num_entities=\d+", "num_entities=32", block)
-    block = re.sub(r"periods_per_entity=\d+", "periods_per_entity=6", block)
+    # `\s*=\s*` tolerates a future README reformat that introduces
+    # spaces around `=`; the substitution must catch the heavy default
+    # values regardless of whitespace, else the unit job will silently
+    # fit on a 160-entity panel and blow the budget.
+    block = re.sub(r"max_epochs\s*=\s*\d+", "max_epochs=1", block)
+    block = re.sub(r"num_entities\s*=\s*\d+", "num_entities=32", block)
+    block = re.sub(r"periods_per_entity\s*=\s*\d+", "periods_per_entity=6", block)
     namespace: dict[str, object] = {}
     exec(compile(block, "<README ## Quickstart>", "exec"), namespace)

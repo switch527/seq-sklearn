@@ -869,3 +869,37 @@ CONSENSUS REACHED after 4 rounds. Final tally: 0 CRITICAL,
 0 IMPROVEMENT outstanding (2 deferred with reasons), 0 NITPICK.
 Cleared for the gated Gemini code final-pass (deferred per user
 direction); v1.0.0-blocking work on Phase 12 is complete.
+
+### S7 Gemini final-pass (post-consensus)
+
+Invoked once Gemini quota reset. Verdict: `CRITICAL: 0 · IMPROVEMENT: 2 ·
+NITPICK: 1. APPROVE`. Line numbers in Gemini's citations were
+approximate (the `adapters.py:91-94` reference was actually `:132-135`;
+`test_quickstart_readme_block.py:27-28` was `:104-106`; `test_n7_absolute.py:84`
+was `:82` and `:180`); substantive findings verified at the actual
+locations and addressed:
+
+- Gemini-I1 (silent string-coercion bug in adapters): `tuple("store_id")`
+  iterates a bare string character by character, producing
+  `('s', 't', 'o', 'r', 'e', '_', 'i', 'd')` which passes pydantic's
+  `tuple[str, ...]` validation; the failure surfaces only at fit time
+  as an opaque missing-column error. Added `_as_str_tuple` helper to
+  `src/seq_sklearn/config/adapters.py` that rejects bare-string inputs
+  with a typed `TypeError`. Parametrized owning test in
+  `tests/unit/config/test_adapters.py` pins all four column-tuple
+  fields.
+- Gemini-I2 (regex whitespace tolerance in README-block substitutions):
+  `r"num_entities=\d+"` would silently miss a future
+  `num_entities = 160` reformat and leave the heavy default value in
+  the exec'd block. Loosened to `r"num_entities\s*=\s*\d+"` for all
+  three substitution patterns in `tests/docs/test_quickstart_readme_block.py`.
+- Gemini-N1 (batch_size=256 fragments predict on a 1024-batch into
+  4×256 sub-batches): documented as deliberate. The recorded N7 number
+  is "seq-sklearn predict-1024 wall-clock", which is what users care
+  about regardless of internal dataloader batching. Setting
+  `batch_size=1024` on the estimator would change semantics (fit-time
+  optimizer step size) for a measurement that already captures the
+  question being asked. Not changing.
+
+After Gemini fixes: 33 targeted tests pass; sphinx -W clean; consensus
+still holds.
