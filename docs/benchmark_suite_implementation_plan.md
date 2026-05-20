@@ -452,6 +452,22 @@ the user-requested extension, every metric is pinned by an oracle
 test, and the record type is the single object the rest of the
 harness emits.
 
+**B4-followup deferrals** (carried into B5 / B6):
+
+- The resource module's torch hooks (`cuda_reset_callable`,
+  `cuda_peak_callable`) are injected as `Callable`s so the metrics
+  module does not import torch; the harness wires them when CUDA
+  is visible. The harness itself arrives in B6.
+- `peak_rss_bytes` reports `getrusage().ru_maxrss`, which is bytes
+  on Linux and kilobytes on macOS. The harness normalizes to bytes
+  before manifest emission per the B7 envelope-tier check.
+- `compute_roc_auc` on multiclass uses sklearn's default behavior
+  (classes from `y_true`); if a fold has a class absent from
+  `y_true`, sklearn raises. B6 routes the per-fold call through a
+  try / except that records the metric as `nan` with a typed skip
+  reason analogous to the MAPE pathway. This was scoped out of B4
+  to keep the module sklearn-API thin.
+
 ### Phase B5: Experiment 1, raw loss comparison (deliverable)
 
 **Goal**: the B6.1 deliverable. For every (dataset, model)
