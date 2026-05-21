@@ -30,9 +30,10 @@ from pydantic import ValidationError
 import benchmarks.adapters  # pyright: ignore[reportUnusedImport]
 import benchmarks.datasets  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from benchmarks.config import BenchmarkConfig
-from benchmarks.experiments import build_run_environment, run_raw_loss
+from benchmarks.experiments import build_run_environment, run_ensemble, run_raw_loss
 from benchmarks.registry import list_datasets, list_models
-from benchmarks.report.raw_loss import render_from_dir
+from benchmarks.report.ensemble import render_from_dir as render_pairwise_from_dir
+from benchmarks.report.raw_loss import render_from_dir as render_leaderboard_from_dir
 
 logger = logging.getLogger(__name__)
 
@@ -157,30 +158,50 @@ def main(argv: list[str] | None = None) -> int:
     kinds = sorted(declared_kinds) if requested == "all" else [requested]
 
     for kind in kinds:
-        if kind != "raw_loss":
+        if kind == "raw_loss":
+            env = build_run_environment(profile="standard")
+            result = run_raw_loss(config, output_root=output_root, env=env)
+            logger.info(
+                "raw_loss complete: %d cells run, %d task-mismatch, "
+                "%d proba-unavailable, %d proba-runtime-unavailable, "
+                "%d quantile-followup, %d adapter-error, %d already-complete "
+                "(run_id=%s)",
+                result.cells_attempted,
+                result.cells_skipped_task_mismatch,
+                result.cells_skipped_proba_unavailable,
+                result.cells_skipped_proba_runtime_unavailable,
+                result.cells_skipped_quantile_followup,
+                result.cells_skipped_adapter_error,
+                result.cells_already_complete,
+                result.run_id,
+            )
+            leaderboard_md = render_leaderboard_from_dir(output_root)
+            leaderboard_path = output_root / "leaderboard.md"
+            leaderboard_path.write_text(leaderboard_md, encoding="utf-8")
+            logger.info("leaderboard written to %s", leaderboard_path)
+        elif kind == "ensemble":
+            env = build_run_environment(profile="standard")
+            pair_result = run_ensemble(config, output_root=output_root, env=env)
+            logger.info(
+                "ensemble complete: %d pairs run, %d predictions-missing, "
+                "%d empty-join, %d already-complete (run_id=%s)",
+                pair_result.pairs_attempted,
+                pair_result.pairs_skipped_predictions_missing,
+                pair_result.pairs_skipped_empty_join,
+                pair_result.pairs_already_complete,
+                pair_result.run_id,
+            )
+            pairwise_md = render_pairwise_from_dir(output_root)
+            pairwise_path = output_root / "pairwise.md"
+            pairwise_path.write_text(pairwise_md, encoding="utf-8")
+            logger.info("pairwise report written to %s", pairwise_path)
+        else:
             logger.error(
                 "experiment driver for kind=%s not yet implemented "
-                "(Phase B6+); only `raw_loss` ships in Phase B5",
+                "(Phase B7+); only `raw_loss` and `ensemble` ship today",
                 kind,
             )
             return 2
-        env = build_run_environment(profile="standard")
-        result = run_raw_loss(config, output_root=output_root, env=env)
-        logger.info(
-            "raw_loss complete: %d cells run, %d task-mismatch, "
-            "%d quantile-followup, %d adapter-error, %d already-complete "
-            "(run_id=%s)",
-            result.cells_attempted,
-            result.cells_skipped_task_mismatch,
-            result.cells_skipped_quantile_followup,
-            result.cells_skipped_adapter_error,
-            result.cells_already_complete,
-            result.run_id,
-        )
-        leaderboard_md = render_from_dir(output_root)
-        leaderboard_path = output_root / "leaderboard.md"
-        leaderboard_path.write_text(leaderboard_md, encoding="utf-8")
-        logger.info("leaderboard written to %s", leaderboard_path)
     return 0
 
 

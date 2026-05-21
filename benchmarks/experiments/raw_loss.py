@@ -76,6 +76,7 @@ from benchmarks.metrics.resource import (
     measure_fit,
     measure_inference_latency,
 )
+from benchmarks.predictions import write_predictions
 from benchmarks.protocol import (
     fingerprint_folds,
     make_splitter,
@@ -337,7 +338,7 @@ def _strip_below_floor_rows(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     y_proba: np.ndarray | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, int]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, int, np.ndarray]:
     """Drop rows whose model output is `nan` (A9.1 lookback-floor).
 
     The library's deep classifier writes `nan` into `predict_proba`
@@ -347,27 +348,31 @@ def _strip_below_floor_rows(
     `compute_brier` / `compute_ece_q15` raises a `ValueError` from
     sklearn that would otherwise be attributed to the adapter.
 
-    Returns the stripped `(y_true, y_pred, y_proba, n_dropped)`. When
-    `y_proba` is supplied, the mask is `any(isnan(y_proba), axis=1)`;
+    Returns `(y_true, y_pred, y_proba, n_dropped, keep_mask)`. The
+    `keep_mask` is a boolean array of the ORIGINAL length so the
+    caller can slice external arrays (e.g., `test_idx[keep_mask]`)
+    to identify which test-fold row indices survived. When `y_proba`
+    is supplied, the strip mask is `any(isnan(y_proba), axis=1)`;
     otherwise the mask is `isnan(y_pred)` (regression). For an int-
     typed `y_pred` (classifier point predictions), `isnan` is undefined
     and we treat every row as in-floor.
     """
     if y_proba is not None:
-        mask = np.isnan(y_proba).any(axis=1)
+        mask = np.asarray(np.isnan(y_proba).any(axis=1))
     elif y_pred.dtype.kind == "f":
-        mask = np.isnan(y_pred)
+        mask = np.asarray(np.isnan(y_pred))
     else:
         mask = np.zeros(len(y_pred), dtype=bool)
     n_dropped = int(mask.sum())
+    keep: np.ndarray = np.asarray(~mask)
     if n_dropped == 0:
-        return y_true, y_pred, y_proba, 0
-    keep = ~mask
+        return y_true, y_pred, y_proba, n_dropped, keep
     return (
         y_true[keep],
         y_pred[keep],
         y_proba[keep] if y_proba is not None else None,
         n_dropped,
+        keep,
     )
 
 
@@ -398,14 +403,25 @@ def _run_one_cell(
     split_fingerprint: str,
     l_resolved: int,
     labels: np.ndarray | None,
+    output_root: Path,
 ) -> ResultRow:
     """Evaluate ONE (dataset, model, seed, fold) cell.
 
-    Returns the constructed `ResultRow`; the caller persists it via
-    `write_cell`. Adapter crashes are caught and emitted as
+    Returns the constructed `ResultRow`; the caller persists the
+    metric shard + sentinel via `write_cell`. On the successful
+    path, this function ALSO writes the per-cell predictions shard
+    (B6.2.1) before returning. On any skip path no predictions are
+    written. Adapter crashes are caught and emitted as
     `skipped_reason` rows so a single broken model never aborts the
     run.
     """
+    key = cell_key(
+        dataset_name=spec.name,
+        model_name=model_name,
+        seed=seed,
+        variant=_RAW_LOSS_VARIANT,
+        fold_index=fold_index,
+    )
     started_at_utc = _utc_now()
 
     # B5-followup: regression_quantile cells need the protocol to
@@ -489,9 +505,17 @@ def _run_one_cell(
         # `min_periods_predict` come back as nan from the deep
         # models' `predict` / `predict_proba`. The metric layer
         # raises on nan; strip them first and record the count.
-        y_true_clean, y_pred_clean, y_proba_clean, n_dropped = _strip_below_floor_rows(
-            test_y, y_pred, y_proba
-        )
+        # The `keep_mask` slices `test_idx` to identify which
+        # panel rows survived the strip; the B6.2 pairwise driver
+        # inner-joins prediction shards on `panel_row_index`.
+        (
+            y_true_clean,
+            y_pred_clean,
+            y_proba_clean,
+            n_dropped,
+            keep_mask,
+        ) = _strip_below_floor_rows(test_y, y_pred, y_proba)
+        panel_row_index = test_idx[keep_mask]
 
         metrics = compute_all(
             task_type=spec.task_type,
@@ -501,6 +525,23 @@ def _run_one_cell(
             pos_label=spec.positive_label,
             labels=labels,
         )
+
+        # B6.2.1 prediction persistence: write the per-cell
+        # `(panel_row_index, y_true, y_pred, y_proba_*)` shard so the
+        # ensemble experiment can compute pairwise statistics from
+        # the same B5 cell artifact. Written BEFORE the metric shard
+        # so a crash in the predictions write fails the cell entirely
+        # (no sentinel will follow); on success the metric shard +
+        # sentinel come next via the outer loop's `write_cell`.
+        write_predictions(
+            output_root,
+            key,
+            panel_row_index=panel_row_index,
+            y_true=y_true_clean,
+            y_pred=y_pred_clean,
+            y_proba=y_proba_clean,
+        )
+
         return _build_row(
             env=env,
             spec=spec,
@@ -820,14 +861,13 @@ def run_raw_loss(
                             split_fingerprint=split_fingerprint,
                             l_resolved=l_resolved,
                             labels=labels,
+                            output_root=output_root,
                         )
                         if row.skipped_reason is None:
                             attempted += 1
                         elif row.skipped_reason.startswith(_SKIP_REASON_QUANTILE_FOLLOWUP):
                             skipped_quantile_followup += 1
-                        elif row.skipped_reason.startswith(
-                            _SKIP_REASON_PROBA_RUNTIME_UNAVAILABLE
-                        ):
+                        elif row.skipped_reason.startswith(_SKIP_REASON_PROBA_RUNTIME_UNAVAILABLE):
                             skipped_proba_runtime_unavailable += 1
                         else:
                             skipped_adapter_error += 1

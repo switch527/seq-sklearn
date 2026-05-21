@@ -603,6 +603,65 @@ degenerate-agreement convention.
 the report identifies the most-complementary external comparator
 for each library model.
 
+**B6-followup deferrals** (carried into B7 / later):
+
+- B6.2.5 (complementarity-ensemble): the design names "a GBM-only
+  ensemble and a GBM+seq-sklearn ensemble on the same folds; report
+  ΔLogLoss / ΔRMSE of adding the deep model". B6 ships the
+  PAIRWISE-statistics half (Q / phi / disagreement / double-fault
+  / pearson_pred / spearman_pred / pearson_error_corr) plus a B6
+  proxy "complementarity_score" of `(1 - error_corr) + disagreement`
+  for the top-N ranking. The formal stacked-meta-learner Δloss
+  ships in a B6-followup branch alongside the first external GBM
+  adapter that lets the ensemble be built; the B6 report's
+  ranking key swaps to ΔLogLoss / ΔRMSE at that point.
+- Out-of-fold quantile predictions (regression_quantile cells):
+  inherit the B5 deferral. The B5 driver already skips quantile
+  cells with `regression_quantile_b5_followup`; B6 inherits the
+  skip and the followup branch lands quantile pinball-correlation
+  + pairwise stats alongside the protocol extension.
+- Significance testing (B7.5): the design names Wilcoxon
+  signed-rank on per-dataset `(GBM, GBM+seq)` Δloss with Holm
+  correction. B6 does not run the test (no ensemble built yet);
+  the report renders raw means and the formal test lands with the
+  B6.2.5 ensemble in the B6-followup branch.
+- Class-label sidecar: prediction shards encode classes as the
+  integer column index `y_proba_{k}`. The B6 driver's
+  `_resolve_classification_classes` returns `np.arange(n_proba_
+  columns)` and `classification_nll` matches it row-by-row against
+  `y_true`. For datasets whose true label set is non-integer
+  (string labels, gapped integers like `[1, 2, 3]`), this
+  mis-aligns the per-sample NLL silently (no exception; the
+  `pearson_error_corr` value is just wrong). A B6-followup adds a
+  `classes.json` sidecar per dataset so non-default label sets
+  round-trip through the pairwise driver and `classification_nll`
+  reads its own canonical class array.
+
+**B6 R1-residual deferrals** (carried into B7 / later):
+
+- Atomic-write helper (`_atomic_write_bytes` /
+  `_atomic_write_parquet`) is now duplicated across three modules
+  (`benchmarks/manifest.py`, `benchmarks/predictions.py`,
+  `benchmarks/experiments/ensemble.py`). The three implementations
+  are byte-identical thin wrappers around the
+  write-to-temp-then-`Path.replace` POSIX-atomic pattern; a shared
+  `benchmarks/_atomic_io.py` utility is the natural extraction.
+  Deferred to a B6-followup branch so the R1 fix commit stays
+  scoped to the swarm CRITICALs.
+- `benchmarks/report/ensemble.py` imports `load_pairwise` from the
+  experiment driver (`benchmarks.experiments.ensemble`); the B5
+  symmetry is for the report to read via a sibling manifest module
+  (`benchmarks/manifest.load_run`). A B6-followup splits the
+  pairwise shard-IO surface into a `benchmarks/pairwise_manifest.py`
+  mirror so the report module no longer reaches into the
+  experiment driver.
+- `PairwiseRow` records `n_samples` (the inner-join intersection
+  size between two models' prediction shards) but loses the per-
+  side strip counts (how many rows each model dropped). A B6-
+  followup adds `n_a_only` and `n_b_only` columns to capture the
+  partial-overlap shape; the current schema records only the
+  intersection size.
+
 ### Phase B7: Experiment 3, training time (B6.3)
 
 **Goal**: per-model, per-dataset training wall-clock with the

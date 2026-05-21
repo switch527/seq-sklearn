@@ -280,10 +280,20 @@ def write_cell(root: Path, row: ResultRow) -> None:
     # consistent across skipped and successful cells.
     df = _coerce_optional_scalar_columns(df)
     _atomic_write_parquet(df, shard_path(root, key))
+    # Record the FRESH completion timestamp at sentinel-write time.
+    # The cell row's `started_at_utc` is a separate field on the
+    # shard; the sentinel's `completed_at_utc` is the moment the
+    # cell is durably persisted (post-shard rename, pre-sentinel
+    # write). A downstream auditor reading the sentinel can compute
+    # the (start, complete) duration by joining the two.
+    from datetime import UTC
+    from datetime import datetime as _dt
+
     payload = json.dumps(
         {
             "cell_key": key,
-            "completed_at_utc": row.started_at_utc,
+            "completed_at_utc": _dt.now(UTC).isoformat(),
+            "started_at_utc": row.started_at_utc,
             "skipped_reason": row.skipped_reason,
         },
         separators=(",", ":"),
