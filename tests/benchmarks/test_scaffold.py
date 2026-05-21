@@ -486,10 +486,10 @@ def test_main_returns_zero_on_dry_run(minimal_config_toml: Path) -> None:
 
 
 def test_main_returns_two_for_unimplemented_experiment_kind(tmp_path: Path) -> None:
-    """B6 contract: `--experiment=raw_loss` and `--experiment=ensemble`
-    are implemented; `training_time` and `hpo_uplift` ship in B7+
-    and the CLI returns exit code 2 for them. Pinning this so the
-    B7+ wire-ups cannot silently re-route the exit code."""
+    """B7 contract: `raw_loss`, `ensemble`, and `training_time` are
+    implemented; `hpo_uplift` ships in B8 and the CLI returns exit
+    code 2 for it. Pinning this so the B8 wire-up cannot silently
+    re-route the exit code."""
     config_path = tmp_path / "benchmark.toml"
     config_path.write_text(
         'datasets = ["dummy_dataset"]\n'
@@ -497,11 +497,11 @@ def test_main_returns_two_for_unimplemented_experiment_kind(tmp_path: Path) -> N
         f'output_dir = "{tmp_path / "out"}"\n'
         "\n"
         "[[experiments]]\n"
-        'kind = "training_time"\n'
+        'kind = "hpo_uplift"\n'
         "seeds = [0]\n",
         encoding="utf-8",
     )
-    rc = main(["--config", str(config_path), "--experiment", "training_time"])
+    rc = main(["--config", str(config_path), "--experiment", "hpo_uplift"])
     assert rc == 2
 
 
@@ -538,6 +538,102 @@ def test_main_accepts_experiment_kind_in_config(minimal_config_toml: Path) -> No
         ]
     )
     assert rc == 0
+
+
+def test_main_experiment_all_runs_raw_loss_before_dependents(
+    tmp_path: Path,
+) -> None:
+    """B7 R1 ordering fix: `--experiment=all` must run `raw_loss`
+    BEFORE the report-only kinds (`ensemble`, `training_time`) so
+    the dependents see a populated manifest. A previous version of
+    the CLI sorted the kinds alphabetically, which put `ensemble`
+    first and crashed on an empty manifest. Pin the order so any
+    future regression to alphabetical sort is caught."""
+    from tests.benchmarks._fakes import register_all_fakes_and_get_panels
+
+    register_all_fakes_and_get_panels()
+
+    output_dir = tmp_path / "out"
+    cache_dir = tmp_path / "cache"
+    config_path = tmp_path / "benchmark.toml"
+    # Declare the kinds out-of-order on purpose; the dispatcher's
+    # topological tuple, not declaration order or alphabetical sort,
+    # controls execution.
+    config_path.write_text(
+        'datasets = ["fake_binary"]\n'
+        'models = ["fake_constant_binary"]\n'
+        f'output_dir = "{output_dir}"\n'
+        f'cache_dir = "{cache_dir}"\n'
+        "\n"
+        "[[experiments]]\n"
+        'kind = "training_time"\n'
+        "seeds = [0]\n"
+        "\n"
+        "[[experiments]]\n"
+        'kind = "ensemble"\n'
+        "seeds = [0]\n"
+        "\n"
+        "[[experiments]]\n"
+        'kind = "raw_loss"\n'
+        "seeds = [0]\n",
+        encoding="utf-8",
+    )
+    rc = main(["--config", str(config_path), "--experiment", "all"])
+    # All three drivers must complete; if `ensemble` or
+    # `training_time` ran before `raw_loss`, they would raise on an
+    # empty manifest and the CLI would propagate the exception
+    # rather than return 0.
+    assert rc == 0
+    # The three Markdown reports land side-by-side under output_dir.
+    assert (output_dir / "leaderboard.md").exists()
+    assert (output_dir / "pairwise.md").exists()
+    assert (output_dir / "training_time.md").exists()
+
+
+def test_main_training_time_dispatch_writes_report_and_returns_zero(
+    tmp_path: Path,
+) -> None:
+    """B7 contract: `--experiment=training_time` aggregates the B5
+    manifest, writes `output_root/training_time.md` from the CLI
+    (not the driver), and exits 0. This pins the dispatch arm so a
+    future refactor cannot drop the report-write without the test
+    catching it."""
+    # The fakes registry exposes `fake_binary` + `fake_constant_binary`;
+    # registering it here makes the CLI dispatch see a single OK
+    # (dataset, model) group after raw_loss runs.
+    from tests.benchmarks._fakes import register_all_fakes_and_get_panels
+
+    register_all_fakes_and_get_panels()
+
+    output_dir = tmp_path / "out"
+    cache_dir = tmp_path / "cache"
+    config_path = tmp_path / "benchmark.toml"
+    config_path.write_text(
+        'datasets = ["fake_binary"]\n'
+        'models = ["fake_constant_binary"]\n'
+        f'output_dir = "{output_dir}"\n'
+        f'cache_dir = "{cache_dir}"\n'
+        "\n"
+        "[[experiments]]\n"
+        'kind = "raw_loss"\n'
+        "seeds = [0]\n"
+        "\n"
+        "[[experiments]]\n"
+        'kind = "training_time"\n'
+        "seeds = [0]\n",
+        encoding="utf-8",
+    )
+    # raw_loss first (B7 reads its manifest).
+    rc_rl = main(["--config", str(config_path), "--experiment", "raw_loss"])
+    assert rc_rl == 0
+    rc_tt = main(["--config", str(config_path), "--experiment", "training_time"])
+    assert rc_tt == 0
+    report_path = output_dir / "training_time.md"
+    assert report_path.exists()
+    md = report_path.read_text(encoding="utf-8")
+    assert "# Training-time report" in md
+    assert "fake_binary" in md
+    assert "fake_constant_binary" in md
 
 
 # ----------------------------------------------------------------- #
