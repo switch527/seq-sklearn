@@ -42,9 +42,14 @@ def isolated_registry() -> Iterator[None]:  # pyright: ignore[reportUnusedFuncti
     ds_reg = _datasets_reg._REGISTRY  # pyright: ignore[reportPrivateUsage]
     ds_loaders = _datasets_reg._LOADERS  # pyright: ignore[reportPrivateUsage]
     m_reg = _models_reg._REGISTRY  # pyright: ignore[reportPrivateUsage]
+    # Phase B5 adds `_ADAPTER_FACTORIES` alongside the spec registry;
+    # snapshot/restore in lockstep so a test that registers a fake
+    # adapter factory cannot leak it to a later test.
+    m_factories = _models_reg._ADAPTER_FACTORIES  # pyright: ignore[reportPrivateUsage]
     ds_snapshot = dict(ds_reg)
     ds_loaders_snapshot = dict(ds_loaders)
     m_snapshot = dict(m_reg)
+    m_factories_snapshot = dict(m_factories)
     try:
         yield
     finally:
@@ -54,6 +59,8 @@ def isolated_registry() -> Iterator[None]:  # pyright: ignore[reportUnusedFuncti
         ds_loaders.update(ds_loaders_snapshot)
         m_reg.clear()
         m_reg.update(m_snapshot)
+        m_factories.clear()
+        m_factories.update(m_factories_snapshot)
 
 
 @pytest.fixture

@@ -128,19 +128,13 @@ def test_dataset_spec_binary_requires_positive_label() -> None:
 
 
 def test_dataset_spec_binary_accepts_positive_label() -> None:
-    spec = DatasetSpec(
-        **_valid_dataset_kwargs(task_type="binary", positive_label=1)
-    )
+    spec = DatasetSpec(**_valid_dataset_kwargs(task_type="binary", positive_label=1))
     assert spec.positive_label == 1
 
 
 def test_dataset_spec_non_binary_rejects_positive_label() -> None:
     with pytest.raises(ValueError, match="binary-only"):
-        DatasetSpec(
-            **_valid_dataset_kwargs(
-                task_type="multiclass", positive_label="event"
-            )
-        )
+        DatasetSpec(**_valid_dataset_kwargs(task_type="multiclass", positive_label="event"))
 
 
 def test_dataset_spec_integrity_sha_pattern_enforced() -> None:
@@ -203,9 +197,7 @@ def test_dataset_spec_excluded_binary_without_positive_label_ok() -> None:
 
 
 def test_dataset_registry_register_lookup_list() -> None:
-    spec = DatasetSpec(
-        **_valid_dataset_kwargs(name="unique_for_scaffold_test")
-    )
+    spec = DatasetSpec(**_valid_dataset_kwargs(name="unique_for_scaffold_test"))
     register_dataset(spec, _stub_loader)
     assert get_dataset("unique_for_scaffold_test") is spec
     assert get_loader("unique_for_scaffold_test") is _stub_loader
@@ -223,9 +215,7 @@ def test_dataset_registry_get_loader_missing_raises_typed() -> None:
 
 
 def test_dataset_registry_duplicate_name_different_spec_raises() -> None:
-    register_dataset(
-        DatasetSpec(**_valid_dataset_kwargs(name="dup_test")), _stub_loader
-    )
+    register_dataset(DatasetSpec(**_valid_dataset_kwargs(name="dup_test")), _stub_loader)
     different = DatasetSpec(**_valid_dataset_kwargs(name="dup_test")).model_copy(
         update={"lookback": 9999}
     )
@@ -392,9 +382,7 @@ def test_registry_isolation_canary_b() -> None:
 )
 def test_dataset_spec_non_binary_rejects_positive_label_parametrized(task_type: str) -> None:
     with pytest.raises(ValueError, match="binary-only"):
-        DatasetSpec(
-            **_valid_dataset_kwargs(task_type=task_type, positive_label="x")
-        )
+        DatasetSpec(**_valid_dataset_kwargs(task_type=task_type, positive_label="x"))
 
 
 def test_benchmark_config_all_sentinel_alone_rejects_mix() -> None:
@@ -479,10 +467,7 @@ def test_load_config_schema_failure_raises_typed(tmp_path: Path) -> None:
     inspect it if needed."""
     path = tmp_path / "schema_bad.toml"
     path.write_text(
-        'datasets = ["a"]\n'
-        'models = ["m"]\n'
-        f'output_dir = "{tmp_path / "out"}"\n'
-        "experiments = []\n",
+        f'datasets = ["a"]\nmodels = ["m"]\noutput_dir = "{tmp_path / "out"}"\nexperiments = []\n',
         encoding="utf-8",
     )
     with pytest.raises(_ConfigLoadError, match="schema validation") as excinfo:
@@ -500,11 +485,25 @@ def test_main_returns_zero_on_dry_run(minimal_config_toml: Path) -> None:
     assert rc == 0
 
 
-def test_main_returns_two_without_dry_run(minimal_config_toml: Path) -> None:
-    """Phase B0 contract: the non-dry-run path returns 2 until the
-    experiment driver lands. Pinning this so a future B5+ wire-up
-    cannot silently re-route exit codes."""
-    rc = main(["--config", str(minimal_config_toml)])
+def test_main_returns_two_for_unimplemented_experiment_kind(tmp_path: Path) -> None:
+    """B5 contract: `--experiment=raw_loss` runs and exits 0; other
+    kinds (`ensemble`, `training_time`, `hpo_uplift`) are not yet
+    implemented in B5 and the CLI returns 2 for them. Pinning this
+    so the B6+ wire-ups cannot silently re-route the exit code."""
+    config_path = tmp_path / "benchmark.toml"
+    # Config declares an `ensemble` experiment so the CLI's
+    # --experiment=ensemble path reaches the not-implemented branch.
+    config_path.write_text(
+        'datasets = ["dummy_dataset"]\n'
+        'models = ["dummy_model"]\n'
+        f'output_dir = "{tmp_path / "out"}"\n'
+        "\n"
+        "[[experiments]]\n"
+        'kind = "ensemble"\n'
+        "seeds = [0]\n",
+        encoding="utf-8",
+    )
+    rc = main(["--config", str(config_path), "--experiment", "ensemble"])
     assert rc == 2
 
 
@@ -582,5 +581,3 @@ def test_benchmarks_package_does_not_import_seq_sklearn_internals() -> None:
         f"benchmarks/ must consume the library via the public facade "
         f"only; deep imports into seq_sklearn._* found: {leaked}"
     )
-
-

@@ -183,9 +183,7 @@ def test_quantiles_unsupported_error_is_subclass_of_not_implemented() -> None:
         (SeqSklearnTFTRegressorAdapter, "regression_point"),
     ],
 )
-def test_adapter_rejects_locked_hyperparameter_keys(
-    adapter_cls: type, task_type: str
-) -> None:
+def test_adapter_rejects_locked_hyperparameter_keys(adapter_cls: type, task_type: str) -> None:
     """arch-C1: `hyperparameters` cannot override the
     bind-from-spec contract keys (`task_type`, `tabular_config`,
     `scheduler`, `verbose`). The check fires at `__post_init__`,
@@ -209,11 +207,7 @@ def test_tft_classifier_adapter_metadata_is_classvar_not_instance() -> None:
     adapter = SeqSklearnTFTClassifierAdapter(spec=spec)
     # Reading from class and instance both work; the value is the
     # same object.
-    assert (
-        SeqSklearnTFTClassifierAdapter.name
-        == adapter.name
-        == "tft_classifier"
-    )
+    assert SeqSklearnTFTClassifierAdapter.name == adapter.name == "tft_classifier"
     assert SeqSklearnTFTClassifierAdapter.task_types == ("binary", "multiclass")
 
 
@@ -225,9 +219,7 @@ def test_every_registered_seq_sklearn_model_has_a_reason() -> None:
         spec = get_model(name)
         if spec.family != "seq_sklearn":
             continue
-        assert spec.reason.strip(), (
-            f"model {name!r}: empty `reason` field"
-        )
+        assert spec.reason.strip(), f"model {name!r}: empty `reason` field"
 
 
 def test_proba_unsupported_error_is_subclass_of_not_implemented() -> None:
