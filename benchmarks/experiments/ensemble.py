@@ -85,10 +85,15 @@ _SENTINEL_SUFFIX = ".json"
 # Pair-key token rules (mirror `benchmarks.manifest._CELL_KEY_TOKEN_RE`).
 _PAIR_KEY_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]*$")
 
-# Skip reason prefixes for pairwise cells.
-_SKIP_REASON_TASK_QUANTILE = "regression_quantile_b5_followup"
+# Skip reason prefixes for pairwise cells. Two B6-design-named
+# reasons (task-type mismatch between models; regression_quantile
+# followup) are structurally unreachable in B6: every cell within
+# a dataset shares the same task_type by B5 invariant, and
+# `_eligible_pair_cells` filters quantile cells before the loop.
+# B6 ships only the reachable reasons; if a B6-followup that adds
+# cross-dataset pairs or relaxes the quantile filter lands, the
+# corresponding constant + counter return alongside.
 _SKIP_REASON_PREDICTIONS_MISSING = "predictions_missing"
-_SKIP_REASON_TASK_MISMATCH = "task_type_mismatch_between_models"
 _SKIP_REASON_EMPTY_JOIN = "empty_panel_row_index_join"
 
 _CLASSIFICATION_TASK_TYPES: frozenset[TaskType] = frozenset({"binary", "multiclass"})
@@ -244,9 +249,7 @@ class EnsembleExperimentResult(BaseModel):
 
     run_id: str
     pairs_attempted: int  # pairwise stats actually computed
-    pairs_skipped_quantile: int  # regression_quantile cell pair
     pairs_skipped_predictions_missing: int  # one model's shard absent
-    pairs_skipped_task_mismatch: int  # the two models' task_types differ
     pairs_skipped_empty_join: int  # panel_row_index inner-join was empty
     pairs_already_complete: int  # sentinel present at scan time
 
@@ -283,10 +286,14 @@ def write_pairwise_cell(root: Path, row: PairwiseRow) -> None:
     df = pd.DataFrame([row.model_dump()])
     df = _coerce_pairwise_dtypes(df)
     _atomic_write_parquet(df, pairwise_shard_path(root, key))
+    # Fresh completion timestamp at sentinel-write time; the
+    # row's `started_at_utc` is preserved separately so an
+    # auditor can compute the (start, complete) duration.
     payload = json.dumps(
         {
             "pair_key": key,
-            "completed_at_utc": row.started_at_utc,
+            "completed_at_utc": _utc_now(),
+            "started_at_utc": row.started_at_utc,
             "skipped_reason": row.skipped_reason,
         },
         separators=(",", ":"),
@@ -475,12 +482,18 @@ def _proba_matrix_with_suffix(df: pd.DataFrame, suffix: str) -> np.ndarray | Non
     The B5 prediction shard's proba columns follow the pattern
     `y_proba_{k}`; after a pandas merge with `suffixes=("_a", "_b")`,
     one side's columns become `y_proba_{k}_a`. This helper finds
-    them by suffix and returns the stacked matrix in `k` order.
+    them by suffix and returns the stacked matrix in NUMERIC `k`
+    order (not lexicographic; otherwise `y_proba_10_a` sorts before
+    `y_proba_2_a` and the class column ordering is corrupted for
+    datasets with 10 or more classes).
     """
     prefix = "y_proba_"
-    cols = sorted(c for c in df.columns if c.startswith(prefix) and c.endswith(suffix))
-    if not cols:
+    matches: list[str] = [
+        str(c) for c in df.columns if str(c).startswith(prefix) and str(c).endswith(suffix)
+    ]
+    if not matches:
         return None
+    cols = sorted(matches, key=lambda c: int(c[len(prefix) : -len(suffix)]))
     return df[cols].to_numpy(dtype=np.float64)
 
 
@@ -574,17 +587,13 @@ def run_ensemble(
         return EnsembleExperimentResult(
             run_id=env.run_id,
             pairs_attempted=0,
-            pairs_skipped_quantile=0,
             pairs_skipped_predictions_missing=0,
-            pairs_skipped_task_mismatch=0,
             pairs_skipped_empty_join=0,
             pairs_already_complete=0,
         )
 
     attempted = 0
-    skipped_quantile = 0
     skipped_predictions_missing = 0
-    skipped_task_mismatch = 0
     skipped_empty_join = 0
     already_complete = 0
 
@@ -632,10 +641,19 @@ def run_ensemble(
                             skipped_predictions_missing += 1
                         elif row.skipped_reason.startswith(_SKIP_REASON_EMPTY_JOIN):
                             skipped_empty_join += 1
-                        elif row.skipped_reason.startswith(_SKIP_REASON_TASK_MISMATCH):
-                            skipped_task_mismatch += 1
-                        elif row.skipped_reason.startswith(_SKIP_REASON_TASK_QUANTILE):
-                            skipped_quantile += 1
+                        else:
+                            # An unclassified `skipped_reason` indicates
+                            # that `_pairwise_for_cell` grew a new skip
+                            # path the outer loop does not know about.
+                            # Loud-warn so a future B6-followup that
+                            # adds a category does not silently
+                            # un-count its skips.
+                            logger.warning(
+                                "run_ensemble: unclassified skip reason "
+                                "%r for pair %s; counter not incremented",
+                                row.skipped_reason,
+                                key,
+                            )
                         write_pairwise_cell(output_root, row)
                         logger.info(
                             "run_ensemble: pair %s done in %.2fs (reason=%s)",
@@ -647,9 +665,7 @@ def run_ensemble(
     summary = EnsembleExperimentResult(
         run_id=env.run_id,
         pairs_attempted=attempted,
-        pairs_skipped_quantile=skipped_quantile,
         pairs_skipped_predictions_missing=skipped_predictions_missing,
-        pairs_skipped_task_mismatch=skipped_task_mismatch,
         pairs_skipped_empty_join=skipped_empty_join,
         pairs_already_complete=already_complete,
     )

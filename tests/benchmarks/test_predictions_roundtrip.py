@@ -146,3 +146,36 @@ def test_predictions_dir_and_path_are_consistent(tmp_path: Path) -> None:
     expected_path = expected_dir / f"{key}.parquet"
     assert predictions_dir(tmp_path) == expected_dir
     assert predictions_path(tmp_path, key) == expected_path
+
+
+# --- R1 / code-C1: numeric sort for `y_proba_{k}` columns ---
+
+
+def test_proba_columns_sort_numerically_not_lexicographically(tmp_path: Path) -> None:
+    # 12 classes -> y_proba_0 ... y_proba_11. Lexicographic sort
+    # would order y_proba_10 BEFORE y_proba_2, corrupting the
+    # (N, n_classes) matrix returned by `proba_matrix` and the
+    # per-sample NLL the ensemble driver derives from it.
+    n_classes = 12
+    panel_row_index = np.array([0, 1])
+    y_true = np.array([0, 11])
+    y_pred = np.array([0, 11])
+    proba = np.eye(n_classes)[y_true.astype(int)]  # one-hot per row
+    key = "ds_multi__model_x__seed_0__default__fold_0"
+    write_predictions(
+        tmp_path,
+        key,
+        panel_row_index=panel_row_index,
+        y_true=y_true,
+        y_pred=y_pred,
+        y_proba=proba,
+    )
+    df = load_predictions(tmp_path, key)
+    cols = proba_columns(df)
+    # Expect numeric order: y_proba_0, y_proba_1, ..., y_proba_11.
+    assert cols == tuple(f"y_proba_{k}" for k in range(n_classes))
+    # And `proba_matrix` must round-trip the one-hot encoding,
+    # which requires column-0 of the matrix to be y_proba_0.
+    matrix = proba_matrix(df)
+    assert matrix is not None
+    np.testing.assert_array_equal(matrix, proba)

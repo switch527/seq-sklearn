@@ -499,9 +499,7 @@ def test_pairwise_error_correlation_pinned_by_synthetic_predictions(
     # every row) but with VARYING confidence so per-sample NLL has
     # nonzero variance (otherwise pearson_correlation of the two
     # NLL vectors is nan).
-    proba_b = np.array(
-        [[0.6, 0.4], [0.4, 0.6], [0.75, 0.25], [0.35, 0.65], [0.55, 0.45]]
-    )
+    proba_b = np.array([[0.6, 0.4], [0.4, 0.6], [0.75, 0.25], [0.35, 0.65], [0.55, 0.45]])
     y_pred_a = proba_a.argmax(axis=1)
     y_pred_b = proba_b.argmax(axis=1)
     panel_row_index = np.array([100, 101, 102, 103, 104])
@@ -568,3 +566,161 @@ def test_pairwise_error_correlation_pinned_by_synthetic_predictions(
     # and B follow the same prediction pattern.
     assert row.pearson_error_corr is not None
     assert not math.isnan(row.pearson_error_corr)
+
+
+# --- R1 / qa-C1: `_pairwise_for_cell` no-proba else-arm pinned. ---
+
+
+def test_pairwise_for_cell_no_proba_yields_nan_error_corr(tmp_path: Path) -> None:
+    # When either model's prediction shard has no `y_proba_*`
+    # columns, the classification-task path falls into the else-arm
+    # at `pearson_error_corr = float("nan")`. Pre-R1 this branch was
+    # unexercised; mutation testing would not have caught a sign
+    # flip on the surrounding guard.
+    from benchmarks.experiments.ensemble import _pairwise_for_cell
+    from benchmarks.experiments.raw_loss import RunEnvironment
+    from benchmarks.manifest import cell_key
+    from benchmarks.predictions import write_predictions
+
+    env = RunEnvironment(
+        run_id="test",
+        library_git_sha="lib_sha",
+        hardware_tier="cpu",
+        profile="smoke",
+    )
+    panel_row_index = np.array([0, 1, 2, 3])
+    y_true = np.array([0, 1, 0, 1])
+    y_pred = np.array([0, 1, 0, 1])
+    # NO y_proba on either shard: classification path, no NLL.
+    for model_name in ("model_a", "model_b"):
+        key = cell_key(
+            dataset_name="ds_x",
+            model_name=model_name,
+            seed=0,
+            variant="default",
+            fold_index=0,
+        )
+        write_predictions(
+            tmp_path,
+            key,
+            panel_row_index=panel_row_index,
+            y_true=y_true,
+            y_pred=y_pred,
+        )
+
+    row = _pairwise_for_cell(
+        env=env,
+        output_root=tmp_path,
+        dataset_name="ds_x",
+        model_a="model_a",
+        model_b="model_b",
+        task_type="binary",
+        seed=0,
+        fold_index=0,
+        classes=np.array([0, 1]),
+    )
+    assert row.skipped_reason is None
+    assert row.n_samples == 4
+    # Diversity stats still meaningful (both classifiers agree on
+    # every row -> Q=phi=1.0 by the degenerate convention).
+    assert row.yule_q == 1.0
+    assert row.phi == 1.0
+    # The else-arm output: error correlation undefined without proba.
+    assert row.pearson_error_corr is not None
+    assert math.isnan(row.pearson_error_corr)
+
+
+# --- R1 / qa-C2 + arch-C2: dropped counter fields are not present. ---
+
+
+def test_ensemble_result_does_not_carry_dead_task_mismatch_counters(
+    fake_registry: object, tmp_path: Path
+) -> None:
+    del fake_registry
+    config = _make_config(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary", "fake_nan_proba_classifier"),
+        seeds=(0,),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    run_raw_loss(config, output_root=output_root, env=env)
+    result = run_ensemble(config, output_root=output_root, env=env)
+    # The pre-R1 `EnsembleExperimentResult` carried two dead
+    # counters; the R1 fix dropped them. Their absence is part of
+    # the public contract now.
+    fields = set(type(result).model_fields.keys())
+    assert "pairs_skipped_task_mismatch" not in fields
+    assert "pairs_skipped_quantile" not in fields
+    # The four reachable counters ARE present.
+    assert {
+        "pairs_attempted",
+        "pairs_skipped_predictions_missing",
+        "pairs_skipped_empty_join",
+        "pairs_already_complete",
+    }.issubset(fields)
+
+
+# --- R1 / qa-I: load_pairwise dir-exists-empty path. ---
+
+
+def test_load_pairwise_returns_empty_when_dir_exists_but_no_shards(tmp_path: Path) -> None:
+    # Create `pairwise/` but no `.parquet` files inside.
+    (tmp_path / "pairwise").mkdir()
+    manifest = load_pairwise(tmp_path)
+    assert manifest.empty
+
+
+# --- R1 / qa-I: aggregate_pairs empty manifest. ---
+
+
+def test_aggregate_pairs_empty_manifest_returns_empty_list() -> None:
+    assert aggregate_pairs(pd.DataFrame()) == []
+
+
+# --- R1 / qa-I: render_from_dir round-trip. ---
+
+
+def test_render_from_dir_loads_pairwise_and_renders_markdown(
+    fake_registry: object, tmp_path: Path
+) -> None:
+    del fake_registry
+    from benchmarks.report.ensemble import render_from_dir
+
+    output_root, _ = _run_raw_loss_then_ensemble(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary", "fake_nan_proba_classifier"),
+        seeds=(0,),
+        tmp_path=tmp_path,
+    )
+    md = render_from_dir(output_root)
+    assert "Pairwise ensemble-complementarity report" in md
+    assert "fake_binary" in md
+
+
+# --- R1 / qa-N1: spearman_correlation short-input branch. ---
+
+
+def test_spearman_correlation_returns_nan_on_too_short_input() -> None:
+    from benchmarks.metrics.pairwise import spearman_correlation
+
+    assert math.isnan(spearman_correlation(np.array([1.0]), np.array([2.0])))
+
+
+# --- R1 / qa-N2: pair_key invalid-token regex rejection. ---
+
+
+def test_pair_key_rejects_token_starting_with_underscore() -> None:
+    # The token regex `^[A-Za-z0-9]...` rejects names whose first
+    # char is `_`; this exercises the regex arm distinct from the
+    # `__`-separator arm.
+    with pytest.raises(PairwiseKeyError, match="match"):
+        pair_key(
+            dataset_name="_hidden",
+            model_a="a",
+            model_b="b",
+            seed=0,
+            fold_index=0,
+        )

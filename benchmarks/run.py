@@ -180,14 +180,11 @@ def main(argv: list[str] | None = None) -> int:
             env = build_run_environment(profile="standard")
             pair_result = run_ensemble(config, output_root=output_root, env=env)
             logger.info(
-                "ensemble complete: %d pairs run, %d task-mismatch, "
-                "%d predictions-missing, %d empty-join, %d quantile, "
-                "%d already-complete (run_id=%s)",
+                "ensemble complete: %d pairs run, %d predictions-missing, "
+                "%d empty-join, %d already-complete (run_id=%s)",
                 pair_result.pairs_attempted,
-                pair_result.pairs_skipped_task_mismatch,
                 pair_result.pairs_skipped_predictions_missing,
                 pair_result.pairs_skipped_empty_join,
-                pair_result.pairs_skipped_quantile,
                 pair_result.pairs_already_complete,
                 pair_result.run_id,
             )

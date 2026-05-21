@@ -210,11 +210,16 @@ def _render_dataset_block(
 
 
 def _render_top_n_summary(summaries: list[PairwiseSummary], *, top_n: int = 5) -> str:
-    ranked = [s for s in summaries if s.complementarity_score is not None]
+    # `complementarity_score is None` only on regression-only pairs;
+    # the filter drops them so the sort key dereferences a definite
+    # `float` (no defensive `None` arm needed).
+    ranked: list[PairwiseSummary] = [s for s in summaries if s.complementarity_score is not None]
     if not ranked:
         return ""
     ranked.sort(
-        key=lambda s: -1.0 if s.complementarity_score is None else s.complementarity_score,
+        key=lambda s: (
+            float(s.complementarity_score) if s.complementarity_score is not None else float("-inf")
+        ),
         reverse=True,
     )
     top = ranked[:top_n]

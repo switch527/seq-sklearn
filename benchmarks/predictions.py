@@ -27,7 +27,7 @@ Prediction-shard schema:
   count varies per dataset; `load_predictions` reads them by
   prefix-glob.
 - `y_quantile_q{level}`: float64, one column per quantile level
-  (regression_quantile only; B6-followup deferral — B6 ships the
+  (regression_quantile only; B6-followup deferral. B6 ships the
   `panel_row_index` + `y_true` + `y_pred` triple only for the
   quantile case; the quantile-level columns land alongside the
   protocol-quantile_levels extension).
@@ -142,13 +142,18 @@ def load_predictions(root: Path, key: str) -> pd.DataFrame:
 
 
 def proba_columns(df: pd.DataFrame) -> tuple[str, ...]:
-    """Return the sorted tuple of `y_proba_*` column names in `df`.
+    """Return the `y_proba_*` column names sorted by the integer
+    class index (NOT lexicographically).
 
-    Convenience for the pairwise driver: it inspects the columns of
-    the loaded predictions to determine whether classification
-    probabilities are present and to extract them in stable order.
+    Lexicographic sort orders `y_proba_10` before `y_proba_2`,
+    which silently corrupts the (N, n_classes) matrix returned by
+    `proba_matrix` for any dataset with 10 or more classes (and
+    therefore the per-sample NLL the ensemble driver computes from
+    it). Numeric sort on the trailing integer keeps the columns
+    aligned with the canonical class label range.
     """
-    return tuple(sorted(c for c in df.columns if c.startswith(_PROBA_COLUMN_PREFIX)))
+    matches = [c for c in df.columns if c.startswith(_PROBA_COLUMN_PREFIX)]
+    return tuple(sorted(matches, key=lambda c: int(c[len(_PROBA_COLUMN_PREFIX) :])))
 
 
 def proba_matrix(df: pd.DataFrame) -> np.ndarray | None:

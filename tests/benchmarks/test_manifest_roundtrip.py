@@ -117,7 +117,11 @@ def test_write_cell_produces_shard_then_sentinel(tmp_path: Path) -> None:
     assert sentinel_path(tmp_path, key).exists()
     sentinel_payload = json.loads(sentinel_path(tmp_path, key).read_text())
     assert sentinel_payload["cell_key"] == key
-    assert sentinel_payload["completed_at_utc"] == row.started_at_utc
+    # R1 fix: `completed_at_utc` is the FRESH timestamp at sentinel-
+    # write time; the row's `started_at_utc` is preserved separately.
+    assert sentinel_payload["started_at_utc"] == row.started_at_utc
+    assert "completed_at_utc" in sentinel_payload
+    assert sentinel_payload["completed_at_utc"] >= row.started_at_utc
     assert sentinel_payload["skipped_reason"] is None
 
 
