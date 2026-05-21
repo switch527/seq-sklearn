@@ -486,10 +486,10 @@ def test_main_returns_zero_on_dry_run(minimal_config_toml: Path) -> None:
 
 
 def test_main_returns_two_for_unimplemented_experiment_kind(tmp_path: Path) -> None:
-    """B6 contract: `--experiment=raw_loss` and `--experiment=ensemble`
-    are implemented; `training_time` and `hpo_uplift` ship in B7+
-    and the CLI returns exit code 2 for them. Pinning this so the
-    B7+ wire-ups cannot silently re-route the exit code."""
+    """B7 contract: `raw_loss`, `ensemble`, and `training_time` are
+    implemented; `hpo_uplift` ships in B8 and the CLI returns exit
+    code 2 for it. Pinning this so the B8 wire-up cannot silently
+    re-route the exit code."""
     config_path = tmp_path / "benchmark.toml"
     config_path.write_text(
         'datasets = ["dummy_dataset"]\n'
@@ -497,11 +497,11 @@ def test_main_returns_two_for_unimplemented_experiment_kind(tmp_path: Path) -> N
         f'output_dir = "{tmp_path / "out"}"\n'
         "\n"
         "[[experiments]]\n"
-        'kind = "training_time"\n'
+        'kind = "hpo_uplift"\n'
         "seeds = [0]\n",
         encoding="utf-8",
     )
-    rc = main(["--config", str(config_path), "--experiment", "training_time"])
+    rc = main(["--config", str(config_path), "--experiment", "hpo_uplift"])
     assert rc == 2
 
 

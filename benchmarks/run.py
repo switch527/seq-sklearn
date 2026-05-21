@@ -30,7 +30,12 @@ from pydantic import ValidationError
 import benchmarks.adapters  # pyright: ignore[reportUnusedImport]
 import benchmarks.datasets  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from benchmarks.config import BenchmarkConfig
-from benchmarks.experiments import build_run_environment, run_ensemble, run_raw_loss
+from benchmarks.experiments import (
+    build_run_environment,
+    run_ensemble,
+    run_raw_loss,
+    run_training_time,
+)
 from benchmarks.registry import list_datasets, list_models
 from benchmarks.report.ensemble import render_from_dir as render_pairwise_from_dir
 from benchmarks.report.raw_loss import render_from_dir as render_leaderboard_from_dir
@@ -195,10 +200,22 @@ def main(argv: list[str] | None = None) -> int:
             pairwise_path = output_root / "pairwise.md"
             pairwise_path.write_text(pairwise_md, encoding="utf-8")
             logger.info("pairwise report written to %s", pairwise_path)
+        elif kind == "training_time":
+            env = build_run_environment(profile="standard")
+            tt_result = run_training_time(config, output_root=output_root, env=env)
+            logger.info(
+                "training_time complete: %d groups evaluated, %d fully "
+                "skipped; report at %s (run_id=%s)",
+                tt_result.groups_evaluated,
+                tt_result.groups_fully_skipped,
+                tt_result.report_path,
+                tt_result.run_id,
+            )
         else:
             logger.error(
                 "experiment driver for kind=%s not yet implemented "
-                "(Phase B7+); only `raw_loss` and `ensemble` ship today",
+                "(Phase B8+); only `raw_loss`, `ensemble`, and "
+                "`training_time` ship today",
                 kind,
             )
             return 2

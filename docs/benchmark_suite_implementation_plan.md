@@ -684,6 +684,49 @@ numbers in the resource record.
 **Done when**: a training-time table renders alongside the
 leaderboard.
 
+**B7 actual shape** (what shipped):
+
+The B5 driver already captures `wall_seconds`, `peak_rss_bytes`,
+and `peak_cuda_bytes` per cell via `measure_fit`. B7 therefore
+ships as a REPORT-ONLY phase over the existing B5 manifest:
+
+- `benchmarks/report/training_time.py` aggregates the B5 manifest
+  by `(dataset_name, model_name, hardware_tier, task_type)`,
+  computes mean+std wall-clock + mean+max RSS / CUDA bytes, and
+  renders a per-dataset Markdown table sorted by
+  `wall_seconds_mean` ascending (fastest first). Fully-skipped
+  groups land in a footnote.
+- `benchmarks/experiments/training_time.py` is a thin driver:
+  `run_training_time(config, *, output_root, env)` reads the B5
+  manifest, calls the renderer, writes
+  `output_root/training_time.md`, returns a
+  `TrainingTimeExperimentResult` with `groups_evaluated +
+  groups_fully_skipped + report_path` counters. No new shard
+  layout; no per-cell fit-only re-execution.
+- `--experiment=training_time` CLI dispatch wired in `run.py`.
+- 17 tests across `tests/benchmarks/test_training_time_report.py`
+  (aggregator + renderer edges) and
+  `tests/benchmarks/test_training_time_experiment.py` (full
+  B5 -> B7 e2e + error paths).
+
+**B7-followup deferrals** (carried into B8 / later):
+
+- Scaling-curve plot: design B6.3 names "reported against dataset
+  size so the scaling curve is visible". The B5 manifest does not
+  carry a per-row dataset-size column today; the B7-followup
+  adds a `n_train_rows` / `n_test_rows` column to `ResultRow` and
+  the report module renders the wall-clock-vs-size curve
+  alongside the table.
+- Repeated-fit timing: B5 fits exactly once per cell so the
+  `wall_seconds_std` is the seed/fold dispersion, not within-cell
+  jitter. A B7-followup with N-rep fit timing (for stable
+  wall-clock under noisy systems) is available behind a profile
+  flag.
+- Profile-tier compute budget: B6.3 names the matched compute
+  budget per profile (smoke / standard / full per B7.1). B5's
+  driver doesn't enforce a per-cell wall-clock cap today; the
+  followup wires the budget through the adapter's `fit` callable.
+
 ### Phase B8: Experiment 4, HPO-uplift (B6.4)
 
 **Goal**: B6.4 measures the improvement from full Optuna HPO over
