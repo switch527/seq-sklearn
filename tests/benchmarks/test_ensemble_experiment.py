@@ -724,3 +724,169 @@ def test_pair_key_rejects_token_starting_with_underscore() -> None:
             seed=0,
             fold_index=0,
         )
+
+
+# --- R2 / code-IMP: write_pairwise_cell sentinel-payload key-set
+# pinned, mirroring the manifest-side B7.2 contract. ---
+
+
+def test_write_pairwise_cell_sentinel_payload_has_canonical_keys(tmp_path: Path) -> None:
+    import json
+
+    from benchmarks.experiments.ensemble import pairwise_sentinel_path
+
+    row = PairwiseRow(
+        library_git_sha="lib_sha",
+        run_id="run-uuid",
+        started_at_utc="2026-05-21T00:00:00+00:00",
+        dataset_name="ds_a",
+        model_a="a",
+        model_b="b",
+        seed=0,
+        fold_index=0,
+        task_type="binary",
+        skipped_reason=None,
+        n_samples=10,
+        n11=4,
+        n10=1,
+        n01=1,
+        n00=4,
+        yule_q=0.875,
+        phi=0.6,
+        disagreement_rate=0.2,
+        double_fault_rate=0.4,
+        pearson_pred_corr=0.8,
+        spearman_pred_corr=0.75,
+        pearson_error_corr=0.5,
+    )
+    write_pairwise_cell(tmp_path, row)
+    key = row.pair_key()
+    payload = json.loads(pairwise_sentinel_path(tmp_path, key).read_text())
+    # The full key-set is the B7.2 sentinel contract for pairwise
+    # shards; pin every key to catch a regression that drops one.
+    assert set(payload.keys()) == {
+        "pair_key",
+        "completed_at_utc",
+        "started_at_utc",
+        "skipped_reason",
+    }
+    assert payload["pair_key"] == key
+    assert payload["started_at_utc"] == row.started_at_utc
+    assert payload["completed_at_utc"] >= row.started_at_utc
+    assert payload["skipped_reason"] is None
+
+
+# --- R2 / qa-IMP: `_proba_matrix_with_suffix` numeric-sort pinned
+# for >=10 classes (lex sort would corrupt the matrix). ---
+
+
+def test_pairwise_for_cell_numeric_proba_sort_with_ten_plus_classes(
+    tmp_path: Path,
+) -> None:
+    from benchmarks.experiments.ensemble import _pairwise_for_cell
+    from benchmarks.experiments.raw_loss import RunEnvironment
+    from benchmarks.manifest import cell_key
+    from benchmarks.predictions import write_predictions
+
+    # 12-class one-hot prediction shards. Lex sort would place
+    # y_proba_10 before y_proba_2 in `_proba_matrix_with_suffix`,
+    # which corrupts the (N, 12) probability matrix and the
+    # downstream classification_nll alignment.
+    n_classes = 12
+    env = RunEnvironment(
+        run_id="test",
+        library_git_sha="lib_sha",
+        hardware_tier="cpu",
+        profile="smoke",
+    )
+    panel_row_index = np.arange(n_classes, dtype=np.int64)
+    y_true = panel_row_index.copy()  # one class per row
+    y_pred = panel_row_index.copy()
+    proba_a = np.eye(n_classes)
+    proba_b = np.eye(n_classes)  # both perfectly confident on the diagonal
+
+    for model_name, proba in (("model_a", proba_a), ("model_b", proba_b)):
+        key = cell_key(
+            dataset_name="ds_x",
+            model_name=model_name,
+            seed=0,
+            variant="default",
+            fold_index=0,
+        )
+        write_predictions(
+            tmp_path,
+            key,
+            panel_row_index=panel_row_index,
+            y_true=y_true,
+            y_pred=y_pred,
+            y_proba=proba,
+        )
+
+    row = _pairwise_for_cell(
+        env=env,
+        output_root=tmp_path,
+        dataset_name="ds_x",
+        model_a="model_a",
+        model_b="model_b",
+        task_type="multiclass",
+        seed=0,
+        fold_index=0,
+        classes=np.arange(n_classes),
+    )
+    # With correct numeric sort: both models predict perfectly and
+    # the per-sample NLL is `-log(1.0) = 0` for every row; the
+    # pearson_error_corr is nan (zero variance), not a wild value
+    # from a misaligned matrix. The non-corruption signal: n11
+    # equals n_classes (all rows agree-and-correct).
+    assert row.n11 == n_classes
+    assert row.n00 == 0
+    assert row.yule_q == 1.0  # perfect agreement
+
+
+# --- R2 / qa-IMP: `_resolve_classification_classes` returns None
+# when every OK cell's prediction shard lacks proba columns. ---
+
+
+def test_resolve_classification_classes_returns_none_when_all_shards_lack_proba(
+    tmp_path: Path,
+) -> None:
+    from benchmarks.experiments.ensemble import _resolve_classification_classes
+    from benchmarks.manifest import cell_key
+    from benchmarks.predictions import write_predictions
+
+    # Build a synthetic manifest DataFrame for a binary dataset
+    # whose OK cells exist but every prediction shard was written
+    # WITHOUT y_proba columns (a `supports_proba=False`-classifier
+    # shape). The helper must exhaust the loop and return None.
+    panel_row_index = np.array([0, 1, 2, 3])
+    y_true = np.array([0, 1, 0, 1])
+    y_pred = np.array([0, 1, 0, 1])
+    for model_name in ("model_a",):
+        key = cell_key(
+            dataset_name="ds_x",
+            model_name=model_name,
+            seed=0,
+            variant="default",
+            fold_index=0,
+        )
+        write_predictions(
+            tmp_path,
+            key,
+            panel_row_index=panel_row_index,
+            y_true=y_true,
+            y_pred=y_pred,
+        )
+    manifest = pd.DataFrame(
+        [
+            {
+                "dataset_name": "ds_x",
+                "model_name": "model_a",
+                "seed": 0,
+                "fold_index": 0,
+                "task_type": "binary",
+                "skipped_reason": None,
+            }
+        ]
+    )
+    classes = _resolve_classification_classes(manifest, tmp_path, "ds_x")
+    assert classes is None

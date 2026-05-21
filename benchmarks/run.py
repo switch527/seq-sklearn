@@ -163,10 +163,13 @@ def main(argv: list[str] | None = None) -> int:
             result = run_raw_loss(config, output_root=output_root, env=env)
             logger.info(
                 "raw_loss complete: %d cells run, %d task-mismatch, "
+                "%d proba-unavailable, %d proba-runtime-unavailable, "
                 "%d quantile-followup, %d adapter-error, %d already-complete "
                 "(run_id=%s)",
                 result.cells_attempted,
                 result.cells_skipped_task_mismatch,
+                result.cells_skipped_proba_unavailable,
+                result.cells_skipped_proba_runtime_unavailable,
                 result.cells_skipped_quantile_followup,
                 result.cells_skipped_adapter_error,
                 result.cells_already_complete,

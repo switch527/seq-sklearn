@@ -212,16 +212,18 @@ def _render_dataset_block(
 def _render_top_n_summary(summaries: list[PairwiseSummary], *, top_n: int = 5) -> str:
     # `complementarity_score is None` only on regression-only pairs;
     # the filter drops them so the sort key dereferences a definite
-    # `float` (no defensive `None` arm needed).
+    # `float`. The `assert` narrows the type for pyright; the
+    # defensive `None` arm the lambda used to carry is unreachable
+    # after the filter.
     ranked: list[PairwiseSummary] = [s for s in summaries if s.complementarity_score is not None]
     if not ranked:
         return ""
-    ranked.sort(
-        key=lambda s: (
-            float(s.complementarity_score) if s.complementarity_score is not None else float("-inf")
-        ),
-        reverse=True,
-    )
+
+    def _score(s: PairwiseSummary) -> float:
+        assert s.complementarity_score is not None
+        return s.complementarity_score
+
+    ranked.sort(key=_score, reverse=True)
     top = ranked[:top_n]
     lines = [f"### Top-{len(top)} most complementary pairs", ""]
     lines.append("| Rank | Dataset | model_a | model_b | complementarity_score |")

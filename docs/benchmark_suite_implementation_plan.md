@@ -626,11 +626,41 @@ for each library model.
   the report renders raw means and the formal test lands with the
   B6.2.5 ensemble in the B6-followup branch.
 - Class-label sidecar: prediction shards encode classes as the
-  integer column index `y_proba_{k}`. For datasets whose true
-  label set is non-integer (string labels, gapped integers), B6
-  inherits B5's `np.unique(y)` assumption. A B6-followup adds a
+  integer column index `y_proba_{k}`. The B6 driver's
+  `_resolve_classification_classes` returns `np.arange(n_proba_
+  columns)` and `classification_nll` matches it row-by-row against
+  `y_true`. For datasets whose true label set is non-integer
+  (string labels, gapped integers like `[1, 2, 3]`), this
+  mis-aligns the per-sample NLL silently (no exception; the
+  `pearson_error_corr` value is just wrong). A B6-followup adds a
   `classes.json` sidecar per dataset so non-default label sets
-  round-trip through the pairwise driver.
+  round-trip through the pairwise driver and `classification_nll`
+  reads its own canonical class array.
+
+**B6 R1-residual deferrals** (carried into B7 / later):
+
+- Atomic-write helper (`_atomic_write_bytes` /
+  `_atomic_write_parquet`) is now duplicated across three modules
+  (`benchmarks/manifest.py`, `benchmarks/predictions.py`,
+  `benchmarks/experiments/ensemble.py`). The three implementations
+  are byte-identical thin wrappers around the
+  write-to-temp-then-`Path.replace` POSIX-atomic pattern; a shared
+  `benchmarks/_atomic_io.py` utility is the natural extraction.
+  Deferred to a B6-followup branch so the R1 fix commit stays
+  scoped to the swarm CRITICALs.
+- `benchmarks/report/ensemble.py` imports `load_pairwise` from the
+  experiment driver (`benchmarks.experiments.ensemble`); the B5
+  symmetry is for the report to read via a sibling manifest module
+  (`benchmarks/manifest.load_run`). A B6-followup splits the
+  pairwise shard-IO surface into a `benchmarks/pairwise_manifest.py`
+  mirror so the report module no longer reaches into the
+  experiment driver.
+- `PairwiseRow` records `n_samples` (the inner-join intersection
+  size between two models' prediction shards) but loses the per-
+  side strip counts (how many rows each model dropped). A B6-
+  followup adds `n_a_only` and `n_b_only` columns to capture the
+  partial-overlap shape; the current schema records only the
+  intersection size.
 
 ### Phase B7: Experiment 3, training time (B6.3)
 
