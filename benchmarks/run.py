@@ -5,10 +5,12 @@ Usage:
     python -m benchmarks.run --config <config.toml> --dry-run
     python -m benchmarks.run --config <config.toml> --experiment=raw_loss
 
-Phase B0 shipped the argparse + config-load + banner; Phase B5
-wires `--experiment=raw_loss` to the raw-loss experiment driver
-and writes a Markdown leaderboard next to the manifest shards.
-Phases B6-B8 will add the remaining dispatch arms.
+Phase B0 shipped the argparse + config-load + banner. Phases B5,
+B6, and B7 wire `--experiment=raw_loss`, `--experiment=ensemble`,
+and `--experiment=training_time` to their drivers and write the
+corresponding Markdown reports next to the manifest shards.
+Phase B8 (`hpo_uplift`) is the last dispatch arm; until it ships,
+`--experiment=hpo_uplift` exits 2.
 
 The `--dry-run` flag exits 0 after validation without running
 anything, and is the path the scaffold test exercises.
@@ -39,8 +41,23 @@ from benchmarks.experiments import (
 from benchmarks.registry import list_datasets, list_models
 from benchmarks.report.ensemble import render_from_dir as render_pairwise_from_dir
 from benchmarks.report.raw_loss import render_from_dir as render_leaderboard_from_dir
+from benchmarks.report.training_time import render_from_dir as render_training_time_from_dir
 
 logger = logging.getLogger(__name__)
+
+
+# Topological dispatch order for `--experiment=all`: report-only
+# experiments (`ensemble`, `training_time`) read the B5 manifest
+# written by `raw_loss`, so `raw_loss` must run first. Alphabetical
+# sort would put `ensemble` ahead of `raw_loss` and the dependent
+# drivers would crash on an empty manifest. `hpo_uplift` is here
+# as a placeholder; B8 wires its driver.
+_DISPATCH_ORDER: tuple[str, ...] = (
+    "raw_loss",
+    "ensemble",
+    "training_time",
+    "hpo_uplift",
+)
 
 
 class _ConfigLoadError(Exception):
@@ -106,11 +123,12 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code.
 
     Exit codes:
-      - ``0``: dry-run validation succeeded, or `--experiment=raw_loss`
-        completed (the leaderboard is at `output_root/leaderboard.md`).
+      - ``0``: dry-run validation succeeded, or every requested
+        experiment kind completed (the relevant Markdown report
+        is at `output_root/<kind>.md`).
       - ``1``: config load / validation failed.
-      - ``2``: an experiment kind other than `raw_loss` was requested
-        but not yet implemented (Phase B6+).
+      - ``2``: an experiment kind was requested whose driver has
+        not yet shipped (only `hpo_uplift` today).
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -133,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    logger.info("seq-sklearn benchmark harness (Phase B5 raw-loss)")
+    logger.info("seq-sklearn benchmark harness")
     logger.info("  config:         %s", args.config)
     logger.info("  experiment:     %s", args.experiment)
     logger.info(
@@ -160,7 +178,10 @@ def main(argv: list[str] | None = None) -> int:
 
     requested = args.experiment
     declared_kinds = {e.kind for e in config.experiments}
-    kinds = sorted(declared_kinds) if requested == "all" else [requested]
+    if requested == "all":
+        kinds = [k for k in _DISPATCH_ORDER if k in declared_kinds]
+    else:
+        kinds = [requested]
 
     for kind in kinds:
         if kind == "raw_loss":
@@ -204,18 +225,20 @@ def main(argv: list[str] | None = None) -> int:
             env = build_run_environment(profile="standard")
             tt_result = run_training_time(config, output_root=output_root, env=env)
             logger.info(
-                "training_time complete: %d groups evaluated, %d fully "
-                "skipped; report at %s (run_id=%s)",
+                "training_time complete: %d groups evaluated, %d fully skipped (run_id=%s)",
                 tt_result.groups_evaluated,
                 tt_result.groups_fully_skipped,
-                tt_result.report_path,
                 tt_result.run_id,
             )
+            training_time_md = render_training_time_from_dir(output_root)
+            training_time_path = output_root / "training_time.md"
+            training_time_path.write_text(training_time_md, encoding="utf-8")
+            logger.info("training-time report written to %s", training_time_path)
         else:
             logger.error(
-                "experiment driver for kind=%s not yet implemented "
-                "(Phase B8+); only `raw_loss`, `ensemble`, and "
-                "`training_time` ship today",
+                "experiment driver for kind=%s not yet implemented; "
+                "only `raw_loss`, `ensemble`, and `training_time` "
+                "ship today (Phase B8 brings `hpo_uplift`)",
                 kind,
             )
             return 2

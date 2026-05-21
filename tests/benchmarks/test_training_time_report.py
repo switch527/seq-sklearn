@@ -9,12 +9,17 @@ manifest DataFrames; the e2e test in
 """
 
 import math
+from pathlib import Path
 
 import pandas as pd
 import pytest
+from benchmarks.manifest import results_dir
 from benchmarks.report.training_time import (
     TrainingTimeSummary,
+    _format_bytes,  # pyright: ignore[reportPrivateUsage]
+    _format_value,  # pyright: ignore[reportPrivateUsage]
     aggregate_training_time,
+    render_from_dir,
     render_training_time_markdown,
 )
 
@@ -213,6 +218,94 @@ def test_render_training_time_markdown_omits_footnote_when_nothing_skipped() -> 
     manifest = pd.DataFrame([_row(wall_seconds=1.0)])
     md = render_training_time_markdown(manifest)
     assert "Skipped groups" not in md
+
+
+# --- _format_value / _format_bytes branch coverage ---------------------------
+
+
+def test_format_value_returns_empty_string_for_none() -> None:
+    assert _format_value(None) == ""
+
+
+def test_format_value_returns_three_decimal_string_for_float() -> None:
+    assert _format_value(2.5) == "2.500"
+
+
+def test_format_value_returns_empty_string_for_float_nan() -> None:
+    assert _format_value(float("nan")) == ""
+
+
+def test_format_value_returns_str_for_non_float() -> None:
+    # The fallback branch stringifies anything that's neither None
+    # nor a float (e.g., an int n_cells, a model_name string).
+    assert _format_value(7) == "7"
+    assert _format_value("cpu") == "cpu"
+
+
+def test_format_bytes_returns_empty_string_for_none() -> None:
+    assert _format_bytes(None) == ""
+
+
+def test_format_bytes_returns_int_string_for_float() -> None:
+    # Floats render as their truncated-int form (no humanizing suffix
+    # at B7 per the module docstring).
+    assert _format_bytes(1_500_000.0) == "1500000"
+
+
+def test_format_bytes_returns_empty_string_for_float_nan() -> None:
+    assert _format_bytes(float("nan")) == ""
+
+
+def test_format_bytes_returns_str_for_non_float() -> None:
+    assert _format_bytes(1_500_000) == "1500000"
+    assert _format_bytes("cpu") == "cpu"
+
+
+# --- render_from_dir reads the manifest on disk ------------------------------
+
+
+def _write_manifest_shard(root: Path, rows: list[dict[str, object]]) -> None:
+    """Write a single parquet shard under `root/results/` so
+    `load_run(root)` returns the given rows. Keeps the test
+    independent of `write_cell`'s sentinel contract.
+    """
+    target = results_dir(root)
+    target.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(rows)
+    df.to_parquet(target / "test_shard.parquet", index=False)
+
+
+def test_render_from_dir_reads_manifest_and_returns_markdown(tmp_path: Path) -> None:
+    """qa-IMP-1: pin that `render_from_dir` round-trips an on-disk
+    manifest through `load_run` and emits the same Markdown the
+    aggregate+render pair produces. The CLI calls this helper, so
+    breaking it silently skips the report write."""
+    root = tmp_path / "out"
+    _write_manifest_shard(
+        root,
+        [
+            _row(model_name="m_fast", wall_seconds=1.0),
+            _row(model_name="m_slow", wall_seconds=5.0),
+        ],
+    )
+    md = render_from_dir(root)
+    assert "# Training-time report" in md
+    assert "ds_a" in md
+    assert "m_fast" in md
+    assert "m_slow" in md
+
+
+def test_render_from_dir_empty_results_dir_returns_no_results_block(
+    tmp_path: Path,
+) -> None:
+    """A `root` with no shards under `results/` must still render a
+    legal Markdown document (the "_No results in manifest_" block)
+    instead of raising."""
+    root = tmp_path / "out"
+    root.mkdir(parents=True)
+    md = render_from_dir(root)
+    assert md.startswith("# Training-time report")
+    assert "_No results" in md
 
 
 # --- structural ---

@@ -180,6 +180,15 @@ def _render_dataset_block(dataset_name: str, summaries: list[TrainingTimeSummary
     if not summaries:
         return ""
     task_type = summaries[0].task_type
+    # The caller groups by `dataset_name` BEFORE calling this helper,
+    # and the aggregator's group key includes `task_type`, so all
+    # summaries in a single dataset block share one task_type by
+    # construction. Pinning the invariant here surfaces any future
+    # regression where the grouping shape drifts.
+    assert all(s.task_type == task_type for s in summaries), (
+        f"dataset {dataset_name!r} has heterogeneous task_types: "
+        f"{sorted({s.task_type for s in summaries})}"
+    )
     header_cells = [
         "model",
         "hardware_tier",

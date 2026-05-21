@@ -1,10 +1,12 @@
 """Phase B7 training-time experiment e2e tests (B6.3).
 
-`run_training_time` is a thin driver that reads the B5 raw-loss
-manifest under `output_root`, renders the per-(dataset, model,
-hardware_tier) Markdown table, and writes it to
-`output_root/training_time.md`. These tests run the full B5 -> B7
-flow against the synthetic fake-registry.
+`run_training_time` aggregates the B5 raw-loss manifest under
+`output_root` and returns per-(dataset, model, hardware_tier)
+counters. The CLI (`benchmarks.run`) is responsible for rendering
+`output_root/training_time.md` from the same manifest via
+`benchmarks.report.training_time.render_from_dir`. These tests
+exercise the driver against the synthetic fake-registry and
+verify the renderer's output through `render_from_dir` directly.
 """
 
 from pathlib import Path
@@ -18,6 +20,7 @@ from benchmarks.experiments import (
     run_raw_loss,
     run_training_time,
 )
+from benchmarks.report.training_time import render_from_dir as render_training_time_from_dir
 
 from tests.benchmarks._fakes import register_all_fakes_and_get_panels
 
@@ -49,7 +52,7 @@ def _make_config(
     )
 
 
-def test_run_training_time_renders_report_from_b5_manifest(
+def test_run_training_time_aggregates_from_b5_manifest(
     fake_registry: list[PanelDataset], tmp_path: Path
 ) -> None:
     del fake_registry
@@ -68,10 +71,10 @@ def test_run_training_time_renders_report_from_b5_manifest(
     # Single (dataset, model, hardware_tier) group with 5 OK cells.
     assert result.groups_evaluated == 1
     assert result.groups_fully_skipped == 0
-    report_path = Path(result.report_path)
-    assert report_path.exists()
-    assert report_path == output_root / "training_time.md"
-    md = report_path.read_text()
+    # The driver returns counters only; rendering goes through the
+    # report helper (which the CLI calls). Verify the renderer
+    # consumes the same manifest cleanly.
+    md = render_training_time_from_dir(output_root)
     assert "Training-time report" in md
     assert "fake_binary" in md
     assert "fake_constant_binary" in md
@@ -137,7 +140,7 @@ def test_run_training_time_aggregates_across_datasets(
     # groups.
     assert result.groups_evaluated == 2
     assert result.groups_fully_skipped == 2
-    md = Path(result.report_path).read_text()
+    md = render_training_time_from_dir(output_root)
     assert "fake_binary" in md
     assert "fake_regression_point" in md
     assert "Skipped groups" in md

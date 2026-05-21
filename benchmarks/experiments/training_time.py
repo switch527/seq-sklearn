@@ -8,11 +8,13 @@ pass over the existing manifest: no new shard layout, no extra
 adapter calls.
 
 `run_training_time` reads the B5 manifest under `output_root`,
-aggregates per (dataset, model, hardware_tier), writes
-`output_root/training_time.md`, and returns a structured summary
-the CLI logs. Resumability is inherited from B5 (no per-cell work
-to resume here); a fresh invocation re-renders the report from
-the current manifest snapshot.
+aggregates per (dataset, model, hardware_tier), and returns a
+structured summary the CLI logs. The CLI writes the rendered
+Markdown to `output_root/training_time.md` itself (symmetric with
+the B5 leaderboard + B6 pairwise report writes); the driver does
+not touch the filesystem. Resumability is inherited from B5 (no
+per-cell work to resume here); a fresh invocation re-aggregates
+from the current manifest snapshot.
 
 B7-followup deferrals (documented in the impl plan):
 
@@ -40,13 +42,9 @@ from benchmarks.manifest import load_run
 from benchmarks.report.training_time import (
     TrainingTimeSummary,
     aggregate_training_time,
-    render_training_time_markdown,
 )
 
 logger = logging.getLogger(__name__)
-
-
-_TRAINING_TIME_REPORT_FILENAME = "training_time.md"
 
 
 class TrainingTimeExperimentResult(BaseModel):
@@ -54,8 +52,8 @@ class TrainingTimeExperimentResult(BaseModel):
 
     Counts the (dataset, model, hardware_tier) groups discovered in
     the B5 manifest and how many of them had at least one OK cell.
-    The full per-group table lives in
-    `output_root/training_time.md`.
+    The rendered per-group Markdown table is written by the CLI
+    via `benchmarks.report.training_time.render_from_dir`.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -63,33 +61,27 @@ class TrainingTimeExperimentResult(BaseModel):
     run_id: str
     groups_evaluated: int  # groups with at least one OK cell
     groups_fully_skipped: int  # groups where every cell was skipped
-    report_path: str  # absolute path of the rendered Markdown
 
 
-def _resolve_training_time_seeds(
-    experiments: list[ExperimentSpec],
-) -> tuple[int, ...]:
-    """Pull seeds from the `training_time` experiment spec(s).
+def _assert_training_time_configured(experiments: list[ExperimentSpec]) -> None:
+    """Enforce that the config declares the `training_time` kind.
 
-    Not used at the per-cell level (the data is already in the B5
-    manifest), but the helper enforces the contract that the config
-    declares the experiment kind. Mirrors `_resolve_seeds` in the
-    raw_loss + ensemble drivers.
+    The driver does not use the seeds at the per-cell level (the
+    data is already in the B5 manifest), but it still refuses
+    cleanly if the experiment is absent from the config, mirroring
+    the raw_loss + ensemble drivers' contract.
 
     Raises:
         ValueError: no `training_time` experiment is configured.
     """
-    seeds: set[int] = set()
     for spec in experiments:
         if spec.kind == "training_time":
-            seeds.update(spec.seeds)
-    if not seeds:
-        raise ValueError(
-            "run_training_time: BenchmarkConfig declares no "
-            "training_time experiment; add ExperimentSpec(kind="
-            "'training_time') to the config"
-        )
-    return tuple(sorted(seeds))
+            return
+    raise ValueError(
+        "run_training_time: BenchmarkConfig declares no "
+        "training_time experiment; add ExperimentSpec(kind="
+        "'training_time') to the config"
+    )
 
 
 def run_training_time(
@@ -98,14 +90,17 @@ def run_training_time(
     output_root: Path,
     env: RunEnvironment,
 ) -> TrainingTimeExperimentResult:
-    """Render the per-(dataset, model, hardware_tier) training-time
-    report from an existing B5 manifest under `output_root`.
+    """Aggregate the per-(dataset, model, hardware_tier) training-
+    time summary from an existing B5 manifest under `output_root`.
+
+    Returns counters; the CLI is responsible for writing
+    `output_root/training_time.md` from the same manifest.
 
     Raises:
         ValueError: no `training_time` experiment in the config, or
             the B5 manifest is empty / missing.
     """
-    _resolve_training_time_seeds(list(config.experiments))
+    _assert_training_time_configured(list(config.experiments))
     manifest = load_run(output_root)
     if manifest.empty:
         raise ValueError(
@@ -117,16 +112,10 @@ def run_training_time(
     groups_evaluated = sum(1 for s in summaries if s.n_cells_evaluated > 0)
     groups_fully_skipped = sum(1 for s in summaries if s.n_cells_evaluated == 0)
 
-    md = render_training_time_markdown(manifest)
-    output_root.mkdir(parents=True, exist_ok=True)
-    report_path = output_root / _TRAINING_TIME_REPORT_FILENAME
-    report_path.write_text(md, encoding="utf-8")
-
     summary = TrainingTimeExperimentResult(
         run_id=env.run_id,
         groups_evaluated=groups_evaluated,
         groups_fully_skipped=groups_fully_skipped,
-        report_path=str(report_path),
     )
     logger.info("run_training_time: complete: %s", summary.model_dump())
     return summary
