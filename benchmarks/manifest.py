@@ -201,7 +201,18 @@ class ResultRow(BaseModel):
     # Environment.
     hardware_tier: str  # "cpu" | "gpu_single" (free-form for B5; B7 tightens)
     profile: str  # "smoke" | "standard" | "full"
-    hpo_tier: str = "none"  # B5 is always "none"; B8 will populate
+    hpo_tier: str = "none"  # "none" on default cells; B8 populates on tuned cells
+
+    # B8 HPO trace fields. All None on `variant="default"` rows; the
+    # tuned arm populates them so the report can render the
+    # search-space parity disclosure + time-to-best (B6.4.0, B7.4).
+    hpo_n_trials_completed: int | None = None
+    hpo_n_trials_pruned: int | None = None
+    hpo_search_space_size: int | None = None
+    hpo_timeout_seconds: float | None = None
+    hpo_best_trial_number: int | None = None
+    hpo_time_to_best_seconds: float | None = None
+    hpo_best_val_loss: float | None = None
 
     # Skipped-cell reason; non-None means the metric columns are absent.
     skipped_reason: str | None = None

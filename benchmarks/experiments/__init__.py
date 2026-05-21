@@ -11,6 +11,10 @@ from benchmarks.experiments.ensemble import (
     PairwiseRow,
     run_ensemble,
 )
+from benchmarks.experiments.hpo_uplift import (
+    HPOUpliftExperimentResult,
+    run_hpo_uplift,
+)
 from benchmarks.experiments.raw_loss import (
     RawLossExperimentResult,
     RunEnvironment,
@@ -24,12 +28,14 @@ from benchmarks.experiments.training_time import (
 
 __all__ = [
     "EnsembleExperimentResult",
+    "HPOUpliftExperimentResult",
     "PairwiseRow",
     "RawLossExperimentResult",
     "RunEnvironment",
     "TrainingTimeExperimentResult",
     "build_run_environment",
     "run_ensemble",
+    "run_hpo_uplift",
     "run_raw_loss",
     "run_training_time",
 ]

@@ -485,24 +485,23 @@ def test_main_returns_zero_on_dry_run(minimal_config_toml: Path) -> None:
     assert rc == 0
 
 
-def test_main_returns_two_for_unimplemented_experiment_kind(tmp_path: Path) -> None:
-    """B7 contract: `raw_loss`, `ensemble`, and `training_time` are
-    implemented; `hpo_uplift` ships in B8 and the CLI returns exit
-    code 2 for it. Pinning this so the B8 wire-up cannot silently
-    re-route the exit code."""
-    config_path = tmp_path / "benchmark.toml"
-    config_path.write_text(
-        'datasets = ["dummy_dataset"]\n'
-        'models = ["dummy_model"]\n'
-        f'output_dir = "{tmp_path / "out"}"\n'
-        "\n"
-        "[[experiments]]\n"
-        'kind = "hpo_uplift"\n'
-        "seeds = [0]\n",
-        encoding="utf-8",
+def test_main_dispatch_covers_every_experiment_kind() -> None:
+    """B8 wires every `ExperimentKind` literal through the CLI
+    dispatcher; the exit-2 branch in `main()` is a canary for
+    future kinds added to the literal without an accompanying
+    dispatcher arm. Pin that every current kind is in the
+    dispatch order so a Literal extension surfaces here."""
+    import typing
+
+    from benchmarks.config import ExperimentKind
+    from benchmarks.run import _DISPATCH_ORDER  # pyright: ignore[reportPrivateUsage]
+
+    declared = set(typing.get_args(ExperimentKind))
+    dispatched = set(_DISPATCH_ORDER)
+    assert declared <= dispatched, (
+        f"every ExperimentKind must appear in benchmarks/run.py's "
+        f"_DISPATCH_ORDER; missing: {declared - dispatched}"
     )
-    rc = main(["--config", str(config_path), "--experiment", "hpo_uplift"])
-    assert rc == 2
 
 
 def test_main_returns_one_on_missing_config(tmp_path: Path) -> None:
