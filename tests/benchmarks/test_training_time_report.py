@@ -18,6 +18,7 @@ from benchmarks.report.training_time import (
     TrainingTimeSummary,
     _format_bytes,  # pyright: ignore[reportPrivateUsage]
     _format_value,  # pyright: ignore[reportPrivateUsage]
+    _render_dataset_block,  # pyright: ignore[reportPrivateUsage]
     aggregate_training_time,
     render_from_dir,
     render_training_time_markdown,
@@ -259,6 +260,46 @@ def test_format_bytes_returns_empty_string_for_float_nan() -> None:
 def test_format_bytes_returns_str_for_non_float() -> None:
     assert _format_bytes(1_500_000) == "1500000"
     assert _format_bytes("cpu") == "cpu"
+
+
+# --- _render_dataset_block invariants ----------------------------------------
+
+
+def _summary(
+    *,
+    model_name: str = "m",
+    task_type: str = "binary",
+    dataset_name: str = "ds_a",
+    hardware_tier: str = "cpu",
+) -> TrainingTimeSummary:
+    return TrainingTimeSummary(
+        dataset_name=dataset_name,
+        model_name=model_name,
+        hardware_tier=hardware_tier,
+        task_type=task_type,
+        n_cells_evaluated=1,
+        n_skipped=0,
+        wall_seconds_mean=1.0,
+        wall_seconds_std=0.0,
+        peak_rss_bytes_mean=1.0,
+        peak_rss_bytes_max=1.0,
+        peak_cuda_bytes_mean=None,
+        peak_cuda_bytes_max=None,
+    )
+
+
+def test_render_dataset_block_raises_on_heterogeneous_task_types() -> None:
+    """The aggregator's group key includes `task_type`, so every
+    block reaching `_render_dataset_block` has one task_type by
+    construction. The defensive assert at
+    `report/training_time.py` guards against future grouping drift;
+    pin that it actually fires when violated."""
+    block = [
+        _summary(model_name="m_binary", task_type="binary"),
+        _summary(model_name="m_regression", task_type="regression_point"),
+    ]
+    with pytest.raises(AssertionError, match="heterogeneous task_types"):
+        _render_dataset_block("ds_a", block)
 
 
 # --- render_from_dir reads the manifest on disk ------------------------------

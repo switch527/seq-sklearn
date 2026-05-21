@@ -273,9 +273,10 @@ def render_from_dir(output_root: Path) -> str:
     """Convenience: load the B5 manifest under `output_root` and
     render the training-time table.
 
-    The training-time experiment driver calls this after every
-    B5-manifest read; no separate `training_time/` shard layout is
-    produced because the data is already in `results/`.
+    The CLI calls this after `run_training_time` returns; the
+    driver itself is filesystem-free and returns counters only.
+    No separate `training_time/` shard layout is produced because
+    the data is already in `results/`.
     """
     manifest = load_run(output_root)
     return render_training_time_markdown(manifest)
