@@ -221,6 +221,37 @@ def test_render_training_time_markdown_omits_footnote_when_nothing_skipped() -> 
     assert "Skipped groups" not in md
 
 
+def test_render_training_time_markdown_splits_block_per_task_type_for_same_dataset() -> None:
+    """Gemini final-pass IMP-2 regression guard: if the manifest
+    accrues two task_types for the same dataset (e.g., config
+    drift across runs), the renderer must NOT crash the
+    `_render_dataset_block` homogeneity assert. It must split into
+    one block per (dataset_name, task_type) combo and render both
+    cleanly."""
+    manifest = pd.DataFrame(
+        [
+            _row(
+                model_name="m_binary",
+                task_type="binary",
+                wall_seconds=1.0,
+            ),
+            _row(
+                model_name="m_regression",
+                task_type="regression_point",
+                wall_seconds=2.0,
+            ),
+        ]
+    )
+    md = render_training_time_markdown(manifest)
+    # Both blocks present, one for each task_type, with the
+    # task_type appearing in the block header.
+    assert "ds_a (binary," in md
+    assert "ds_a (regression_point," in md
+    # Both models still surface.
+    assert "m_binary" in md
+    assert "m_regression" in md
+
+
 # --- _format_value / _format_bytes branch coverage ---------------------------
 
 

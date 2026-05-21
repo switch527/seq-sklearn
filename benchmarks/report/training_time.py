@@ -252,17 +252,26 @@ def render_training_time_markdown(manifest: pd.DataFrame) -> str:
             "<config.toml>` first._\n"
         )
     summaries = aggregate_training_time(manifest)
-    by_dataset: dict[str, list[TrainingTimeSummary]] = {}
+    # Key by `(dataset_name, task_type)`, not by `dataset_name`
+    # alone: if a manifest accrues two task_types for the same
+    # dataset across runs (e.g., the dataset's task_type changed
+    # in config.toml between runs), keying by name alone would
+    # mix them into one block and trip the homogeneity assert in
+    # `_render_dataset_block`. Splitting on task_type also gives
+    # the heterogeneous case sensible output: one block per
+    # (dataset, task_type) combo, with the task_type already in
+    # the block header.
+    by_dataset: dict[tuple[str, str], list[TrainingTimeSummary]] = {}
     for s in summaries:
         # Drop fully-skipped groups from the dataset block; they
         # land in the footnote.
         if s.n_cells_evaluated == 0:
             continue
-        by_dataset.setdefault(s.dataset_name, []).append(s)
+        by_dataset.setdefault((s.dataset_name, s.task_type), []).append(s)
 
     parts = ["# Training-time report", ""]
-    for dataset_name in sorted(by_dataset):
-        parts.append(_render_dataset_block(dataset_name, by_dataset[dataset_name]))
+    for dataset_name, _task_type in sorted(by_dataset):
+        parts.append(_render_dataset_block(dataset_name, by_dataset[(dataset_name, _task_type)]))
     footnote = _render_skipped_footnote(summaries)
     if footnote:
         parts.append(footnote)
