@@ -603,6 +603,35 @@ degenerate-agreement convention.
 the report identifies the most-complementary external comparator
 for each library model.
 
+**B6-followup deferrals** (carried into B7 / later):
+
+- B6.2.5 (complementarity-ensemble): the design names "a GBM-only
+  ensemble and a GBM+seq-sklearn ensemble on the same folds; report
+  ΔLogLoss / ΔRMSE of adding the deep model". B6 ships the
+  PAIRWISE-statistics half (Q / phi / disagreement / double-fault
+  / pearson_pred / spearman_pred / pearson_error_corr) plus a B6
+  proxy "complementarity_score" of `(1 - error_corr) + disagreement`
+  for the top-N ranking. The formal stacked-meta-learner Δloss
+  ships in a B6-followup branch alongside the first external GBM
+  adapter that lets the ensemble be built; the B6 report's
+  ranking key swaps to ΔLogLoss / ΔRMSE at that point.
+- Out-of-fold quantile predictions (regression_quantile cells):
+  inherit the B5 deferral. The B5 driver already skips quantile
+  cells with `regression_quantile_b5_followup`; B6 inherits the
+  skip and the followup branch lands quantile pinball-correlation
+  + pairwise stats alongside the protocol extension.
+- Significance testing (B7.5): the design names Wilcoxon
+  signed-rank on per-dataset `(GBM, GBM+seq)` Δloss with Holm
+  correction. B6 does not run the test (no ensemble built yet);
+  the report renders raw means and the formal test lands with the
+  B6.2.5 ensemble in the B6-followup branch.
+- Class-label sidecar: prediction shards encode classes as the
+  integer column index `y_proba_{k}`. For datasets whose true
+  label set is non-integer (string labels, gapped integers), B6
+  inherits B5's `np.unique(y)` assumption. A B6-followup adds a
+  `classes.json` sidecar per dataset so non-default label sets
+  round-trip through the pairwise driver.
+
 ### Phase B7: Experiment 3, training time (B6.3)
 
 **Goal**: per-model, per-dataset training wall-clock with the
