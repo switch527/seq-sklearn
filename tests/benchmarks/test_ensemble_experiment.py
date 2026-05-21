@@ -861,21 +861,20 @@ def test_resolve_classification_classes_returns_none_when_all_shards_lack_proba(
     panel_row_index = np.array([0, 1, 2, 3])
     y_true = np.array([0, 1, 0, 1])
     y_pred = np.array([0, 1, 0, 1])
-    for model_name in ("model_a",):
-        key = cell_key(
-            dataset_name="ds_x",
-            model_name=model_name,
-            seed=0,
-            variant="default",
-            fold_index=0,
-        )
-        write_predictions(
-            tmp_path,
-            key,
-            panel_row_index=panel_row_index,
-            y_true=y_true,
-            y_pred=y_pred,
-        )
+    key = cell_key(
+        dataset_name="ds_x",
+        model_name="model_a",
+        seed=0,
+        variant="default",
+        fold_index=0,
+    )
+    write_predictions(
+        tmp_path,
+        key,
+        panel_row_index=panel_row_index,
+        y_true=y_true,
+        y_pred=y_pred,
+    )
     manifest = pd.DataFrame(
         [
             {
@@ -890,3 +889,182 @@ def test_resolve_classification_classes_returns_none_when_all_shards_lack_proba(
     )
     classes = _resolve_classification_classes(manifest, tmp_path, "ds_x")
     assert classes is None
+
+
+# --- R3 / qa-I1: `_resolve_classification_classes` mixed-proba
+# path (first shard no-proba, second shard has proba) returns from
+# the second iteration with the proba'd shard's class count. ---
+
+
+def test_resolve_classification_classes_returns_arange_from_second_shard_when_first_lacks_proba(
+    tmp_path: Path,
+) -> None:
+    from benchmarks.experiments.ensemble import _resolve_classification_classes
+    from benchmarks.manifest import cell_key
+    from benchmarks.predictions import write_predictions
+
+    panel_row_index = np.array([0, 1, 2])
+    y_true = np.array([0, 1, 2])
+    y_pred = np.array([0, 1, 2])
+    # First shard: no y_proba columns (a `supports_proba=False`
+    # classifier on this fold).
+    key_first = cell_key(
+        dataset_name="ds_y",
+        model_name="model_no_proba",
+        seed=0,
+        variant="default",
+        fold_index=0,
+    )
+    write_predictions(
+        tmp_path,
+        key_first,
+        panel_row_index=panel_row_index,
+        y_true=y_true,
+        y_pred=y_pred,
+    )
+    # Second shard: 3-class proba present.
+    key_second = cell_key(
+        dataset_name="ds_y",
+        model_name="model_with_proba",
+        seed=0,
+        variant="default",
+        fold_index=0,
+    )
+    proba_3 = np.eye(3)
+    write_predictions(
+        tmp_path,
+        key_second,
+        panel_row_index=panel_row_index,
+        y_true=y_true,
+        y_pred=y_pred,
+        y_proba=proba_3,
+    )
+    # Manifest must list both rows; sort_values to get a
+    # deterministic iteration order (the first row is the
+    # no-proba one).
+    manifest = pd.DataFrame(
+        [
+            {
+                "dataset_name": "ds_y",
+                "model_name": "model_no_proba",
+                "seed": 0,
+                "fold_index": 0,
+                "task_type": "multiclass",
+                "skipped_reason": None,
+            },
+            {
+                "dataset_name": "ds_y",
+                "model_name": "model_with_proba",
+                "seed": 0,
+                "fold_index": 0,
+                "task_type": "multiclass",
+                "skipped_reason": None,
+            },
+        ]
+    )
+    classes = _resolve_classification_classes(manifest, tmp_path, "ds_y")
+    # The helper must `continue` past the first no-proba shard and
+    # return `np.arange(3)` from the second; a `continue -> break`
+    # regression would return None.
+    assert classes is not None
+    np.testing.assert_array_equal(classes, np.arange(3))
+
+
+# --- R3 / qa-I2: `_render_top_n_summary` empty-ranked early-exit
+# fires on a regression-only manifest. ---
+
+
+def test_render_pairwise_markdown_omits_top_n_section_for_regression_only_manifest() -> None:
+    # Regression-point pairs carry `complementarity_score=None`
+    # (the proxy formula needs `disagreement_rate` which is
+    # classification-only); `_render_top_n_summary` filters those
+    # out and returns "". The end-to-end markdown should NOT
+    # contain the Top-N header.
+    manifest = pd.DataFrame(
+        [
+            {
+                "dataset_name": "ds_reg",
+                "model_a": "a",
+                "model_b": "b",
+                "task_type": "regression_point",
+                "seed": 0,
+                "fold_index": 0,
+                "skipped_reason": None,
+                "n_samples": 10,
+                "yule_q": None,
+                "phi": None,
+                "disagreement_rate": None,
+                "double_fault_rate": None,
+                "pearson_pred_corr": 0.5,
+                "spearman_pred_corr": 0.4,
+                "pearson_error_corr": 0.3,
+            }
+        ]
+    )
+    md = render_pairwise_markdown(manifest)
+    assert "Pairwise" in md
+    assert "ds_reg" in md
+    assert "Top-" not in md  # the regression-only branch omits Top-N
+
+
+# --- R3 / code-I1: stronger 12-class proba-sort assertion that
+# catches a column-reorder regression by actually checking the
+# proba matrix alignment. ---
+
+
+def test_proba_matrix_with_suffix_aligns_columns_with_class_index(tmp_path: Path) -> None:
+    # 12-class fixture where row k assigns probability 0.7 to
+    # class k and 0.3 to class (k+1) % 12. Under numeric sort,
+    # column k of the loaded matrix carries class k's probability
+    # for every row. Under lex sort (a regression), column 2 of
+    # the loaded matrix would carry class 10's probability instead,
+    # silently corrupting `_proba_matrix_with_suffix` for any caller
+    # that depends on column-index alignment.
+    import pandas as _pd
+    from benchmarks.experiments.ensemble import _proba_matrix_with_suffix
+    from benchmarks.manifest import cell_key
+    from benchmarks.predictions import load_predictions, write_predictions
+
+    n_classes = 12
+    panel_row_index = np.arange(n_classes, dtype=np.int64)
+    y_true = panel_row_index.copy()
+    y_pred = panel_row_index.copy()
+    proba = np.full((n_classes, n_classes), 0.0)
+    for i in range(n_classes):
+        proba[i, i] = 0.7
+        proba[i, (i + 1) % n_classes] = 0.3
+
+    for model_name in ("model_a", "model_b"):
+        key = cell_key(
+            dataset_name="ds_multi",
+            model_name=model_name,
+            seed=0,
+            variant="default",
+            fold_index=0,
+        )
+        write_predictions(
+            tmp_path,
+            key,
+            panel_row_index=panel_row_index,
+            y_true=y_true,
+            y_pred=y_pred,
+            y_proba=proba,
+        )
+    # Inner-join the two shards with the same suffix scheme the
+    # ensemble driver uses; then call `_proba_matrix_with_suffix`
+    # directly.
+    df_a = load_predictions(tmp_path, "ds_multi__model_a__seed_0__default__fold_0")
+    df_b = load_predictions(tmp_path, "ds_multi__model_b__seed_0__default__fold_0")
+    joined = df_a.merge(df_b, on="panel_row_index", how="inner", suffixes=("_a", "_b"))
+    matrix_a = _proba_matrix_with_suffix(joined, "_a")
+    assert matrix_a is not None
+    # Numeric sort: matrix_a[i, k] == proba[i, k] exactly.
+    # Lex sort would put column 2 at the y_proba_10 position;
+    # matrix_a[i, 2] would equal proba[i, 10] instead, which is 0.
+    # The diagonal assertion catches the corruption.
+    np.testing.assert_array_almost_equal(matrix_a, proba)
+    # Spot-check row 2: column 2 should be 0.7, column 3 should be 0.3.
+    assert matrix_a[2, 2] == pytest.approx(0.7)
+    assert matrix_a[2, 3] == pytest.approx(0.3)
+    # Avoid unused-import warnings if pandas is re-imported above.
+    del _pd
