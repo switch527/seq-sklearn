@@ -12,10 +12,14 @@ B8 ships the `seq_sklearn` module; GBM and TSC follow when those
 adapter families register (per `benchmarks/adapters/__init__.py`).
 """
 
-# Side-effect import: pulling `benchmarks.hpo.seq_sklearn` triggers
-# its `register_hpo_space(...)` call so `HPO_REGISTRY` is populated
-# before the HPO uplift driver inspects it.
-from benchmarks.hpo import seq_sklearn  # noqa: F401  # pyright: ignore[reportUnusedImport]
+# Side-effect import: pulling each `benchmarks.hpo.<family>`
+# module triggers its `register_hpo_space(...)` call so
+# `HPO_REGISTRY` is populated before the HPO uplift driver
+# inspects it.
+from benchmarks.hpo import (
+    gbm,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    seq_sklearn,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 from benchmarks.hpo._base import (
     HPO_REGISTRY,
     HPOFamilyNotRegisteredError,
