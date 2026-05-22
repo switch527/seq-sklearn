@@ -16,6 +16,8 @@ consumes. These tests pin:
   typed error.
 """
 
+from typing import Any
+
 import optuna
 import pytest
 from benchmarks.config import DatasetSpec, ModelSpec
@@ -157,9 +159,59 @@ def test_sample_seq_sklearn_rejects_unknown_model_name() -> None:
         sample_seq_sklearn_hyperparameters(trial, bad_model, spec)
 
 
+def test_sample_seq_sklearn_includes_quantiles_on_regression_quantile_task() -> None:
+    """Positive arm of the quantile branch: when the dataset task
+    IS regression_quantile, the wrapper must include the
+    `quantiles` kwarg in the returned dict (the adapter validator
+    requires it for the regression_quantile cell). qa-I2."""
+    spec = _dataset_spec(task_type="regression_quantile")
+    # `tft_regressor` is the seq_sklearn family's regression model.
+    model_spec = ModelSpec(
+        name="tft_regressor",
+        family="seq_sklearn",
+        task_types=("regression_point", "regression_quantile"),
+        supports_proba=False,
+        reason="test",
+    )
+    study = optuna.create_study()
+    trial = study.ask()
+    kwargs = sample_seq_sklearn_hyperparameters(trial, model_spec, spec)
+    assert "quantiles" in kwargs
+    assert kwargs["quantiles"] is not None
+
+
 # --- registry typed errors ---------------------------------------------------
 
 
 def test_get_hpo_space_unknown_family_raises_typed() -> None:
     with pytest.raises(HPOFamilyNotRegisteredError, match="no HPO search space"):
         get_hpo_space("tsc")  # not registered until B8-followup
+
+
+def test_register_hpo_space_conflict_raises() -> None:
+    """qa-I3: registering a second `HPOSpace` for the same family
+    with a different `search_space_size` (or sampler) must raise
+    `ValueError`. Idempotent re-registration of an identical
+    record is allowed; the conflict guard catches typos in
+    downstream HPO modules."""
+    from benchmarks.hpo._base import HPOSpace as _HPOSpace
+    from benchmarks.hpo._base import register_hpo_space
+
+    def _sampler1(trial: object, model_spec: object, dataset_spec: object) -> dict[str, Any]:
+        del trial, model_spec, dataset_spec
+        return {}
+
+    def _sampler2(trial: object, model_spec: object, dataset_spec: object) -> dict[str, Any]:
+        del trial, model_spec, dataset_spec
+        return {}
+
+    space_a = _HPOSpace(family="tsc", search_space_size=3, description="a")
+    space_b = _HPOSpace(family="tsc", search_space_size=5, description="b")
+    register_hpo_space(space_a, _sampler1)  # type: ignore[arg-type]
+    # Same record + same sampler is idempotent; no raise.
+    register_hpo_space(space_a, _sampler1)  # type: ignore[arg-type]
+    # Different record (or sampler) raises.
+    with pytest.raises(ValueError, match="already registered"):
+        register_hpo_space(space_b, _sampler1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="already registered"):
+        register_hpo_space(space_a, _sampler2)  # type: ignore[arg-type]

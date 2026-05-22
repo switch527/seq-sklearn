@@ -50,6 +50,7 @@ __all__ = [
     "PrimaryLossSelector",
     "UpliftRow",
     "aggregate_hpo_uplift",
+    "build_hpo_uplift_report",
     "render_from_dir",
     "render_hpo_uplift_markdown",
 ]
@@ -106,10 +107,15 @@ class UpliftRow(BaseModel):
     hpo_tier: str | None = None
     hpo_n_trials_completed_mean: float | None = None
     hpo_time_to_best_seconds_mean: float | None = None
-    # When only the default arm is present (no tuned cells), the
-    # row is a footnote candidate; the renderer dispatches on these.
+    # Footnote dispatch flags. `default_only` and `tuned_only` mean
+    # only one arm produced cells in the manifest;
+    # `paired_but_no_valid_loss` means cells from both arms exist
+    # but every paired (seed, fold) row had a missing primary loss
+    # (e.g., adapter crashed during refit). All three carry
+    # `delta is None`.
     default_only: bool = False
     tuned_only: bool = False
+    paired_but_no_valid_loss: bool = False
 
 
 class HPOUpliftReport(BaseModel):
@@ -205,6 +211,15 @@ def aggregate_hpo_uplift(
         if default_block.empty and tuned_block.empty:
             continue
         if default_block.empty:
+            # tuned_only group: the Friedman matrix still benefits
+            # from the tuned-arm seed-mean loss (design B7.5), so
+            # compute `tuned_mean` from the tuned_block even though
+            # no Δ is reportable. Without this, `_build_loss_matrix`
+            # drops the (model, dataset) cell and the Friedman
+            # omnibus understates its sample size (arch-I3).
+            tuned_losses = [_primary_loss_value(row, selector) for _, row in tuned_block.iterrows()]
+            tuned_losses_clean = [v for v in tuned_losses if v is not None]
+            tuned_mean = float(np.mean(tuned_losses_clean)) if tuned_losses_clean else None
             out.append(
                 UpliftRow(
                     dataset_name=str(dataset_name),
@@ -212,6 +227,7 @@ def aggregate_hpo_uplift(
                     task_type=str(task_type),
                     primary_loss_column=selector.column,
                     n_cells_paired=0,
+                    tuned_mean=tuned_mean,
                     tuned_only=True,
                 )
             )
@@ -273,6 +289,10 @@ def aggregate_hpo_uplift(
                 per_cell_time_to_best.append(float(time_to_best))
 
         if not per_cell_delta:
+            # Cells exist in both arms but every paired row had a
+            # missing primary loss. Surface the group via the
+            # footnote (`paired_but_no_valid_loss=True`) so a
+            # silent omission doesn't hide the data loss (arch-I4).
             out.append(
                 UpliftRow(
                     dataset_name=str(dataset_name),
@@ -280,12 +300,17 @@ def aggregate_hpo_uplift(
                     task_type=str(task_type),
                     primary_loss_column=selector.column,
                     n_cells_paired=len(common_keys),
+                    paired_but_no_valid_loss=True,
                 )
             )
             continue
 
         delta_arr = np.asarray(per_cell_delta, dtype=float)
-        delta_std: float | None = float(delta_arr.std(ddof=0)) if delta_arr.size > 1 else 0.0
+        # Sample std (`ddof=1`) is the convention for paired-cell
+        # spread in benchmark reports; a single paired cell has no
+        # spread so the std is None (mathematically undefined),
+        # not 0.0 (which would understate uncertainty). code-I3.
+        delta_std: float | None = float(delta_arr.std(ddof=1)) if delta_arr.size > 1 else None
 
         # Tuned-arm metadata: pull the search-space size + hpo_tier
         # from the FIRST tuned row in the group; both should be
@@ -442,11 +467,7 @@ def _render_dataset_block(dataset_name: str, summaries: list[UpliftRow]) -> str:
 
 def _render_footnote(rows: list[UpliftRow]) -> str:
     """Footnote listing groups where the Δ could not be computed."""
-    incomplete = [
-        r
-        for r in rows
-        if r.delta is None and (r.default_only or r.tuned_only or r.n_cells_paired == 0)
-    ]
+    incomplete = [r for r in rows if r.delta is None]
     if not incomplete:
         return ""
     lines = ["### Incomplete groups", ""]
@@ -457,6 +478,11 @@ def _render_footnote(rows: list[UpliftRow]) -> str:
             reason = "default arm only (no tuned cell in manifest)"
         elif row.tuned_only:
             reason = "tuned arm only (no default cell in manifest)"
+        elif row.paired_but_no_valid_loss:
+            reason = (
+                f"both arms present (n_cells_paired={row.n_cells_paired}) "
+                "but every paired row had missing primary loss"
+            )
         else:
             reason = "no (seed, fold) intersection between default and tuned"
         lines.append(f"| {row.dataset_name} | {row.model_name} | {reason} |")
@@ -497,6 +523,32 @@ def _render_friedman_block(friedman: FriedmanHolmResult) -> str:
     return "\n".join(lines)
 
 
+def build_hpo_uplift_report(
+    manifest: pd.DataFrame,
+    *,
+    reference_model: str = _DEFAULT_REFERENCE_MODEL,
+) -> HPOUpliftReport:
+    """Build the structured `HPOUpliftReport` from a manifest.
+
+    Aggregates default+tuned rows per (dataset, model) and runs the
+    Friedman/Holm matrix-level test against the configured
+    reference model. Returns the typed bundle for callers that want
+    structured access (the renderer wraps this for the Markdown
+    pass).
+
+    On an empty manifest the report has empty rows and `friedman`
+    is None.
+    """
+    rows = tuple(aggregate_hpo_uplift(manifest))
+    matrix = _build_loss_matrix(list(rows))
+    friedman: FriedmanHolmResult | None
+    if matrix.empty or reference_model not in matrix.index:
+        friedman = None
+    else:
+        friedman = friedman_holm(matrix, reference_model=reference_model)
+    return HPOUpliftReport(rows=rows, friedman=friedman, reference_model=reference_model)
+
+
 def render_hpo_uplift_markdown(
     manifest: pd.DataFrame,
     *,
@@ -514,7 +566,8 @@ def render_hpo_uplift_markdown(
             "`python -m benchmarks.run --experiment=raw_loss --config "
             "<config.toml>` followed by `--experiment=hpo_uplift`._\n"
         )
-    rows = aggregate_hpo_uplift(manifest)
+    report = build_hpo_uplift_report(manifest, reference_model=reference_model)
+    rows = list(report.rows)
     by_dataset: dict[str, list[UpliftRow]] = {}
     for row in rows:
         if row.delta is None:
@@ -533,10 +586,8 @@ def render_hpo_uplift_markdown(
     ]
     for dataset_name in sorted(by_dataset):
         parts.append(_render_dataset_block(dataset_name, by_dataset[dataset_name]))
-    matrix = _build_loss_matrix(rows)
-    friedman: FriedmanHolmResult | None
-    if matrix.empty or reference_model not in matrix.index:
-        friedman = None
+    if report.friedman is None:
+        matrix = _build_loss_matrix(rows)
         if matrix.empty:
             parts.append("_Friedman omnibus skipped: empty loss matrix._\n")
         else:
@@ -545,8 +596,7 @@ def render_hpo_uplift_markdown(
                 f"absent from matrix (have {sorted(matrix.index)})._\n"
             )
     else:
-        friedman = friedman_holm(matrix, reference_model=reference_model)
-        parts.append(_render_friedman_block(friedman))
+        parts.append(_render_friedman_block(report.friedman))
     footnote = _render_footnote(rows)
     if footnote:
         parts.append(footnote)

@@ -174,6 +174,50 @@ def test_friedman_holm_drops_nan_dataset_columns() -> None:
     assert result.friedman_statistic is not None
 
 
+def test_friedman_holm_post_nan_drop_below_two_datasets_returns_null() -> None:
+    """qa-C5 regression: if the NaN-column drop leaves fewer than 2
+    datasets, `friedman_holm` must return a null result instead of
+    handing scipy.friedmanchisquare an invalid input."""
+    # 3-model x 2-dataset matrix; both columns carry NaN -> drop
+    # leaves 0 -> null result.
+    matrix = pd.DataFrame(
+        {
+            "ds_a": [float("nan"), 0.40, 0.50],
+            "ds_b": [0.30, float("nan"), 0.45],
+        },
+        index=pd.Index(["m_ref", "m_a", "m_b"]),
+    )
+    result = friedman_holm(matrix, reference_model="m_ref")
+    assert result.friedman_statistic is None
+    assert result.friedman_p_value is None
+    assert result.pairwise == ()
+    assert result.n_datasets == 0
+
+
+def test_friedman_holm_minimum_input_three_models_two_datasets() -> None:
+    """qa-N1 + scipy contract: scipy.friedmanchisquare requires at
+    least 3 samples (3 models / treatments). The guard accepts
+    `n_models >= 3, n_datasets >= 2` (the minimum valid input);
+    two models is null-result by design."""
+    # 3 models, 2 datasets -> valid Friedman input.
+    matrix_valid = pd.DataFrame(
+        {"ds_a": [0.5, 0.4, 0.3], "ds_b": [0.6, 0.3, 0.2]},
+        index=pd.Index(["m_ref", "m_a", "m_b"]),
+    )
+    result = friedman_holm(matrix_valid, reference_model="m_ref")
+    assert result.n_models == 3
+    assert result.n_datasets == 2
+    assert result.friedman_statistic is not None
+    # 2 models -> below the scipy minimum -> null result.
+    matrix_too_few = pd.DataFrame(
+        {"ds_a": [0.5, 0.4], "ds_b": [0.6, 0.3]},
+        index=pd.Index(["m_ref", "m_a"]),
+    )
+    null_result = friedman_holm(matrix_too_few, reference_model="m_ref")
+    assert null_result.n_models == 2
+    assert null_result.friedman_statistic is None
+
+
 def test_friedman_holm_all_zero_diffs_yield_neutral_pvalue() -> None:
     # ref equals m_a on every dataset; the Wilcoxon helper should
     # surface 1.0 (neutral) instead of raising.

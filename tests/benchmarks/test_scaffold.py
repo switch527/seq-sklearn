@@ -642,10 +642,16 @@ def test_main_training_time_dispatch_writes_report_and_returns_zero(
 
 
 def test_benchmarks_package_does_not_import_seq_sklearn_internals() -> None:
-    """Walk every `benchmarks/**/*.py` AST and reject any import that
-    reaches into a `seq_sklearn._*` module. Phase B0 has no
-    `seq_sklearn` imports yet, but the gate is the canary for
-    later phases (B2 imports the facade)."""
+    """Walk every `benchmarks/**/*.py` AST and reject any import
+    that reaches into a private `seq_sklearn` component at any
+    depth.
+
+    Original R1 version checked only the second dot-component
+    (catching `seq_sklearn._foo` but NOT `seq_sklearn.models._classifier`).
+    B8 R1 (arch-C1) caught the gap; the tighter form below walks
+    every component after `seq_sklearn` so any underscore-prefixed
+    submodule, sub-package, or member raises.
+    """
     import ast
 
     root = Path(benchmarks.__file__).resolve().parent
@@ -667,10 +673,13 @@ def test_benchmarks_package_does_not_import_seq_sklearn_internals() -> None:
             for mod in mods:
                 if not mod.startswith("seq_sklearn."):
                     continue
-                head = mod.split(".", 2)[1]
-                if head.startswith("_"):
+                # Walk EVERY component after `seq_sklearn`. A leak is
+                # any component (any depth) starting with `_`.
+                parts = mod.split(".")[1:]
+                if any(p.startswith("_") for p in parts):
                     leaked.append(f"{py.relative_to(root.parent)}: {mod}")
     assert not leaked, (
         f"benchmarks/ must consume the library via the public facade "
-        f"only; deep imports into seq_sklearn._* found: {leaked}"
+        f"only; deep imports into private seq_sklearn components found: "
+        f"{leaked}"
     )

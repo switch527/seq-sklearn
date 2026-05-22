@@ -7,9 +7,12 @@ adapter via its `hyperparameters=` channel.
 The library's `suggest_params` requires a `base` config carrying
 the required non-search fields (TFT's `tabular_config` in
 particular). This module builds that base from the harness's
-`DatasetSpec`, calls `suggest_params`, and converts the sampled
-nested sub-configs (`loss`, `sampler`, `optimizer`) to their
-sklearn-Params equivalents the adapter expects.
+`DatasetSpec`, calls `suggest_params` with `task_type=` pinned to
+the dataset's task (so the sampler does not waste trials on
+F5 cells that would be rejected when the adapter rebinds task
+from the spec), and converts the sampled nested sub-configs
+(`loss`, `sampler`, `optimizer`) to their sklearn-Params
+equivalents the adapter expects.
 
 Adapter contract carryover (`benchmarks/adapters/seq_sklearn.py`
 `_LOCKED_HYPERPARAMETER_KEYS`): the adapter rejects
@@ -22,10 +25,12 @@ non-search field exclusion in `suggest_params`.
 
 B6.4.0 disclosure: the reported `search_space_size` is the
 library's STABLE-field dimensionality (count of independent
-suggest_params calls in the default search). The number reports
-the dimensionality; the actual cardinality depends on conditional
-cells (loss legality per task_type, head divisors per hidden_size)
-and is intentionally not normalized cross-family per design.
+suggest_params calls in the default search) with `task_type`
+removed from the count because the harness pins it. The number
+reports the dimensionality; the actual cardinality depends on
+conditional cells (loss legality per task_type, head divisors per
+hidden_size) and is intentionally not normalized cross-family per
+design.
 """
 
 import logging
@@ -33,7 +38,9 @@ from typing import Any, cast
 
 import optuna
 
-from benchmarks.adapters.seq_sklearn import _build_tabular_config
+from benchmarks.adapters.seq_sklearn import (
+    _build_tabular_config,  # pyright: ignore[reportPrivateUsage]
+)
 from benchmarks.config import DatasetSpec, ModelSpec
 from benchmarks.hpo._base import HPOSpace, register_hpo_space
 from seq_sklearn import (
@@ -41,13 +48,10 @@ from seq_sklearn import (
     OptimizerParams,
     SamplerParams,
     TFTClassifier,
+    TFTConfig,
     TFTRegressor,
     suggest_params,
 )
-from seq_sklearn.config.loss import LossConfig
-from seq_sklearn.config.tft import TFTConfig
-from seq_sklearn.models._classifier import BaseSequenceClassifier
-from seq_sklearn.models._regressor import BaseSequenceRegressor
 
 __all__ = ["sample_seq_sklearn_hyperparameters"]
 
@@ -56,16 +60,23 @@ logger = logging.getLogger(__name__)
 
 
 # Library's STABLE-field search space size (B6.4.0 disclosure):
-# - F5-governed quartet: task_type, loss.strategy, sampler.strategy,
-#   calibration_strategy (4)
+# - F5-governed triplet conditional on the pinned task_type:
+#   loss.strategy, sampler.strategy, calibration_strategy (3)
 # - optimizer: learning_rate, weight_decay (2)
 # - TFT model shape: hidden_size, attention_heads, dropout,
 #   variable_selection_dropout, prediction_readout (5)
-# Total: 11.
-_SEQ_SKLEARN_SEARCH_SPACE_SIZE = 11
+# Total: 10. task_type is NOT in the count because the harness
+# pins it from the dataset spec via `suggest_params(..., task_type=)`.
+_SEQ_SKLEARN_SEARCH_SPACE_SIZE = 10
 
 
-_MODEL_CLASS_BY_NAME: dict[str, type[BaseSequenceClassifier | BaseSequenceRegressor]] = {
+# Public concrete-model dispatch table; the seq_sklearn family
+# exposes TFTClassifier + TFTRegressor through its public façade,
+# so the harness sticks to those types and does not import the
+# private BaseSequenceClassifier / BaseSequenceRegressor base
+# types. A future seq_sklearn estimator added to the façade only
+# needs an entry here.
+_MODEL_CLASS_BY_NAME: dict[str, type[TFTClassifier] | type[TFTRegressor]] = {
     "tft_classifier": TFTClassifier,
     "tft_regressor": TFTRegressor,
 }
@@ -73,9 +84,10 @@ _MODEL_CLASS_BY_NAME: dict[str, type[BaseSequenceClassifier | BaseSequenceRegres
 
 # Per-task placeholder loss strategy for the `base` config the
 # library's `suggest_params` requires. The sampler always overrides
-# `loss.strategy` from the F5-legal set for the sampled task_type,
+# `loss.strategy` from the F5-legal set for the pinned task_type,
 # so these placeholders are read only by the pydantic constructor
-# at `base` build time.
+# at `base` build time. Passed as a dict to TFTConfig to avoid
+# importing the non-public `LossConfig` type.
 _PLACEHOLDER_LOSS_BY_TASK: dict[str, str] = {
     "binary": "cross_entropy",
     "multiclass": "cross_entropy",
@@ -98,7 +110,7 @@ def _placeholder_base(dataset_spec: DatasetSpec) -> TFTConfig:
     kwargs: dict[str, Any] = {
         "task_type": dataset_spec.task_type,
         "tabular_config": tab,
-        "loss": LossConfig(strategy=placeholder_loss),  # type: ignore[arg-type]
+        "loss": {"strategy": placeholder_loss},
     }
     # `regression_quantile` task requires `quantiles` on the parent
     # validator (non-quantile tasks reject it). suggest_params
@@ -117,10 +129,15 @@ def sample_seq_sklearn_hyperparameters(
     """Sample one trial's hyperparameters for a seq_sklearn model.
 
     Pins `task_type` and `tabular_config` to `dataset_spec` so the
-    harness's fixed-task / fixed-tabular-config contract holds; the
-    F5-governed loss / sampler / calibration cell is still sampled
-    by the library. Returns adapter-ready kwargs (sklearn-Params
-    sub-configs, the locked-keys stripped).
+    harness's fixed-task / fixed-tabular-config contract holds.
+    `task_type` is threaded through the library's `suggest_params`
+    kwarg so the F5 conditional sampling (loss / sampler /
+    calibration) only explores cells legal for the pinned task;
+    the trial budget is not wasted on cells that would be rejected
+    when the adapter rebinds task from the spec.
+
+    Returns adapter-ready kwargs (sklearn-Params sub-configs, the
+    locked-keys stripped).
 
     Raises:
         ValueError: `model_spec.family` is not `seq_sklearn`.
@@ -140,7 +157,10 @@ def sample_seq_sklearn_hyperparameters(
             f"has no class entry; registered: {sorted(_MODEL_CLASS_BY_NAME)}"
         )
     base = _placeholder_base(dataset_spec)
-    sampled = cast(TFTConfig, suggest_params(trial, model_class, base=base))
+    sampled = cast(
+        TFTConfig,
+        suggest_params(trial, model_class, base=base, task_type=dataset_spec.task_type),
+    )
     kwargs: dict[str, Any] = {
         # F5-sampled sub-configs converted to the sklearn-Params
         # form the adapter forwards to the estimator.
@@ -164,14 +184,14 @@ _SEQ_SKLEARN_SPACE = HPOSpace(
     family="seq_sklearn",
     search_space_size=_SEQ_SKLEARN_SEARCH_SPACE_SIZE,
     description=(
-        "library's STABLE-field default search: F5-governed quartet "
-        "(task_type, loss.strategy, sampler.strategy, calibration_"
-        "strategy) plus optimizer.learning_rate, optimizer.weight_"
-        "decay, and the TFT model-shape fields (hidden_size, "
-        "attention_heads, dropout, variable_selection_dropout, "
-        "prediction_readout). task_type and tabular_config are "
-        "pinned by the dataset spec at trial time; scheduler is "
-        "bound by the adapter to the harness default."
+        "library's STABLE-field default search with task_type pinned "
+        "to the dataset spec: F5-governed triplet (loss.strategy, "
+        "sampler.strategy, calibration_strategy) conditioned on the "
+        "task, plus optimizer.learning_rate, optimizer.weight_decay, "
+        "and the TFT model-shape fields (hidden_size, attention_"
+        "heads, dropout, variable_selection_dropout, prediction_"
+        "readout). tabular_config is pinned by the spec; scheduler "
+        "is bound by the adapter to the harness default."
     ),
 )
 register_hpo_space(_SEQ_SKLEARN_SPACE, sample_seq_sklearn_hyperparameters)

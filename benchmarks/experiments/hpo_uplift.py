@@ -404,19 +404,13 @@ def _run_hpo_study(
     sampler = optuna.samplers.TPESampler(seed=seed)
     study = optuna.create_study(direction="minimize", sampler=sampler)
 
-    # Per-trial timestamps drive the `time_to_best` metric.
-    study_start = time.perf_counter()
-    best_trial_started_at: float | None = None
     best_val_loss: float | None = None
     best_trial_number: int | None = None
     best_hyperparameters: dict[str, Any] | None = None
     n_completed = 0
-    n_pruned = 0
 
     def _objective(trial: optuna.trial.Trial) -> float:
-        nonlocal best_trial_started_at, best_val_loss, best_trial_number, best_hyperparameters
-        nonlocal n_completed
-        trial_started = time.perf_counter()
+        nonlocal best_val_loss, best_trial_number, best_hyperparameters, n_completed
         # The sampler is expected to delegate F8 wrapping to the
         # library (`ConfigError` -> `TrialPruned` via
         # `optuna_trial_guard`). A `ValueError` here is the legacy
@@ -457,7 +451,6 @@ def _run_hpo_study(
         if best_val_loss is None or val_loss < best_val_loss:
             best_val_loss = val_loss
             best_trial_number = trial.number
-            best_trial_started_at = trial_started
             best_hyperparameters = dict(hyperparameters)
         return val_loss
 
@@ -473,33 +466,8 @@ def _run_hpo_study(
     # counter inside `_objective` only increments on COMPLETE. Count
     # the pruned trials here.
     n_pruned = sum(1 for t in study.trials if t.state == optuna.trial.TrialState.PRUNED)
-    time_to_best: float | None
-    if best_trial_started_at is None:
-        time_to_best = None
-    else:
-        time_to_best = max(0.0, best_trial_started_at - study_start)
-    del time_to_best  # superseded: reportable as (trial_done_at - study_start)
-    # The "time to best" the design B6.4.1 names is the wall-clock
-    # from study start until the best trial's COMPLETE timestamp,
-    # not until its start. Recompute from the trial datetime fields.
-    if best_trial_number is None:
-        time_to_best_final: float | None = None
-    else:
-        best_trial = study.trials[best_trial_number]
-        if best_trial.datetime_start is None or best_trial.datetime_complete is None:
-            time_to_best_final = None
-        else:
-            best_complete = best_trial.datetime_complete
-            # `study_start` is a `time.perf_counter()` reading; the
-            # trial datetimes are wall-clock. Use the trial's
-            # (complete - start) wall delta and approximate study-
-            # start as the first trial's `datetime_start` to bridge
-            # the two clocks.
-            first_trial_start = study.trials[0].datetime_start
-            if first_trial_start is None:
-                time_to_best_final = None
-            else:
-                time_to_best_final = (best_complete - first_trial_start).total_seconds()
+
+    time_to_best_final = _time_to_best_seconds(study, best_trial_number)
 
     return (
         study,
@@ -510,6 +478,29 @@ def _run_hpo_study(
         best_val_loss,
         best_hyperparameters,
     )
+
+
+def _time_to_best_seconds(study: optuna.Study, best_trial_number: int | None) -> float | None:
+    """Compute wall-clock seconds from study start to the best
+    trial's completion (design B6.4.1 "time-to-best-trial").
+
+    Uses Optuna's `datetime_start` on the first trial as the
+    study-start anchor and `datetime_complete` on the best trial.
+    Returns None when either timestamp is absent or no trial
+    completed (`best_trial_number is None`). Looks up the best
+    trial by trial-number (not by list position) so a future
+    parallel/distributed study cannot scramble the lookup
+    (code-I1).
+    """
+    if best_trial_number is None or not study.trials:
+        return None
+    first_trial_start = study.trials[0].datetime_start
+    if first_trial_start is None:
+        return None
+    best_trial = next((t for t in study.trials if t.number == best_trial_number), None)
+    if best_trial is None or best_trial.datetime_complete is None:
+        return None
+    return (best_trial.datetime_complete - first_trial_start).total_seconds()
 
 
 def _run_one_hpo_cell(

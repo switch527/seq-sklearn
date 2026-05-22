@@ -8,7 +8,6 @@ without requiring the seq_sklearn TFT estimator at smoke-test
 speed.
 """
 
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +22,12 @@ from benchmarks.experiments import (
     run_hpo_uplift,
     run_raw_loss,
 )
-from benchmarks.hpo._base import HPO_REGISTRY, HPOSpace, register_hpo_space
+from benchmarks.hpo._base import (  # pyright: ignore[reportPrivateUsage]
+    _HPO_SAMPLERS,
+    HPO_REGISTRY,
+    HPOSpace,
+    register_hpo_space,
+)
 from benchmarks.manifest import load_run
 from benchmarks.report.hpo_uplift import (
     aggregate_hpo_uplift,
@@ -54,11 +58,12 @@ def _passthrough_sampler(
 
 
 @pytest.fixture
-def fake_registry_and_hpo() -> Iterator[list[PanelDataset]]:
+def fake_registry_and_hpo() -> list[PanelDataset]:
     """Register the synthetic dataset/model registry AND a fake HPO
-    space for the `sklearn_passthrough` family. The HPO registry is
-    process-global, so the cleanup function unregisters at the end
-    of every test that uses this fixture."""
+    space for the `sklearn_passthrough` family. The autouse
+    `isolated_registry` fixture in conftest.py snapshots+restores
+    `HPO_REGISTRY` + `_HPO_SAMPLERS` (Phase B8 R1 arch-I6), so this
+    fixture does not need a manual teardown."""
     panels = register_all_fakes_and_get_panels()
     space = HPOSpace(
         family="sklearn_passthrough",
@@ -66,16 +71,7 @@ def fake_registry_and_hpo() -> Iterator[list[PanelDataset]]:
         description="fake passthrough space; one learning_rate float",
     )
     register_hpo_space(space, _passthrough_sampler)
-    yield panels
-    # The registry is module-global; tear it down so a later test
-    # (test_hpo_seq_sklearn.py's `test_get_hpo_space_unknown_family_raises_typed`,
-    # in particular) doesn't see the fake registration. The
-    # `register_hpo_space` API has no `unregister` to keep its
-    # surface minimal, so we mutate the dict directly here.
-    HPO_REGISTRY.pop("sklearn_passthrough", None)
-    from benchmarks.hpo._base import _HPO_SAMPLERS
-
-    _HPO_SAMPLERS.pop("sklearn_passthrough", None)
+    return panels
 
 
 def _make_config(
@@ -163,10 +159,9 @@ def test_run_hpo_uplift_skips_unregistered_family(
     driver records a typed `skipped_reason` instead of crashing."""
     del fake_registry_and_hpo
     # Unregister the passthrough HPO space so `fake_constant_binary`
-    # has no search space available.
+    # has no search space available; conftest's `isolated_registry`
+    # restores both dicts after the test.
     HPO_REGISTRY.pop("sklearn_passthrough", None)
-    from benchmarks.hpo._base import _HPO_SAMPLERS
-
     _HPO_SAMPLERS.pop("sklearn_passthrough", None)
 
     config = _make_config(
@@ -297,3 +292,204 @@ def test_aggregate_hpo_uplift_emits_default_only_sentinel(
     assert row.default_only is True
     assert row.delta is None
     assert row.n_cells_paired == 0
+
+
+# --- qa-C1: regression_quantile early skip ----------------------------------
+
+
+def test_run_hpo_uplift_skips_regression_quantile_cells(
+    fake_registry_and_hpo: list[PanelDataset], tmp_path: Path
+) -> None:
+    """B5-followup carryover: regression_quantile cells skip cleanly
+    with the typed `regression_quantile_b5_followup` reason. The
+    counter at the driver's tally site must NOT lump them into
+    `cells_skipped_adapter_error` (which would silently merge
+    unfitted cells into the Δ table)."""
+    del fake_registry_and_hpo
+    # Register a passthrough HPO space for sklearn_passthrough so
+    # the quantile model is otherwise eligible.
+    config = _make_config(
+        datasets=("fake_regression_quantile",),
+        models=("fake_quantile_regressor",),
+        seeds=(0,),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    run_raw_loss(config, output_root=output_root, env=env)
+    result = run_hpo_uplift(config, output_root=output_root, env=env)
+    # All 5 folds skip with the quantile-followup reason; nothing
+    # else (adapter_error in particular) should fire.
+    assert result.cells_attempted == 0
+    assert result.cells_skipped_quantile_followup == 5
+    assert result.cells_skipped_adapter_error == 0
+    # The written rows carry the typed reason.
+    manifest = load_run(output_root)
+    tuned_rows = manifest.loc[manifest["variant"] == "tuned"]
+    assert (
+        tuned_rows["skipped_reason"]
+        .astype(str)
+        .str.startswith("regression_quantile_b5_followup")
+        .all()
+    )
+
+
+# --- qa-C2: hpo_all_trials_pruned -------------------------------------------
+
+
+def _always_raising_sampler(
+    trial: optuna.trial.BaseTrial, model_spec: Any, dataset_spec: Any
+) -> dict[str, Any]:
+    """Sampler whose every trial body raises `ValueError` (the
+    legacy "illegal cell" signal the driver converts to
+    `TrialPruned`)."""
+    del trial, model_spec, dataset_spec
+    raise ValueError("forced prune for test")
+
+
+def test_run_hpo_uplift_records_all_trials_pruned_when_sampler_always_raises(
+    tmp_path: Path,
+) -> None:
+    """Force every trial to prune (sampler raises ValueError ->
+    TrialPruned) so `best_hyperparameters` stays None. The driver
+    must record the cell with `hpo_all_trials_pruned` and zero
+    completed trials, never crash on a None-config refit."""
+    register_all_fakes_and_get_panels()
+    # Replace the default passthrough HPO space with one whose
+    # sampler always prunes.
+    HPO_REGISTRY.pop("sklearn_passthrough", None)
+    _HPO_SAMPLERS.pop("sklearn_passthrough", None)
+    space = HPOSpace(
+        family="sklearn_passthrough",
+        search_space_size=1,
+        description="always-pruning fake",
+    )
+    register_hpo_space(space, _always_raising_sampler)
+
+    config = _make_config(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        seeds=(0,),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+        n_trials=2,
+        timeout_seconds=30.0,
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    run_raw_loss(config, output_root=output_root, env=env)
+    result = run_hpo_uplift(config, output_root=output_root, env=env)
+    # All 5 folds get the all-pruned skip; no cell attempts a refit.
+    assert result.cells_attempted == 0
+    assert result.cells_skipped_hpo_all_trials_pruned == 5
+
+
+# --- qa-C4: tuned_only sentinel ---------------------------------------------
+
+
+def test_aggregate_hpo_uplift_emits_tuned_only_sentinel() -> None:
+    """A manifest with only `variant="tuned"` OK rows must yield a
+    `tuned_only=True` sentinel so the renderer footnote can list
+    the (dataset, model) group. arch-I3 ALSO requires the sentinel
+    to carry a populated `tuned_mean` so the Friedman matrix
+    includes the cell."""
+    manifest = pd.DataFrame(
+        [
+            {
+                "library_git_sha": "abc",
+                "run_id": "r1",
+                "started_at_utc": "2026-01-01T00:00:00+00:00",
+                "dataset_name": "ds_x",
+                "model_name": "m_y",
+                "seed": 0,
+                "variant": "tuned",
+                "task_type": "binary",
+                "fold_index": 0,
+                "n_folds": 1,
+                "split_fingerprint": "0" * 64,
+                "l_resolved": 8,
+                "hardware_tier": "cpu",
+                "profile": "smoke",
+                "hpo_tier": "custom",
+                "skipped_reason": None,
+                "log_loss": 0.42,
+                "hpo_n_trials_completed": 2,
+                "hpo_search_space_size": 1,
+            }
+        ]
+    )
+    rows = aggregate_hpo_uplift(manifest)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.tuned_only is True
+    assert row.delta is None
+    assert row.tuned_mean == pytest.approx(0.42)
+
+
+# --- qa-I1: _resolve_hpo_budget override branches ---------------------------
+
+
+def test_resolve_hpo_budget_n_trials_only_override_sets_custom_tier() -> None:
+    from benchmarks.config import ExperimentSpec
+    from benchmarks.experiments.hpo_uplift import (
+        _resolve_hpo_budget,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    specs = [ExperimentSpec(kind="hpo_uplift", seeds=(0,), n_trials=5)]
+    n_trials, timeout_seconds, tier = _resolve_hpo_budget(specs, "smoke")
+    assert n_trials == 5
+    # smoke profile default timeout is 0.0; override flips tier.
+    assert tier == "custom"
+    # timeout untouched -> smoke default (0.0).
+    assert timeout_seconds == 0.0
+
+
+def test_resolve_hpo_budget_timeout_only_override_sets_custom_tier() -> None:
+    from benchmarks.config import ExperimentSpec
+    from benchmarks.experiments.hpo_uplift import (
+        _resolve_hpo_budget,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    specs = [ExperimentSpec(kind="hpo_uplift", seeds=(0,), timeout_seconds=60.0)]
+    n_trials, timeout_seconds, tier = _resolve_hpo_budget(specs, "standard")
+    # n_trials untouched -> standard default (25).
+    assert n_trials == 25
+    assert timeout_seconds == 60.0
+    assert tier == "custom"
+
+
+def test_resolve_hpo_budget_unknown_profile_falls_back_to_zero() -> None:
+    from benchmarks.experiments.hpo_uplift import (
+        _resolve_hpo_budget,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    n_trials, timeout_seconds, tier = _resolve_hpo_budget([], "nonexistent_profile")
+    assert n_trials == 0
+    assert timeout_seconds == 0.0
+    assert tier == "none"
+
+
+# --- qa-I4: reference_model absent from matrix ------------------------------
+
+
+def test_render_hpo_uplift_markdown_absent_reference_model_emits_skip_note(
+    fake_registry_and_hpo: list[PanelDataset], tmp_path: Path
+) -> None:
+    del fake_registry_and_hpo
+    config = _make_config(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        seeds=(0,),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    run_raw_loss(config, output_root=output_root, env=env)
+    run_hpo_uplift(config, output_root=output_root, env=env)
+    md = render_from_dir(output_root, reference_model="absent_model_name")
+    # The Friedman block emits a skip note when the reference is
+    # not in the matrix.
+    assert "Friedman omnibus skipped" in md
+    assert "absent_model_name" in md

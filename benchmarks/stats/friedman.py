@@ -154,12 +154,13 @@ def friedman_holm(
     """Friedman omnibus + Wilcoxon-signed-rank pairwise (vs reference)
     with Holm correction.
 
-    The omnibus needs at least 2 models and 2 datasets; below that
-    the result is returned with the structural fields populated but
-    `friedman_statistic` and `friedman_p_value` as ``None`` and
-    `pairwise` empty. Datasets with any NaN cell are dropped from
-    the matrix before both tests; if fewer than 2 datasets remain,
-    the same null-result shape is returned.
+    The omnibus needs at least 3 models (scipy
+    `friedmanchisquare`'s documented minimum) and 2 datasets; below
+    that the result is returned with the structural fields
+    populated but `friedman_statistic` and `friedman_p_value` as
+    ``None`` and `pairwise` empty. Datasets with any NaN cell are
+    dropped from the matrix before both tests; if fewer than 2
+    datasets remain, the same null-result shape is returned.
 
     The pairwise comparisons are between `reference_model` and every
     other model in the matrix. `family_size` is the number of
@@ -186,7 +187,7 @@ def friedman_holm(
             f"friedman_holm: reference_model {reference_model!r} not in matrix.index={models}"
         )
 
-    if n_models < 2 or n_datasets_in < 2:
+    if n_models < 3 or n_datasets_in < 2:
         return FriedmanHolmResult(
             n_models=n_models,
             n_datasets=n_datasets_in,
