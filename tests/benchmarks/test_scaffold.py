@@ -595,6 +595,40 @@ def test_main_returns_one_when_driver_raises_value_error(tmp_path: Path) -> None
     assert rc == 1
 
 
+def test_main_corrupt_manifest_returns_one_on_resume(tmp_path: Path) -> None:
+    """B9 R2 close-out (code-IMP + qa-IMP-A): a corrupt
+    `run_manifest.json` (e.g., a truncated write from a hard crash
+    mid-rename, which `atomic_write_bytes` makes vanishingly
+    unlikely but is still in the recovery path) must propagate the
+    `load_run_manifest` ValueError to a clean exit 1. Without the
+    CLI's try/except at `run.py`, a corrupt manifest produces a
+    Python traceback; pin the clean exit so a future refactor
+    cannot regress the contract."""
+    from tests.benchmarks._fakes import register_all_fakes_and_get_panels
+
+    register_all_fakes_and_get_panels()
+    output_dir = tmp_path / "out"
+    output_dir.mkdir(parents=True)
+    # Seed a corrupt manifest BEFORE the CLI runs so the resume
+    # path tries to load it and trips the JSON parse guard.
+    (output_dir / "run_manifest.json").write_text("not valid json }{{")
+    cache_dir = tmp_path / "cache"
+    config_path = tmp_path / "benchmark.toml"
+    config_path.write_text(
+        'datasets = ["fake_binary"]\n'
+        'models = ["fake_constant_binary"]\n'
+        f'output_dir = "{output_dir}"\n'
+        f'cache_dir = "{cache_dir}"\n'
+        "\n"
+        "[[experiments]]\n"
+        'kind = "raw_loss"\n'
+        "seeds = [0]\n",
+        encoding="utf-8",
+    )
+    rc = main(["--config", str(config_path), "--experiment", "raw_loss"])
+    assert rc == 1
+
+
 def test_main_resume_after_crash_preserves_run_id(tmp_path: Path) -> None:
     """B9 arch-C1 close: an existing `run_manifest.json` (left
     behind by a crashed previous run) must NOT be overwritten with
