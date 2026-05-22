@@ -473,6 +473,130 @@ def test_resolve_hpo_budget_unknown_profile_falls_back_to_zero() -> None:
 # --- qa-I4: reference_model absent from matrix ------------------------------
 
 
+def test_aggregate_hpo_uplift_emits_paired_but_no_valid_loss_sentinel() -> None:
+    """R2 qa-I1 + arch-I4: when both default and tuned arms have OK
+    rows for the same (seed, fold) key but every paired primary
+    loss is missing (e.g., a refit crashed mid-fit so
+    log_loss is None on the tuned row), the aggregator emits a
+    `paired_but_no_valid_loss=True` sentinel. The footnote then
+    surfaces the group; previously the row vanished from both the
+    per-dataset block AND the footnote (silent data loss)."""
+    rows = [
+        # Default OK row with log_loss=None to simulate a missing
+        # primary loss on a non-skipped cell.
+        {
+            "library_git_sha": "abc",
+            "run_id": "r1",
+            "started_at_utc": "2026-01-01T00:00:00+00:00",
+            "dataset_name": "ds_x",
+            "model_name": "m_y",
+            "seed": 0,
+            "variant": "default",
+            "task_type": "binary",
+            "fold_index": 0,
+            "n_folds": 1,
+            "split_fingerprint": "0" * 64,
+            "l_resolved": 8,
+            "hardware_tier": "cpu",
+            "profile": "smoke",
+            "hpo_tier": "none",
+            "skipped_reason": None,
+            "log_loss": None,
+        },
+        {
+            "library_git_sha": "abc",
+            "run_id": "r1",
+            "started_at_utc": "2026-01-01T00:00:00+00:00",
+            "dataset_name": "ds_x",
+            "model_name": "m_y",
+            "seed": 0,
+            "variant": "tuned",
+            "task_type": "binary",
+            "fold_index": 0,
+            "n_folds": 1,
+            "split_fingerprint": "0" * 64,
+            "l_resolved": 8,
+            "hardware_tier": "cpu",
+            "profile": "smoke",
+            "hpo_tier": "custom",
+            "skipped_reason": None,
+            "log_loss": None,
+        },
+    ]
+    manifest = pd.DataFrame(rows)
+    out = aggregate_hpo_uplift(manifest)
+    assert len(out) == 1
+    row = out[0]
+    assert row.paired_but_no_valid_loss is True
+    assert row.delta is None
+    assert row.n_cells_paired == 1
+    # The footnote must render the typed reason for the group.
+    md = render_hpo_uplift_markdown(manifest)
+    assert "both arms present" in md
+    assert "every paired row had missing primary loss" in md
+
+
+def test_render_hpo_uplift_markdown_renders_pairwise_block_when_matrix_has_three_models() -> None:
+    """R2 qa-I3: the Friedman pairwise table only renders when
+    `friedman.pairwise` is non-empty (>= 3 models in the matrix
+    per scipy's friedmanchisquare minimum). The default e2e
+    fixture has 1 model so the pairwise renderer's table-emit
+    branch is untested unless a hand-crafted manifest reaches
+    it. Pin the block + Holm column by passing three (model,
+    dataset) cells with two datasets each."""
+    base = {
+        "library_git_sha": "abc",
+        "run_id": "r1",
+        "started_at_utc": "2026-01-01T00:00:00+00:00",
+        "task_type": "binary",
+        "fold_index": 0,
+        "n_folds": 1,
+        "seed": 0,
+        "split_fingerprint": "0" * 64,
+        "l_resolved": 8,
+        "hardware_tier": "cpu",
+        "profile": "smoke",
+        "hpo_tier": "custom",
+        "variant": "tuned",
+        "skipped_reason": None,
+    }
+    rows: list[dict[str, Any]] = []
+    losses = {
+        ("m_ref", "ds_a"): 0.50,
+        ("m_ref", "ds_b"): 0.55,
+        ("m_a", "ds_a"): 0.40,
+        ("m_a", "ds_b"): 0.45,
+        ("m_b", "ds_a"): 0.30,
+        ("m_b", "ds_b"): 0.35,
+    }
+    for (model_name, dataset_name), loss in losses.items():
+        row = {**base, "model_name": model_name, "dataset_name": dataset_name, "log_loss": loss}
+        rows.append(row)
+    manifest = pd.DataFrame(rows)
+    md = render_hpo_uplift_markdown(manifest, reference_model="m_ref")
+    # The Friedman block renders the χ² stat + the Holm pairwise
+    # table; the latter has one row per non-reference model.
+    assert "Matrix-level Friedman + Holm" in md
+    assert "Friedman χ²" in md
+    assert "Holm-adjusted pairwise" in md
+    assert "m_ref vs m_a" in md
+    assert "m_ref vs m_b" in md
+
+
+def test_time_to_best_seconds_returns_none_on_no_best_trial() -> None:
+    """R2 code-I1 / qa-I2: `_time_to_best_seconds` short-circuits
+    to None when no trial completed (best_trial_number is None) or
+    when the study has no trials at all. Pin the no-best branch
+    without spinning up a study with synthetic timestamps."""
+    from benchmarks.experiments.hpo_uplift import (
+        _time_to_best_seconds,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    empty_study = optuna.create_study(direction="minimize")
+    assert _time_to_best_seconds(empty_study, None) is None
+    assert _time_to_best_seconds(empty_study, 0) is None
+
+
 def test_render_hpo_uplift_markdown_absent_reference_model_emits_skip_note(
     fake_registry_and_hpo: list[PanelDataset], tmp_path: Path
 ) -> None:

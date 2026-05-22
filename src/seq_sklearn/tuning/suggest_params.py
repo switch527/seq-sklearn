@@ -123,8 +123,11 @@ def suggest_params(
     The default space (``search_advanced=False``, ``search_extras=False``)
     samples only STABLE fields: the F5-governed quartet
     (``task_type`` / ``loss.strategy`` / ``sampler.strategy`` /
-    ``calibration_strategy``), the model family's STABLE model-shape
-    fields, and the optimizer's ``learning_rate`` / ``weight_decay``.
+    ``calibration_strategy``) or, when ``task_type`` is pinned via
+    the keyword, the F5-governed triplet (the three downstream
+    fields conditioned on the pinned task), the model family's
+    STABLE model-shape fields, and the optimizer's
+    ``learning_rate`` / ``weight_decay``.
     ``search_advanced=True`` additionally samples the model's
     ``<Model>AdvancedConfig`` fields and ``search_extras=True`` samples
     the curated per-family ALPHA-key list; both are empty in v1 by
