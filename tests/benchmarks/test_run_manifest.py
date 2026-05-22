@@ -55,6 +55,61 @@ def test_build_environment_fingerprint_handles_missing_nvidia_smi() -> None:
         assert env.cuda_driver is None
 
 
+def test_resolve_cuda_driver_version_subprocess_oserror_returns_none() -> None:
+    """qa-I1 + code-I2: an OSError out of `subprocess.run` (e.g.,
+    nvidia-smi binary on PATH but exec fails) must collapse to None
+    rather than escape."""
+    with (
+        patch("benchmarks.run_manifest.shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch("benchmarks.run_manifest.subprocess.run", side_effect=OSError("fake")),
+    ):
+        env = build_environment_fingerprint()
+        assert env.cuda_driver is None
+
+
+def test_resolve_cuda_driver_version_nonzero_returncode_returns_none() -> None:
+    """qa-I1 + code-I2: a non-zero exit from nvidia-smi must
+    collapse to None."""
+    from subprocess import CompletedProcess
+
+    with (
+        patch("benchmarks.run_manifest.shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch(
+            "benchmarks.run_manifest.subprocess.run",
+            return_value=CompletedProcess(args=[], returncode=1, stdout="", stderr=""),
+        ),
+    ):
+        env = build_environment_fingerprint()
+        assert env.cuda_driver is None
+
+
+def test_resolve_cuda_driver_version_empty_stdout_returns_none() -> None:
+    """qa-I1 + code-I2: a zero-exit-but-empty-stdout result also
+    collapses to None (defensive against a future
+    --format=csv,noheader change)."""
+    from subprocess import CompletedProcess
+
+    with (
+        patch("benchmarks.run_manifest.shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch(
+            "benchmarks.run_manifest.subprocess.run",
+            return_value=CompletedProcess(args=[], returncode=0, stdout="   \n", stderr=""),
+        ),
+    ):
+        env = build_environment_fingerprint()
+        assert env.cuda_driver is None
+
+
+def test_resolve_cpu_model_empty_processor_returns_none() -> None:
+    """qa-N1: `platform.processor()` returns "" on some Linux
+    kernel + arch combos; the helper must report None so the
+    manifest does not masquerade an empty string as a valid
+    identifier."""
+    with patch("benchmarks.run_manifest.platform.processor", return_value=""):
+        env = build_environment_fingerprint()
+        assert env.cpu_model is None
+
+
 # --- build / read round-trip --------------------------------------------------
 
 
@@ -171,6 +226,17 @@ def test_load_run_manifest_missing_raises() -> None:
         load_run_manifest(Path("/tmp/does-not-exist-b9-manifest-test"))
 
 
+def test_load_run_manifest_invalid_json_raises_value_error(tmp_path: Path) -> None:
+    """qa-I2: a corrupt JSON file (partial write, disk corruption)
+    must surface as a typed ValueError so the CLI catch maps it to
+    a clean exit 1, not a json.JSONDecodeError traceback."""
+    out = tmp_path / "out"
+    out.mkdir(parents=True)
+    (out / "run_manifest.json").write_text("not valid json }{{")
+    with pytest.raises(ValueError, match="not valid JSON"):
+        load_run_manifest(out)
+
+
 def test_load_run_manifest_schema_mismatch_raises(tmp_path: Path) -> None:
     """A manifest JSON written by an older library version with
     missing required fields must surface as a pydantic
@@ -218,6 +284,63 @@ def test_completed_at_utc_starts_none_and_is_set_on_completion(
 
 
 # --- structural --------------------------------------------------------------
+
+
+def test_build_run_manifest_records_dataset_sha256_when_registered(
+    tmp_path: Path,
+) -> None:
+    """B9 arch-I4: each dataset's `integrity_sha256` round-trips
+    onto the manifest's `dataset_sha256` map. Registered datasets
+    surface their hash; unregistered names map to None."""
+    from benchmarks.config import DatasetSpec
+    from benchmarks.registry.datasets import register_dataset
+
+    sha = "f" * 64
+    spec = DatasetSpec(
+        name="ds_b9_test",
+        task_type="binary",
+        access_tier="OPEN",
+        size_tier="small",
+        balance="balanced",
+        modality="numeric",
+        source_uri="https://example.com/d.csv",
+        integrity_sha256=sha,
+        archive_basename="d.csv",
+        entity_col="id",
+        time_col="t",
+        target_col="y",
+        feature_real_cols=("x",),
+        feature_categorical_cols=(),
+        lookback=8,
+        observation_cutoff_rule=None,
+        densification_policy=None,
+        positive_label=1,
+        excluded=False,
+        exclusion_reason=None,
+        citation="Test 2026",
+    )
+
+    def _stub_loader(_cache_root: Path) -> object:
+        raise NotImplementedError
+
+    register_dataset(spec, _stub_loader)
+
+    config = BenchmarkConfig(
+        datasets=("ds_b9_test", "ds_unregistered"),
+        models=("m",),
+        experiments=(ExperimentSpec(kind="raw_loss"),),
+        output_dir=tmp_path / "out",
+    )
+    manifest = build_run_manifest(
+        config,
+        run_id="r1",
+        library_git_sha="sha",
+        profile="smoke",
+        hardware_tier="cpu",
+        output_root=tmp_path / "out",
+    )
+    assert manifest.dataset_sha256["ds_b9_test"] == sha
+    assert manifest.dataset_sha256["ds_unregistered"] is None
 
 
 def test_run_manifest_is_frozen_and_extra_forbid(tmp_path: Path) -> None:

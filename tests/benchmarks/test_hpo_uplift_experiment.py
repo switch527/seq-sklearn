@@ -57,8 +57,8 @@ def fake_registry_and_hpo() -> list[PanelDataset]:
     """Register the synthetic dataset/model registry AND a fake HPO
     space for the `sklearn_passthrough` family. The autouse
     `isolated_registry` fixture in conftest.py snapshots+restores
-    `HPO_REGISTRY` + `_HPO_SAMPLERS` (Phase B8 R1 arch-I6), so this
-    fixture does not need a manual teardown."""
+    `HPO_REGISTRY` (the dual-dict was collapsed in B9 arch-I5),
+    so this fixture does not need a manual teardown."""
     panels = register_all_fakes_and_get_panels()
     space = HPOSpace(
         family="sklearn_passthrough",

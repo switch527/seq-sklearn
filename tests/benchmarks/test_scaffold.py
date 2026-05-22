@@ -503,6 +503,138 @@ def test_benchmark_config_rejects_duplicate_experiment_kinds(tmp_path: Path) -> 
         )
 
 
+@pytest.mark.parametrize(
+    "kind",
+    ["raw_loss", "ensemble", "training_time", "hpo_uplift"],
+)
+def test_benchmark_config_rejects_duplicates_for_every_kind(kind: str) -> None:
+    """qa-N2: parametrize over every `ExperimentKind` so the
+    validator's regression catch covers all four kinds, not just
+    raw_loss. The B8 arch-I2 motivating case was an
+    `hpo_uplift` duplicate with budget overrides; pin that
+    explicitly."""
+    with pytest.raises(ValueError, match="at most one"):
+        BenchmarkConfig(
+            datasets=("a",),
+            models=("m",),
+            experiments=(
+                ExperimentSpec(kind=kind, seeds=(0,)),  # type: ignore[arg-type]
+                ExperimentSpec(kind=kind, seeds=(1,)),  # type: ignore[arg-type]
+            ),
+            output_dir=Path("/tmp/out"),
+        )
+
+
+def test_build_run_environment_detects_cuda_hardware_tier() -> None:
+    """B9 arch-C2 close: when CUDA is available the default
+    hardware_tier is gpu_single, else cpu. Pin both paths with
+    `torch.cuda.is_available` mocked."""
+    from unittest.mock import patch
+
+    from benchmarks.experiments import build_run_environment
+
+    with patch("benchmarks.experiments.raw_loss._detect_hardware_tier", return_value="gpu_single"):
+        env = build_run_environment(profile="smoke")
+        assert env.hardware_tier == "gpu_single"
+    with patch("benchmarks.experiments.raw_loss._detect_hardware_tier", return_value="cpu"):
+        env = build_run_environment(profile="smoke")
+        assert env.hardware_tier == "cpu"
+
+
+def test_dispatch_kinds_unknown_kind_returns_two(tmp_path: Path) -> None:
+    """qa-I4: the canary branch in `_dispatch_kinds` (an unknown
+    `ExperimentKind` slips into the loop) must return 2 so the
+    CLI exit code remains the documented value for unimplemented
+    drivers."""
+    from benchmarks.experiments import build_run_environment
+    from benchmarks.run import _dispatch_kinds  # pyright: ignore[reportPrivateUsage]
+
+    config = BenchmarkConfig(
+        datasets=("a",),
+        models=("m",),
+        experiments=(ExperimentSpec(kind="raw_loss", seeds=(0,)),),
+        output_dir=tmp_path / "out",
+    )
+    env = build_run_environment(profile="smoke", hardware_tier="cpu")
+    rc = _dispatch_kinds(
+        ["__unknown_kind__"],
+        config=config,
+        output_root=tmp_path / "out",
+        env=env,
+    )
+    assert rc == 2
+
+
+def test_main_returns_one_when_driver_raises_value_error(tmp_path: Path) -> None:
+    """qa-I4 + B7/B8 deferral close: a `ValueError` out of any
+    driver maps to exit 1 (matches the config-load exit code) so
+    the user sees a clean message, not a Python traceback."""
+    from tests.benchmarks._fakes import register_all_fakes_and_get_panels
+
+    register_all_fakes_and_get_panels()
+
+    output_dir = tmp_path / "out"
+    config_path = tmp_path / "benchmark.toml"
+    # An hpo_uplift run with no raw_loss manifest written first
+    # would raise; but the driver also raises ValueError when the
+    # config declares `cache_dir = None`. Use the missing-cache_dir
+    # path as the controlled trigger; the config below omits the
+    # `cache_dir` line entirely so it defaults to None.
+    config_path.write_text(
+        'datasets = ["fake_binary"]\n'
+        'models = ["fake_constant_binary"]\n'
+        f'output_dir = "{output_dir}"\n'
+        "\n"
+        "[[experiments]]\n"
+        'kind = "raw_loss"\n'
+        "seeds = [0]\n",
+        encoding="utf-8",
+    )
+    # `cache_dir` defaults to None when omitted from the TOML.
+    rc = main(["--config", str(config_path), "--experiment", "raw_loss"])
+    assert rc == 1
+
+
+def test_main_resume_after_crash_preserves_run_id(tmp_path: Path) -> None:
+    """B9 arch-C1 close: an existing `run_manifest.json` (left
+    behind by a crashed previous run) must NOT be overwritten with
+    a fresh `run_id` on resume. The second invocation reuses the
+    prior manifest's `run_id` + `started_at_utc` so the
+    `ResultRow.run_id == RunManifest.run_id` join continues to
+    hold for cells the first invocation already wrote."""
+    from benchmarks.run_manifest import load_run_manifest
+
+    from tests.benchmarks._fakes import register_all_fakes_and_get_panels
+
+    register_all_fakes_and_get_panels()
+    output_dir = tmp_path / "out"
+    cache_dir = tmp_path / "cache"
+    config_path = tmp_path / "benchmark.toml"
+    config_path.write_text(
+        'datasets = ["fake_binary"]\n'
+        'models = ["fake_constant_binary"]\n'
+        f'output_dir = "{output_dir}"\n'
+        f'cache_dir = "{cache_dir}"\n'
+        "\n"
+        "[[experiments]]\n"
+        'kind = "raw_loss"\n'
+        "seeds = [0]\n",
+        encoding="utf-8",
+    )
+    rc1 = main(["--config", str(config_path), "--experiment", "raw_loss"])
+    assert rc1 == 0
+    manifest_1 = load_run_manifest(output_dir)
+    # Second invocation against the same output_dir: must reuse
+    # the prior run_id + started_at_utc.
+    rc2 = main(["--config", str(config_path), "--experiment", "raw_loss"])
+    assert rc2 == 0
+    manifest_2 = load_run_manifest(output_dir)
+    assert manifest_1.run_id == manifest_2.run_id
+    assert manifest_1.started_at_utc == manifest_2.started_at_utc
+    # The completion stamp is rewritten each time.
+    assert manifest_2.completed_at_utc is not None
+
+
 def test_main_dispatch_covers_every_experiment_kind() -> None:
     """B8 wires every `ExperimentKind` literal through the CLI
     dispatcher; the exit-2 branch in `main()` is a canary for

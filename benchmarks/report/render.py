@@ -118,14 +118,21 @@ def _render_experiment_section(output_root: Path, filename: str, heading: str) -
 
 
 def _render_methodology_footer() -> str:
-    """Footer linking the static methodology index page."""
+    """Footer linking the static methodology index page.
+
+    The link is the in-tree doc path (no leading `..` or absolute
+    URL); how a reader follows it depends on where `report.md`
+    lands in their checkout, but the path itself stays stable
+    relative to the repo root so a `find docs/explanation/
+    benchmarks/index.md` from anywhere resolves it.
+    """
     return (
         "## Methodology\n\n"
-        "Per-experiment design notes live under "
-        "[`docs/explanation/benchmarks/`](../docs/explanation/benchmarks/). "
-        "Each per-experiment section above quotes its renderer's "
-        "Markdown verbatim; the full per-cell `ResultRow` shards "
-        "remain under `results/` for downstream audit.\n"
+        "Per-experiment design notes live in the repo at "
+        "`docs/explanation/benchmarks/index.md`. Each per-experiment "
+        "section above quotes its renderer's Markdown verbatim; "
+        "the full per-cell `ResultRow` shards remain under "
+        "`results/` for downstream audit.\n"
     )
 
 

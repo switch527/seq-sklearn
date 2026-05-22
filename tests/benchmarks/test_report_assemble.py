@@ -190,3 +190,22 @@ def test_render_report_from_dir_wraps_assemble_report(tmp_path: Path) -> None:
 
 def test_report_filename_constant_is_report_md() -> None:
     assert REPORT_FILENAME == "report.md"
+
+
+def test_render_experiment_section_h1_only_no_newline_renders_empty_body(
+    tmp_path: Path,
+) -> None:
+    """qa-I3: an experiment Markdown file containing only `"# Title"`
+    (no trailing newline) takes the `else ""` branch in
+    `_render_experiment_section`'s H1-strip ternary. Pin that the
+    section heading still renders and no stale H1 content leaks
+    into the body."""
+    out = _seed_manifest(tmp_path)
+    # File without a newline after the H1: `"# X"` exactly.
+    (out / "leaderboard.md").write_text("# X")
+    md = assemble_report(out)
+    # The assembler renders the canonical heading + an empty body.
+    assert "## Raw loss leaderboard" in md
+    # The source H1 must not leak through.
+    assert "\n# X" not in md
+    assert not md.startswith("# X")

@@ -33,7 +33,8 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from benchmarks.config import BenchmarkConfig, ExperimentSpec
-from benchmarks.manifest import _atomic_write_bytes  # pyright: ignore[reportPrivateUsage]
+from benchmarks.manifest import atomic_write_bytes
+from benchmarks.registry import DatasetNotRegisteredError, get_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,15 @@ class RunManifest(BaseModel):
     datasets: tuple[str, ...] = Field(min_length=0)
     models: tuple[str, ...] = Field(min_length=0)
     experiments: tuple[ExperimentSpec, ...]
+
+    # Per-dataset content fingerprints (B8.1 reproducibility
+    # contract). Maps dataset_name -> the SHA-256 recorded on the
+    # registered `DatasetSpec.integrity_sha256` field, so the
+    # manifest pins which version of each dataset the run touched.
+    # A name absent from the registry at manifest-build time maps
+    # to `None`; the build is best-effort to keep the manifest
+    # writable even on a partial registry.
+    dataset_sha256: dict[str, str | None] = Field(default_factory=dict)
 
     # Output layout.
     output_root: str  # absolute or relative path; round-trips as str
@@ -215,6 +225,26 @@ def build_environment_fingerprint() -> EnvironmentFingerprint:
     )
 
 
+def _resolve_dataset_sha256(dataset_names: tuple[str, ...]) -> dict[str, str | None]:
+    """Look up each dataset's registered `integrity_sha256`.
+
+    Best-effort: a name absent from the registry at manifest-build
+    time maps to `None` so the manifest can still be written even
+    when an experiment driver is about to refuse the missing-name
+    cell. The registry's typed error stays out of the manifest
+    layer.
+    """
+    out: dict[str, str | None] = {}
+    for name in dataset_names:
+        try:
+            spec = get_dataset(name)
+        except DatasetNotRegisteredError:
+            out[name] = None
+            continue
+        out[name] = spec.integrity_sha256
+    return out
+
+
 def build_run_manifest(
     config: BenchmarkConfig,
     *,
@@ -231,14 +261,17 @@ def build_run_manifest(
 
     Defaults `started_at_utc` to "now" and `environment` to
     `build_environment_fingerprint()` for caller ergonomics. The
-    library SHA is the same value B5's RunEnvironment carries; B8.1
-    names this as the second SHA's mono-repo collapse (a future
-    split would diverge).
+    `completed_at_utc` defaults to None (manifest-of-intent form);
+    the CLI rewrites the manifest at clean exit with a populated
+    timestamp. The library SHA is the same value B5's
+    RunEnvironment carries; B8.1 names this as the second SHA's
+    mono-repo collapse (a future split would diverge).
     """
     if started_at_utc is None:
         started_at_utc = datetime.now(UTC).isoformat()
     if environment is None:
         environment = build_environment_fingerprint()
+    sorted_datasets = tuple(sorted(config.datasets))
     return RunManifest(
         run_id=run_id,
         started_at_utc=started_at_utc,
@@ -248,9 +281,10 @@ def build_run_manifest(
         library_git_sha=library_git_sha,
         benchmarks_git_sha=library_git_sha,
         environment=environment,
-        datasets=tuple(sorted(config.datasets)),
+        datasets=sorted_datasets,
         models=tuple(sorted(config.models)),
         experiments=config.experiments,
+        dataset_sha256=_resolve_dataset_sha256(sorted_datasets),
         output_root=str(output_root),
     )
 
@@ -273,7 +307,7 @@ def write_run_manifest(output_root: Path, manifest: RunManifest) -> Path:
         indent=2,
         sort_keys=True,
     ).encode("utf-8")
-    _atomic_write_bytes(payload, dest)
+    atomic_write_bytes(payload, dest)
     logger.info("run manifest written to %s", dest)
     return dest
 
@@ -284,6 +318,10 @@ def load_run_manifest(output_root: Path) -> RunManifest:
     Raises:
         FileNotFoundError: no manifest at `output_root/
             run_manifest.json`.
+        ValueError: the manifest file is not valid JSON (e.g., a
+            partially-written file from a hard crash mid-write,
+            though `atomic_write_bytes` makes that vanishingly
+            unlikely).
         pydantic.ValidationError: the manifest on disk does not
             match the current `RunManifest` schema (e.g., the
             manifest was written by an older library version with
@@ -296,5 +334,8 @@ def load_run_manifest(output_root: Path) -> RunManifest:
             f"`python -m benchmarks.run --config <config.toml>` "
             f"first"
         )
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"load_run_manifest: manifest at {path} is not valid JSON: {exc}") from exc
     return RunManifest.model_validate(payload)

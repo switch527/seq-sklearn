@@ -189,13 +189,34 @@ def _resolve_git_sha(start: Path) -> str:
     return completed.stdout.strip() or "unknown"
 
 
+def _detect_hardware_tier() -> str:
+    """Probe torch for CUDA availability.
+
+    Returns `"gpu_single"` if any CUDA device is present, else
+    `"cpu"`. Used as the default for `build_run_environment` so the
+    manifest reports the host accurately on both classes of run.
+    """
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+    return "gpu_single" if torch.cuda.is_available() else "cpu"
+
+
 def build_run_environment(
     *,
     profile: str,
-    hardware_tier: str = "cpu",
+    hardware_tier: str | None = None,
     library_repo_root: Path | None = None,
 ) -> RunEnvironment:
     """Capture the per-run environment metadata.
+
+    `hardware_tier` defaults to the result of `_detect_hardware_tier()`
+    (`"gpu_single"` if a CUDA device is available, else `"cpu"`).
+    Callers override only when forcing a CPU run on a GPU host
+    for test isolation; a runtime override here flows through every
+    ResultRow + the RunManifest header so the report attributes
+    the run honestly.
 
     `library_repo_root` defaults to the repo root discovered relative
     to this module; the caller can override (e.g. tests) to pin a
@@ -203,6 +224,8 @@ def build_run_environment(
     """
     if library_repo_root is None:
         library_repo_root = Path(__file__).resolve().parents[2]
+    if hardware_tier is None:
+        hardware_tier = _detect_hardware_tier()
     return RunEnvironment(
         run_id=str(uuid.uuid4()),
         library_git_sha=_resolve_git_sha(library_repo_root),

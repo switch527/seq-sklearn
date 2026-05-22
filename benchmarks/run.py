@@ -40,13 +40,19 @@ from benchmarks.experiments import (
     run_raw_loss,
     run_training_time,
 )
+from benchmarks.manifest import atomic_write_bytes
 from benchmarks.registry import list_datasets, list_models
 from benchmarks.report.ensemble import render_from_dir as render_pairwise_from_dir
 from benchmarks.report.hpo_uplift import render_from_dir as render_hpo_uplift_from_dir
 from benchmarks.report.raw_loss import render_from_dir as render_leaderboard_from_dir
 from benchmarks.report.render import REPORT_FILENAME, render_report_from_dir
 from benchmarks.report.training_time import render_from_dir as render_training_time_from_dir
-from benchmarks.run_manifest import build_run_manifest, write_run_manifest
+from benchmarks.run_manifest import (
+    build_run_manifest,
+    load_run_manifest,
+    run_manifest_path,
+    write_run_manifest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -286,7 +292,50 @@ def main(argv: list[str] | None = None) -> int:
     # then matches the RunManifest.run_id and the B9 reproducibility
     # contract holds (the manifest's run_id is the join key into the
     # `results/` shards).
-    env = build_run_environment(profile="standard")
+    fresh_env = build_run_environment(profile="standard")
+
+    # Resume-after-crash: if `output_root/run_manifest.json` already
+    # exists with `completed_at_utc=None`, the previous invocation
+    # crashed mid-run and per-cell shards on disk carry its run_id.
+    # Issuing a fresh run_id here would break the
+    # `ResultRow.run_id == RunManifest.run_id` join the
+    # methodology page names as the cross-layer key. Resume the
+    # prior manifest's run_id + started_at_utc; the fresh
+    # environment otherwise replaces it (machine config may have
+    # changed across the crash boundary). A manifest with
+    # `completed_at_utc` populated indicates a previous CLEAN
+    # exit; in that case we also reuse the run_id, treating
+    # re-runs as an idempotent append (the per-cell sentinel
+    # contract already de-dupes work).
+    env: RunEnvironment
+    started_at_utc: str
+    if run_manifest_path(output_root).exists():
+        try:
+            prior = load_run_manifest(output_root)
+        except (ValueError, FileNotFoundError) as exc:
+            logger.error(
+                "existing run_manifest.json failed to load (%s); "
+                "refusing to overwrite. Delete the file or pass a "
+                "fresh --output to start over.",
+                exc,
+            )
+            return 1
+        logger.info(
+            "resuming run_id=%s (started_at_utc=%s) from existing manifest at %s",
+            prior.run_id,
+            prior.started_at_utc,
+            run_manifest_path(output_root),
+        )
+        env = RunEnvironment(
+            run_id=prior.run_id,
+            library_git_sha=fresh_env.library_git_sha,
+            hardware_tier=fresh_env.hardware_tier,
+            profile=fresh_env.profile,
+        )
+        started_at_utc = prior.started_at_utc
+    else:
+        env = fresh_env
+        started_at_utc = datetime.now(UTC).isoformat()
 
     # Write the run manifest BEFORE any experiment touches the
     # filesystem. A crashed run still leaves a manifest of intent
@@ -299,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
         profile=env.profile,
         hardware_tier=env.hardware_tier,
         output_root=output_root,
+        started_at_utc=started_at_utc,
     )
     write_run_manifest(output_root, manifest)
 
@@ -315,34 +365,41 @@ def main(argv: list[str] | None = None) -> int:
     # manifest" failure modes. Without this catch, the CLI emits a
     # Python traceback; with it, the user sees a one-line message
     # and a clean exit-1 (matches the config-load-failure exit code).
+    # The catch ALSO wraps the post-loop completion-stamp + report
+    # assembly so a crash there (e.g., a corrupt manifest the
+    # `render_report_from_dir` reload tripped on) doesn't leak a
+    # traceback either.
     try:
         rc = _dispatch_kinds(kinds, config=config, output_root=output_root, env=env)
+        if rc != 0:
+            return rc
+        # Stamp the completion timestamp atomically; a crash between
+        # the dispatch and this point leaves the original manifest
+        # of intent on disk for the next invocation to resume.
+        completed = build_run_manifest(
+            config,
+            run_id=env.run_id,
+            library_git_sha=env.library_git_sha,
+            profile=env.profile,
+            hardware_tier=env.hardware_tier,
+            output_root=output_root,
+            started_at_utc=manifest.started_at_utc,
+            completed_at_utc=datetime.now(UTC).isoformat(),
+            environment=manifest.environment,
+        )
+        write_run_manifest(output_root, completed)
+        # Assemble the cross-experiment `report.md` atomically.
+        # `report.md` is fully derived from `run_manifest.json` +
+        # the per-experiment Markdown files, so a crash between the
+        # manifest rewrite and this write is benign: the next clean
+        # invocation re-derives the same `report.md`.
+        report_md = render_report_from_dir(output_root)
+        report_path = output_root / REPORT_FILENAME
+        atomic_write_bytes(report_md.encode("utf-8"), report_path)
+        logger.info("assembled report written to %s", report_path)
     except ValueError as exc:
         logger.error("benchmark run failed: %s", exc)
         return 1
-    if rc != 0:
-        return rc
-
-    # Stamp the completion timestamp + assemble the cross-experiment
-    # report.md. Both writes are atomic; a crash here leaves the
-    # original manifest of intent on disk + no report.md, which the
-    # next invocation can overwrite cleanly.
-    completed = build_run_manifest(
-        config,
-        run_id=env.run_id,
-        library_git_sha=env.library_git_sha,
-        profile=env.profile,
-        hardware_tier=env.hardware_tier,
-        output_root=output_root,
-        started_at_utc=manifest.started_at_utc,
-        completed_at_utc=datetime.now(UTC).isoformat(),
-        environment=manifest.environment,
-    )
-    write_run_manifest(output_root, completed)
-    report_md = render_report_from_dir(output_root)
-    report_path = output_root / REPORT_FILENAME
-    report_path.write_text(report_md, encoding="utf-8")
-    logger.info("assembled report written to %s", report_path)
     return 0
 
 
