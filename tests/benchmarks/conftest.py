@@ -20,24 +20,29 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from benchmarks.hpo._base import (  # pyright: ignore[reportPrivateUsage]
+    _HPO_SAMPLERS,
+    HPO_REGISTRY,
+)
 from benchmarks.registry import datasets as _datasets_reg
 from benchmarks.registry import models as _models_reg
 
 
 @pytest.fixture(autouse=True)
 def isolated_registry() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
-    """Snapshot+restore the dataset + model registries around every
-    test.
+    """Snapshot+restore the dataset + model + HPO registries around
+    every test.
 
-    Three module-level dicts must move in lockstep: dataset specs,
-    dataset loaders, and model specs. The Phase B1 `_LOADERS`
-    companion is new; without restoring it, side-effect loader
-    registrations from one test (e.g. registering a stub loader for
-    a unique name) leave `_LOADERS` populated and a same-name
-    registration in a later test trips the duplicate-loader guard
-    spuriously. The autouse scope is per-function (the cheapest
-    scope) since each scaffold test mutates the registry at most
-    once.
+    Several module-level dicts must move in lockstep: dataset
+    specs, dataset loaders, model specs, model adapter factories,
+    and (Phase B8) HPO-space registrations. Without restoring
+    them, side-effect registrations from one test (e.g. registering
+    a fake passthrough HPO space for the `sklearn_passthrough`
+    family) leak into later tests; a later test asserting "no HPO
+    space registered for sklearn_passthrough" would then fail
+    spuriously under `pytest-randomly` reordering. The autouse
+    scope is per-function (the cheapest scope) since each test
+    mutates the registries at most once.
     """
     ds_reg = _datasets_reg._REGISTRY  # pyright: ignore[reportPrivateUsage]
     ds_loaders = _datasets_reg._LOADERS  # pyright: ignore[reportPrivateUsage]
@@ -50,6 +55,8 @@ def isolated_registry() -> Iterator[None]:  # pyright: ignore[reportUnusedFuncti
     ds_loaders_snapshot = dict(ds_loaders)
     m_snapshot = dict(m_reg)
     m_factories_snapshot = dict(m_factories)
+    hpo_snapshot = dict(HPO_REGISTRY)
+    hpo_samplers_snapshot = dict(_HPO_SAMPLERS)
     try:
         yield
     finally:
@@ -61,6 +68,10 @@ def isolated_registry() -> Iterator[None]:  # pyright: ignore[reportUnusedFuncti
         m_reg.update(m_snapshot)
         m_factories.clear()
         m_factories.update(m_factories_snapshot)
+        HPO_REGISTRY.clear()
+        HPO_REGISTRY.update(hpo_snapshot)
+        _HPO_SAMPLERS.clear()
+        _HPO_SAMPLERS.update(hpo_samplers_snapshot)
 
 
 @pytest.fixture

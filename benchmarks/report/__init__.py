@@ -14,6 +14,13 @@ from benchmarks.report.ensemble import (
     aggregate_pairs,
     render_pairwise_markdown,
 )
+from benchmarks.report.hpo_uplift import (
+    HPOUpliftReport,
+    UpliftRow,
+    aggregate_hpo_uplift,
+    build_hpo_uplift_report,
+    render_hpo_uplift_markdown,
+)
 from benchmarks.report.raw_loss import (
     LeaderboardEntry,
     rank_by_primary_loss,
@@ -26,12 +33,17 @@ from benchmarks.report.training_time import (
 )
 
 __all__ = [
+    "HPOUpliftReport",
     "LeaderboardEntry",
     "PairwiseSummary",
     "TrainingTimeSummary",
+    "UpliftRow",
+    "aggregate_hpo_uplift",
     "aggregate_pairs",
     "aggregate_training_time",
+    "build_hpo_uplift_report",
     "rank_by_primary_loss",
+    "render_hpo_uplift_markdown",
     "render_leaderboard_markdown",
     "render_pairwise_markdown",
     "render_training_time_markdown",

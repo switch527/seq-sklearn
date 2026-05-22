@@ -157,12 +157,21 @@ class ModelSpec(BaseModel):
 
 
 class ExperimentSpec(BaseModel):
-    """Per-experiment configuration (B6)."""
+    """Per-experiment configuration (B6).
+
+    `n_trials` and `timeout_seconds` are HPO-budget overrides used
+    only by `kind="hpo_uplift"` (Phase B8). When unset, the B8
+    driver derives the budget from the profile tier (smoke=0 trials,
+    standard=25 trials, full=100 trials per design B7.1+B7.4).
+    Setting either field on a non-HPO kind is ignored.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     kind: ExperimentKind
     seeds: tuple[int, ...] = Field(default=(0, 1, 2), min_length=1)
+    n_trials: int | None = Field(default=None, ge=0)
+    timeout_seconds: float | None = Field(default=None, gt=0.0)
 
 
 _ALL_SENTINEL = "all"

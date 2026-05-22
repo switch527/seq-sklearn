@@ -114,6 +114,7 @@ def suggest_params(
     model_class: type[BaseSequenceClassifier | BaseSequenceRegressor],
     base: BaseModelConfig | None = None,
     *,
+    task_type: str | None = None,
     search_advanced: bool = False,
     search_extras: bool = False,
 ) -> BaseModelConfig:
@@ -122,8 +123,11 @@ def suggest_params(
     The default space (``search_advanced=False``, ``search_extras=False``)
     samples only STABLE fields: the F5-governed quartet
     (``task_type`` / ``loss.strategy`` / ``sampler.strategy`` /
-    ``calibration_strategy``), the model family's STABLE model-shape
-    fields, and the optimizer's ``learning_rate`` / ``weight_decay``.
+    ``calibration_strategy``) or, when ``task_type`` is pinned via
+    the keyword, the F5-governed triplet (the three downstream
+    fields conditioned on the pinned task), the model family's
+    STABLE model-shape fields, and the optimizer's
+    ``learning_rate`` / ``weight_decay``.
     ``search_advanced=True`` additionally samples the model's
     ``<Model>AdvancedConfig`` fields and ``search_extras=True`` samples
     the curated per-family ALPHA-key list; both are empty in v1 by
@@ -145,6 +149,15 @@ def suggest_params(
             ``(0.1, 0.5, 0.9)`` only if ``base`` carries none); for
             every other task it is forced to ``None`` (the parent
             validator rejects quantiles on non-quantile tasks).
+        task_type: pin the sampled task. When set, the sampler does
+            NOT call ``trial.suggest_categorical("task_type", ...)``
+            and uses the provided value directly. The
+            F5-downstream sampling (loss / sampler /
+            calibration_strategy) is still conditioned on this task
+            so the returned config is closed under F5. The value
+            must be one of the model family's v1 tasks; otherwise
+            ``ConfigError`` is raised. Use case: a benchmark harness
+            tuning against a dataset whose task is fixed.
         search_advanced: also sample BETA ``advanced`` fields (no-op in v1).
         search_extras: also sample curated ALPHA ``extra`` keys (no-op in v1).
 
@@ -155,7 +168,8 @@ def suggest_params(
     Raises:
         ConfigError: if ``model_class`` has no inferable task family;
             if ``base`` is required (a non-search required field exists)
-            but was not supplied; or if the assembled config fails
+            but was not supplied; if ``task_type`` is set but not legal
+            for the model family; or if the assembled config fails
             pydantic validation (the ``ValidationError`` is wrapped per
             F8 so the Optuna guard can prune the trial).
     """
@@ -182,7 +196,15 @@ def suggest_params(
     # changes across trials, so each branch of the F5 tree gets a
     # distinct name (the legal losses for a task, the legal
     # imbalance / calibration for a cell are each fixed per name).
-    task_type = str(trial.suggest_categorical("task_type", list(tasks)))
+    if task_type is not None:
+        if task_type not in tasks:
+            raise ConfigError(
+                f"suggest_params: pinned task_type={task_type!r} is not "
+                f"legal for {model_class.__name__}; family tasks are "
+                f"{tasks}"
+            )
+    else:
+        task_type = str(trial.suggest_categorical("task_type", list(tasks)))
     legal_losses = sorted({loss for (t, loss) in _V1_PAIRS if t == task_type})
     loss_strategy = str(trial.suggest_categorical(f"loss_strategy@{task_type}", legal_losses))
     legal_imbalance, legal_calibration = legal_strategies_for(task_type, loss_strategy)

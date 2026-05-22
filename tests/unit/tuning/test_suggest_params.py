@@ -71,6 +71,38 @@ def test_regressor_sweep_respects_validity_matrix() -> None:
         study.tell(trial, 0.0)
 
 
+def test_pinned_task_type_skips_categorical_call_and_uses_value() -> None:
+    """The `task_type=` kwarg pins the sampled task without calling
+    `trial.suggest_categorical("task_type", ...)`. Downstream F5
+    sampling (loss/sampler/calibration) is conditioned on the
+    pinned task. Use case: a benchmark harness tuning against a
+    dataset whose task is fixed; the trial budget should not be
+    spent on the cross-task draw."""
+    study = optuna.create_study()
+    base = _base()
+    for _ in range(50):
+        trial = study.ask()
+        config = suggest_params(trial, TFTClassifier, base=base, task_type="binary")
+        assert config.task_type == "binary"
+        # Trial parameters should not include the "task_type" key
+        # because the categorical sampler was skipped.
+        assert "task_type" not in trial.params
+        study.tell(trial, 0.0)
+
+
+def test_pinned_task_type_rejected_when_not_legal_for_family() -> None:
+    """A pinned task that the model family does not support raises
+    `ConfigError` so a misconfigured caller fails fast rather than
+    sampling a meaningless cell."""
+    study = optuna.create_study()
+    trial = study.ask()
+    base = _base()
+    # Regressor family v1 tasks are regression_point / regression_quantile;
+    # binary is not legal for it.
+    with pytest.raises(ConfigError, match="not legal"):
+        suggest_params(trial, TFTRegressor, base=base, task_type="binary")
+
+
 def test_classifier_only_samples_classification_tasks() -> None:
     study = optuna.create_study()
     base = _base()

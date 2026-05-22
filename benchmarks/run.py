@@ -6,11 +6,10 @@ Usage:
     python -m benchmarks.run --config <config.toml> --experiment=raw_loss
 
 Phase B0 shipped the argparse + config-load + banner. Phases B5,
-B6, and B7 wire `--experiment=raw_loss`, `--experiment=ensemble`,
-and `--experiment=training_time` to their drivers and write the
-corresponding Markdown reports next to the manifest shards.
-Phase B8 (`hpo_uplift`) is the last dispatch arm; until it ships,
-`--experiment=hpo_uplift` exits 2.
+B6, B7, and B8 wire `--experiment=raw_loss`, `--experiment=ensemble`,
+`--experiment=training_time`, and `--experiment=hpo_uplift` to
+their drivers and write the corresponding Markdown reports next to
+the manifest shards.
 
 The `--dry-run` flag exits 0 after validation without running
 anything, and is the path the scaffold test exercises.
@@ -35,23 +34,25 @@ from benchmarks.config import BenchmarkConfig
 from benchmarks.experiments import (
     build_run_environment,
     run_ensemble,
+    run_hpo_uplift,
     run_raw_loss,
     run_training_time,
 )
 from benchmarks.registry import list_datasets, list_models
 from benchmarks.report.ensemble import render_from_dir as render_pairwise_from_dir
+from benchmarks.report.hpo_uplift import render_from_dir as render_hpo_uplift_from_dir
 from benchmarks.report.raw_loss import render_from_dir as render_leaderboard_from_dir
 from benchmarks.report.training_time import render_from_dir as render_training_time_from_dir
 
 logger = logging.getLogger(__name__)
 
 
-# Topological dispatch order for `--experiment=all`: report-only
-# experiments (`ensemble`, `training_time`) read the B5 manifest
-# written by `raw_loss`, so `raw_loss` must run first. Alphabetical
-# sort would put `ensemble` ahead of `raw_loss` and the dependent
-# drivers would crash on an empty manifest. `hpo_uplift` is here
-# as a placeholder; B8 wires its driver.
+# Topological dispatch order for `--experiment=all`: the report-only
+# kinds (`ensemble`, `training_time`) and the HPO uplift kind all
+# read the B5 manifest written by `raw_loss`, so `raw_loss` must
+# run first. Alphabetical sort would put `ensemble` ahead of
+# `raw_loss` and the dependent drivers would crash on an empty
+# manifest.
 _DISPATCH_ORDER: tuple[str, ...] = (
     "raw_loss",
     "ensemble",
@@ -128,7 +129,9 @@ def main(argv: list[str] | None = None) -> int:
         is at `output_root/<kind>.md`).
       - ``1``: config load / validation failed.
       - ``2``: an experiment kind was requested whose driver has
-        not yet shipped (only `hpo_uplift` today).
+        not yet shipped. Every kind in the `ExperimentKind`
+        literal currently dispatches; this branch is the canary
+        for future kinds.
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -234,11 +237,36 @@ def main(argv: list[str] | None = None) -> int:
             training_time_path = output_root / "training_time.md"
             training_time_path.write_text(training_time_md, encoding="utf-8")
             logger.info("training-time report written to %s", training_time_path)
+        elif kind == "hpo_uplift":
+            env = build_run_environment(profile="standard")
+            hpo_result = run_hpo_uplift(config, output_root=output_root, env=env)
+            logger.info(
+                "hpo_uplift complete: %d cells tuned, %d task-mismatch, "
+                "%d proba-unavailable, %d proba-runtime-unavailable, "
+                "%d quantile-followup, %d hpo-family-not-registered, "
+                "%d hpo-budget-zero, %d hpo-all-trials-pruned, "
+                "%d adapter-error, %d already-complete (run_id=%s)",
+                hpo_result.cells_attempted,
+                hpo_result.cells_skipped_task_mismatch,
+                hpo_result.cells_skipped_proba_unavailable,
+                hpo_result.cells_skipped_proba_runtime_unavailable,
+                hpo_result.cells_skipped_quantile_followup,
+                hpo_result.cells_skipped_hpo_family_not_registered,
+                hpo_result.cells_skipped_hpo_budget_zero,
+                hpo_result.cells_skipped_hpo_all_trials_pruned,
+                hpo_result.cells_skipped_adapter_error,
+                hpo_result.cells_already_complete,
+                hpo_result.run_id,
+            )
+            hpo_md = render_hpo_uplift_from_dir(output_root)
+            hpo_path = output_root / "hpo_uplift.md"
+            hpo_path.write_text(hpo_md, encoding="utf-8")
+            logger.info("hpo_uplift report written to %s", hpo_path)
         else:
             logger.error(
                 "experiment driver for kind=%s not yet implemented; "
-                "only `raw_loss`, `ensemble`, and `training_time` "
-                "ship today (Phase B8 brings `hpo_uplift`)",
+                "every shipped kind (raw_loss, ensemble, training_time, "
+                "hpo_uplift) is dispatched above",
                 kind,
             )
             return 2

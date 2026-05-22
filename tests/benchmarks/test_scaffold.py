@@ -485,24 +485,23 @@ def test_main_returns_zero_on_dry_run(minimal_config_toml: Path) -> None:
     assert rc == 0
 
 
-def test_main_returns_two_for_unimplemented_experiment_kind(tmp_path: Path) -> None:
-    """B7 contract: `raw_loss`, `ensemble`, and `training_time` are
-    implemented; `hpo_uplift` ships in B8 and the CLI returns exit
-    code 2 for it. Pinning this so the B8 wire-up cannot silently
-    re-route the exit code."""
-    config_path = tmp_path / "benchmark.toml"
-    config_path.write_text(
-        'datasets = ["dummy_dataset"]\n'
-        'models = ["dummy_model"]\n'
-        f'output_dir = "{tmp_path / "out"}"\n'
-        "\n"
-        "[[experiments]]\n"
-        'kind = "hpo_uplift"\n'
-        "seeds = [0]\n",
-        encoding="utf-8",
+def test_main_dispatch_covers_every_experiment_kind() -> None:
+    """B8 wires every `ExperimentKind` literal through the CLI
+    dispatcher; the exit-2 branch in `main()` is a canary for
+    future kinds added to the literal without an accompanying
+    dispatcher arm. Pin that every current kind is in the
+    dispatch order so a Literal extension surfaces here."""
+    import typing
+
+    from benchmarks.config import ExperimentKind
+    from benchmarks.run import _DISPATCH_ORDER  # pyright: ignore[reportPrivateUsage]
+
+    declared = set(typing.get_args(ExperimentKind))
+    dispatched = set(_DISPATCH_ORDER)
+    assert declared <= dispatched, (
+        f"every ExperimentKind must appear in benchmarks/run.py's "
+        f"_DISPATCH_ORDER; missing: {declared - dispatched}"
     )
-    rc = main(["--config", str(config_path), "--experiment", "hpo_uplift"])
-    assert rc == 2
 
 
 def test_main_returns_one_on_missing_config(tmp_path: Path) -> None:
@@ -643,10 +642,16 @@ def test_main_training_time_dispatch_writes_report_and_returns_zero(
 
 
 def test_benchmarks_package_does_not_import_seq_sklearn_internals() -> None:
-    """Walk every `benchmarks/**/*.py` AST and reject any import that
-    reaches into a `seq_sklearn._*` module. Phase B0 has no
-    `seq_sklearn` imports yet, but the gate is the canary for
-    later phases (B2 imports the facade)."""
+    """Walk every `benchmarks/**/*.py` AST and reject any import
+    that reaches into a private `seq_sklearn` component at any
+    depth.
+
+    Original R1 version checked only the second dot-component
+    (catching `seq_sklearn._foo` but NOT `seq_sklearn.models._classifier`).
+    B8 R1 (arch-C1) caught the gap; the tighter form below walks
+    every component after `seq_sklearn` so any underscore-prefixed
+    submodule, sub-package, or member raises.
+    """
     import ast
 
     root = Path(benchmarks.__file__).resolve().parent
@@ -668,10 +673,13 @@ def test_benchmarks_package_does_not_import_seq_sklearn_internals() -> None:
             for mod in mods:
                 if not mod.startswith("seq_sklearn."):
                     continue
-                head = mod.split(".", 2)[1]
-                if head.startswith("_"):
+                # Walk EVERY component after `seq_sklearn`. A leak is
+                # any component (any depth) starting with `_`.
+                parts = mod.split(".")[1:]
+                if any(p.startswith("_") for p in parts):
                     leaked.append(f"{py.relative_to(root.parent)}: {mod}")
     assert not leaked, (
         f"benchmarks/ must consume the library via the public facade "
-        f"only; deep imports into seq_sklearn._* found: {leaked}"
+        f"only; deep imports into private seq_sklearn components found: "
+        f"{leaked}"
     )

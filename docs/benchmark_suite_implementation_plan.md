@@ -761,6 +761,65 @@ oracle; HPO budget cap enforcement.
 **Done when**: a tuned-vs-default leaderboard renders with the
 search-space parity disclosure and a p-value column.
 
+**B8 actual shape (as shipped)**:
+
+- `benchmarks/stats/friedman.py`: `friedman_holm(matrix,
+  reference_model)` wraps `scipy.stats.friedmanchisquare` for the
+  omnibus and Wilcoxon signed-rank for pairwise vs the designated
+  reference; `holm_correction(p_values)` is the reusable
+  Holm-Bonferroni step-down. NaN-bearing dataset columns are
+  dropped before testing, with `family_size` recorded on the
+  result so the report can disclose it.
+- `benchmarks/hpo/{__init__,_base,seq_sklearn}.py`: per-family
+  HPO-space registry. Only the `seq_sklearn` family ships at B8
+  (the only registered adapter family today); GBM and TSC follow
+  with their B2-followup adapter branches. The registry seam is
+  `register_hpo_space(HPOSpace, sampler) -> None` /
+  `get_hpo_space(family) -> (HPOSpace, sampler)`.
+- `benchmarks/experiments/hpo_uplift.py`: per-cell driver that
+  runs an Optuna TPE study on an inner train/val split (B6.4.2:
+  the test fold is untouched), refits the best config on the full
+  train fold, and writes one `variant="tuned"` `ResultRow`. The
+  default arm is the B5 manifest; the driver does NOT re-run it.
+- `benchmarks/report/hpo_uplift.py`: joins default + tuned rows
+  per `(dataset, model, seed, fold)`, computes Δ on the primary
+  loss (B6.1 mapping), aggregates per `(dataset, model)`, and
+  renders the table + Friedman/Holm matrix + skipped-groups
+  footnote. The renderer keys `by_dataset` on
+  `(dataset_name, task_type)` for the same reason B7 does
+  (across-run config drift can produce heterogeneous task_types
+  for one dataset name).
+- `ResultRow` extension (`benchmarks/manifest.py`): seven new
+  optional fields (`hpo_n_trials_completed`,
+  `hpo_n_trials_pruned`, `hpo_search_space_size`,
+  `hpo_timeout_seconds`, `hpo_best_trial_number`,
+  `hpo_time_to_best_seconds`, `hpo_best_val_loss`). All default
+  to `None`; B5/B6/B7 rows still validate cleanly.
+- `ExperimentSpec` extension (`benchmarks/config.py`):
+  `n_trials: int | None` and `timeout_seconds: float | None`
+  HPO-budget overrides; profile-tier defaults (smoke=0,
+  standard=25, full=100) apply when both are `None`.
+
+**B8-followup deferrals** (carried into B9 / later):
+
+- GBM and TSC search-space modules ship with their adapter
+  families (the B2-followup branches). Cells whose model family
+  has no HPO space registered today produce a typed
+  `skipped_reason="hpo_family_not_registered"` row so the report's
+  footnote lists them.
+- Nemenyi critical-difference diagram (design B7.5): the
+  Friedman + Holm matrix is rendered as a table at B8; the
+  graphical CD diagram lands in B9's visualization pass.
+- Predictions persistence for tuned cells: B6.2.1 writes a
+  per-cell predictions shard for B5. B8 does NOT write a
+  predictions shard for the tuned arm so the ensemble report
+  cannot inadvertently mix default + tuned variants into one
+  pairwise cell. B9 wires variant-aware predictions if needed.
+- Cross-driver error-handling pass (carried over from Gemini's
+  B7 final-pass deferrals): every driver currently raises
+  `ValueError` on an empty/missing manifest. A unified
+  CLI-side `try / except ValueError -> exit 1` lives in B9.
+
 ### Phase B9: Reproducibility manifest, report assembly, governance
 
 **Goal**: every benchmark run emits a B8 manifest sufficient to
