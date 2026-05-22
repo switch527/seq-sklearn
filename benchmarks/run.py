@@ -19,6 +19,7 @@ import argparse
 import logging
 import sys
 import tomllib
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -32,6 +33,7 @@ import benchmarks.adapters  # pyright: ignore[reportUnusedImport]
 import benchmarks.datasets  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from benchmarks.config import BenchmarkConfig
 from benchmarks.experiments import (
+    RunEnvironment,
     build_run_environment,
     run_ensemble,
     run_hpo_uplift,
@@ -42,7 +44,9 @@ from benchmarks.registry import list_datasets, list_models
 from benchmarks.report.ensemble import render_from_dir as render_pairwise_from_dir
 from benchmarks.report.hpo_uplift import render_from_dir as render_hpo_uplift_from_dir
 from benchmarks.report.raw_loss import render_from_dir as render_leaderboard_from_dir
+from benchmarks.report.render import REPORT_FILENAME, render_report_from_dir
 from benchmarks.report.training_time import render_from_dir as render_training_time_from_dir
+from benchmarks.run_manifest import build_run_manifest, write_run_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +101,104 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="validate the config and report registry counts, then exit 0",
     )
     return parser.parse_args(argv)
+
+
+def _dispatch_kinds(
+    kinds: list[str],
+    *,
+    config: BenchmarkConfig,
+    output_root: Path,
+    env: RunEnvironment,
+) -> int:
+    """Run every experiment kind in `kinds` in order, writing each
+    per-experiment Markdown report next to its manifest shards.
+
+    Returns the process exit code: 0 on full success, 2 on an
+    unrecognized kind (the canary branch). `ValueError` from any
+    driver propagates to the caller; `main()` catches it and exits
+    1 with a clean message.
+    """
+    for kind in kinds:
+        if kind == "raw_loss":
+            result = run_raw_loss(config, output_root=output_root, env=env)
+            logger.info(
+                "raw_loss complete: %d cells run, %d task-mismatch, "
+                "%d proba-unavailable, %d proba-runtime-unavailable, "
+                "%d quantile-followup, %d adapter-error, %d already-complete "
+                "(run_id=%s)",
+                result.cells_attempted,
+                result.cells_skipped_task_mismatch,
+                result.cells_skipped_proba_unavailable,
+                result.cells_skipped_proba_runtime_unavailable,
+                result.cells_skipped_quantile_followup,
+                result.cells_skipped_adapter_error,
+                result.cells_already_complete,
+                result.run_id,
+            )
+            leaderboard_md = render_leaderboard_from_dir(output_root)
+            leaderboard_path = output_root / "leaderboard.md"
+            leaderboard_path.write_text(leaderboard_md, encoding="utf-8")
+            logger.info("leaderboard written to %s", leaderboard_path)
+        elif kind == "ensemble":
+            pair_result = run_ensemble(config, output_root=output_root, env=env)
+            logger.info(
+                "ensemble complete: %d pairs run, %d predictions-missing, "
+                "%d empty-join, %d already-complete (run_id=%s)",
+                pair_result.pairs_attempted,
+                pair_result.pairs_skipped_predictions_missing,
+                pair_result.pairs_skipped_empty_join,
+                pair_result.pairs_already_complete,
+                pair_result.run_id,
+            )
+            pairwise_md = render_pairwise_from_dir(output_root)
+            pairwise_path = output_root / "pairwise.md"
+            pairwise_path.write_text(pairwise_md, encoding="utf-8")
+            logger.info("pairwise report written to %s", pairwise_path)
+        elif kind == "training_time":
+            tt_result = run_training_time(config, output_root=output_root, env=env)
+            logger.info(
+                "training_time complete: %d groups evaluated, %d fully skipped (run_id=%s)",
+                tt_result.groups_evaluated,
+                tt_result.groups_fully_skipped,
+                tt_result.run_id,
+            )
+            training_time_md = render_training_time_from_dir(output_root)
+            training_time_path = output_root / "training_time.md"
+            training_time_path.write_text(training_time_md, encoding="utf-8")
+            logger.info("training-time report written to %s", training_time_path)
+        elif kind == "hpo_uplift":
+            hpo_result = run_hpo_uplift(config, output_root=output_root, env=env)
+            logger.info(
+                "hpo_uplift complete: %d cells tuned, %d task-mismatch, "
+                "%d proba-unavailable, %d proba-runtime-unavailable, "
+                "%d quantile-followup, %d hpo-family-not-registered, "
+                "%d hpo-budget-zero, %d hpo-all-trials-pruned, "
+                "%d adapter-error, %d already-complete (run_id=%s)",
+                hpo_result.cells_attempted,
+                hpo_result.cells_skipped_task_mismatch,
+                hpo_result.cells_skipped_proba_unavailable,
+                hpo_result.cells_skipped_proba_runtime_unavailable,
+                hpo_result.cells_skipped_quantile_followup,
+                hpo_result.cells_skipped_hpo_family_not_registered,
+                hpo_result.cells_skipped_hpo_budget_zero,
+                hpo_result.cells_skipped_hpo_all_trials_pruned,
+                hpo_result.cells_skipped_adapter_error,
+                hpo_result.cells_already_complete,
+                hpo_result.run_id,
+            )
+            hpo_md = render_hpo_uplift_from_dir(output_root)
+            hpo_path = output_root / "hpo_uplift.md"
+            hpo_path.write_text(hpo_md, encoding="utf-8")
+            logger.info("hpo_uplift report written to %s", hpo_path)
+        else:
+            logger.error(
+                "experiment driver for kind=%s not yet implemented; "
+                "every shipped kind (raw_loss, ensemble, training_time, "
+                "hpo_uplift) is dispatched above",
+                kind,
+            )
+            return 2
+    return 0
 
 
 def _load_config(path: Path) -> BenchmarkConfig:
@@ -179,6 +281,27 @@ def main(argv: list[str] | None = None) -> int:
     output_root: Path = args.output if args.output is not None else config.output_dir
     output_root.mkdir(parents=True, exist_ok=True)
 
+    # Build the RunEnvironment ONCE so every experiment kind in this
+    # invocation shares the same run_id. The per-cell ResultRow.run_id
+    # then matches the RunManifest.run_id and the B9 reproducibility
+    # contract holds (the manifest's run_id is the join key into the
+    # `results/` shards).
+    env = build_run_environment(profile="standard")
+
+    # Write the run manifest BEFORE any experiment touches the
+    # filesystem. A crashed run still leaves a manifest of intent
+    # on disk; the post-experiment rewrite (below) stamps the
+    # completion timestamp.
+    manifest = build_run_manifest(
+        config,
+        run_id=env.run_id,
+        library_git_sha=env.library_git_sha,
+        profile=env.profile,
+        hardware_tier=env.hardware_tier,
+        output_root=output_root,
+    )
+    write_run_manifest(output_root, manifest)
+
     requested = args.experiment
     declared_kinds = {e.kind for e in config.experiments}
     if requested == "all":
@@ -186,90 +309,40 @@ def main(argv: list[str] | None = None) -> int:
     else:
         kinds = [requested]
 
-    for kind in kinds:
-        if kind == "raw_loss":
-            env = build_run_environment(profile="standard")
-            result = run_raw_loss(config, output_root=output_root, env=env)
-            logger.info(
-                "raw_loss complete: %d cells run, %d task-mismatch, "
-                "%d proba-unavailable, %d proba-runtime-unavailable, "
-                "%d quantile-followup, %d adapter-error, %d already-complete "
-                "(run_id=%s)",
-                result.cells_attempted,
-                result.cells_skipped_task_mismatch,
-                result.cells_skipped_proba_unavailable,
-                result.cells_skipped_proba_runtime_unavailable,
-                result.cells_skipped_quantile_followup,
-                result.cells_skipped_adapter_error,
-                result.cells_already_complete,
-                result.run_id,
-            )
-            leaderboard_md = render_leaderboard_from_dir(output_root)
-            leaderboard_path = output_root / "leaderboard.md"
-            leaderboard_path.write_text(leaderboard_md, encoding="utf-8")
-            logger.info("leaderboard written to %s", leaderboard_path)
-        elif kind == "ensemble":
-            env = build_run_environment(profile="standard")
-            pair_result = run_ensemble(config, output_root=output_root, env=env)
-            logger.info(
-                "ensemble complete: %d pairs run, %d predictions-missing, "
-                "%d empty-join, %d already-complete (run_id=%s)",
-                pair_result.pairs_attempted,
-                pair_result.pairs_skipped_predictions_missing,
-                pair_result.pairs_skipped_empty_join,
-                pair_result.pairs_already_complete,
-                pair_result.run_id,
-            )
-            pairwise_md = render_pairwise_from_dir(output_root)
-            pairwise_path = output_root / "pairwise.md"
-            pairwise_path.write_text(pairwise_md, encoding="utf-8")
-            logger.info("pairwise report written to %s", pairwise_path)
-        elif kind == "training_time":
-            env = build_run_environment(profile="standard")
-            tt_result = run_training_time(config, output_root=output_root, env=env)
-            logger.info(
-                "training_time complete: %d groups evaluated, %d fully skipped (run_id=%s)",
-                tt_result.groups_evaluated,
-                tt_result.groups_fully_skipped,
-                tt_result.run_id,
-            )
-            training_time_md = render_training_time_from_dir(output_root)
-            training_time_path = output_root / "training_time.md"
-            training_time_path.write_text(training_time_md, encoding="utf-8")
-            logger.info("training-time report written to %s", training_time_path)
-        elif kind == "hpo_uplift":
-            env = build_run_environment(profile="standard")
-            hpo_result = run_hpo_uplift(config, output_root=output_root, env=env)
-            logger.info(
-                "hpo_uplift complete: %d cells tuned, %d task-mismatch, "
-                "%d proba-unavailable, %d proba-runtime-unavailable, "
-                "%d quantile-followup, %d hpo-family-not-registered, "
-                "%d hpo-budget-zero, %d hpo-all-trials-pruned, "
-                "%d adapter-error, %d already-complete (run_id=%s)",
-                hpo_result.cells_attempted,
-                hpo_result.cells_skipped_task_mismatch,
-                hpo_result.cells_skipped_proba_unavailable,
-                hpo_result.cells_skipped_proba_runtime_unavailable,
-                hpo_result.cells_skipped_quantile_followup,
-                hpo_result.cells_skipped_hpo_family_not_registered,
-                hpo_result.cells_skipped_hpo_budget_zero,
-                hpo_result.cells_skipped_hpo_all_trials_pruned,
-                hpo_result.cells_skipped_adapter_error,
-                hpo_result.cells_already_complete,
-                hpo_result.run_id,
-            )
-            hpo_md = render_hpo_uplift_from_dir(output_root)
-            hpo_path = output_root / "hpo_uplift.md"
-            hpo_path.write_text(hpo_md, encoding="utf-8")
-            logger.info("hpo_uplift report written to %s", hpo_path)
-        else:
-            logger.error(
-                "experiment driver for kind=%s not yet implemented; "
-                "every shipped kind (raw_loss, ensemble, training_time, "
-                "hpo_uplift) is dispatched above",
-                kind,
-            )
-            return 2
+    # Cross-driver `ValueError` -> exit 1 (B7 + B8 Gemini-deferral
+    # carryover). Every driver raises `ValueError` on the "config
+    # declares no <kind> experiment" / "cache_dir is None" / "empty
+    # manifest" failure modes. Without this catch, the CLI emits a
+    # Python traceback; with it, the user sees a one-line message
+    # and a clean exit-1 (matches the config-load-failure exit code).
+    try:
+        rc = _dispatch_kinds(kinds, config=config, output_root=output_root, env=env)
+    except ValueError as exc:
+        logger.error("benchmark run failed: %s", exc)
+        return 1
+    if rc != 0:
+        return rc
+
+    # Stamp the completion timestamp + assemble the cross-experiment
+    # report.md. Both writes are atomic; a crash here leaves the
+    # original manifest of intent on disk + no report.md, which the
+    # next invocation can overwrite cleanly.
+    completed = build_run_manifest(
+        config,
+        run_id=env.run_id,
+        library_git_sha=env.library_git_sha,
+        profile=env.profile,
+        hardware_tier=env.hardware_tier,
+        output_root=output_root,
+        started_at_utc=manifest.started_at_utc,
+        completed_at_utc=datetime.now(UTC).isoformat(),
+        environment=manifest.environment,
+    )
+    write_run_manifest(output_root, completed)
+    report_md = render_report_from_dir(output_root)
+    report_path = output_root / REPORT_FILENAME
+    report_path.write_text(report_md, encoding="utf-8")
+    logger.info("assembled report written to %s", report_path)
     return 0
 
 

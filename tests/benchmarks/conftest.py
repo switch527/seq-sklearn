@@ -20,10 +20,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from benchmarks.hpo._base import (  # pyright: ignore[reportPrivateUsage]
-    _HPO_SAMPLERS,
-    HPO_REGISTRY,
-)
+from benchmarks.hpo._base import HPO_REGISTRY
 from benchmarks.registry import datasets as _datasets_reg
 from benchmarks.registry import models as _models_reg
 
@@ -56,7 +53,6 @@ def isolated_registry() -> Iterator[None]:  # pyright: ignore[reportUnusedFuncti
     m_snapshot = dict(m_reg)
     m_factories_snapshot = dict(m_factories)
     hpo_snapshot = dict(HPO_REGISTRY)
-    hpo_samplers_snapshot = dict(_HPO_SAMPLERS)
     try:
         yield
     finally:
@@ -70,8 +66,6 @@ def isolated_registry() -> Iterator[None]:  # pyright: ignore[reportUnusedFuncti
         m_factories.update(m_factories_snapshot)
         HPO_REGISTRY.clear()
         HPO_REGISTRY.update(hpo_snapshot)
-        _HPO_SAMPLERS.clear()
-        _HPO_SAMPLERS.update(hpo_samplers_snapshot)
 
 
 @pytest.fixture

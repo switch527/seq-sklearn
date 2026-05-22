@@ -485,6 +485,24 @@ def test_main_returns_zero_on_dry_run(minimal_config_toml: Path) -> None:
     assert rc == 0
 
 
+def test_benchmark_config_rejects_duplicate_experiment_kinds(tmp_path: Path) -> None:
+    """B8 arch-I2 (absorbed in B9): the config validator must
+    reject more than one `ExperimentSpec` per kind so the
+    asymmetric first-spec-wins budget + union seeds combination
+    cannot silently pick one over the other."""
+    del tmp_path
+    with pytest.raises(ValueError, match="at most one"):
+        BenchmarkConfig(
+            datasets=("a",),
+            models=("m",),
+            experiments=(
+                ExperimentSpec(kind="raw_loss", seeds=(0,)),
+                ExperimentSpec(kind="raw_loss", seeds=(1,)),
+            ),
+            output_dir=Path("/tmp/out"),
+        )
+
+
 def test_main_dispatch_covers_every_experiment_kind() -> None:
     """B8 wires every `ExperimentKind` literal through the CLI
     dispatcher; the exit-2 branch in `main()` is a canary for

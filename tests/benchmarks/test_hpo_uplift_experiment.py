@@ -22,12 +22,7 @@ from benchmarks.experiments import (
     run_hpo_uplift,
     run_raw_loss,
 )
-from benchmarks.hpo._base import (  # pyright: ignore[reportPrivateUsage]
-    _HPO_SAMPLERS,
-    HPO_REGISTRY,
-    HPOSpace,
-    register_hpo_space,
-)
+from benchmarks.hpo._base import HPO_REGISTRY, HPOSpace, register_hpo_space
 from benchmarks.manifest import load_run
 from benchmarks.report.hpo_uplift import (
     aggregate_hpo_uplift,
@@ -162,7 +157,6 @@ def test_run_hpo_uplift_skips_unregistered_family(
     # has no search space available; conftest's `isolated_registry`
     # restores both dicts after the test.
     HPO_REGISTRY.pop("sklearn_passthrough", None)
-    _HPO_SAMPLERS.pop("sklearn_passthrough", None)
 
     config = _make_config(
         datasets=("fake_binary",),
@@ -359,7 +353,6 @@ def test_run_hpo_uplift_records_all_trials_pruned_when_sampler_always_raises(
     # Replace the default passthrough HPO space with one whose
     # sampler always prunes.
     HPO_REGISTRY.pop("sklearn_passthrough", None)
-    _HPO_SAMPLERS.pop("sklearn_passthrough", None)
     space = HPOSpace(
         family="sklearn_passthrough",
         search_space_size=1,

@@ -214,3 +214,23 @@ class BenchmarkConfig(BaseModel):
                     f"{[n for n in names if names.count(n) > 1]}"
                 )
         return self
+
+    @model_validator(mode="after")
+    def _at_most_one_spec_per_kind(self) -> "BenchmarkConfig":
+        """At most one `ExperimentSpec` per kind (B8 arch-I2).
+
+        The drivers that consume the spec (e.g., HPO uplift's
+        `_resolve_hpo_budget`) take the FIRST matching spec wins
+        for budget overrides while accumulating the SEEDS union;
+        this asymmetry is a footgun. Reject duplicates at
+        config-load time so the user re-merges intent
+        deliberately."""
+        kinds = [spec.kind for spec in self.experiments]
+        duplicates = sorted({k for k in kinds if kinds.count(k) > 1})
+        if duplicates:
+            raise ValueError(
+                f"BenchmarkConfig.experiments: at most one "
+                f"ExperimentSpec per kind; duplicates: {duplicates}. "
+                f"Merge the seeds + budget into a single spec."
+            )
+        return self
