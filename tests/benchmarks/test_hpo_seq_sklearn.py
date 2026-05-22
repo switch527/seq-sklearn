@@ -188,6 +188,27 @@ def test_get_hpo_space_unknown_family_raises_typed() -> None:
         get_hpo_space("tsc")  # not registered until B8-followup
 
 
+def test_hpo_registration_is_frozen_dataclass() -> None:
+    """qa-N3 + B9 arch-I5: `HPORegistration` is the single-record
+    replacement for the prior dual-dict registry. The frozen
+    contract is the guarantee that no caller can mutate the
+    pair (space, sampler) after registration."""
+    import dataclasses
+
+    from benchmarks.hpo._base import HPORegistration
+
+    def _sampler(trial: object, model_spec: object, dataset_spec: object) -> dict[str, Any]:
+        del trial, model_spec, dataset_spec
+        return {}
+
+    from benchmarks.hpo._base import HPOSpace as _HPOSpace
+
+    space = _HPOSpace(family="tsc", search_space_size=2, description="x")
+    registration = HPORegistration(space=space, sampler=_sampler)  # type: ignore[arg-type]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        registration.space = space  # pyright: ignore[reportAttributeAccessIssue]
+
+
 def test_register_hpo_space_conflict_raises() -> None:
     """qa-I3: registering a second `HPOSpace` for the same family
     with a different `search_space_size` (or sampler) must raise

@@ -855,6 +855,49 @@ on a synthetic 2x3 run.
 `report.md`; a re-run from the manifest alone reproduces the same
 report.
 
+**B9 actual shape (as shipped)**:
+
+- `benchmarks/run_manifest.py` (NEW): `RunManifest` +
+  `EnvironmentFingerprint` pydantic records, atomic write/load
+  via the same shard-then-rename pattern as B5's per-cell shards,
+  best-effort env capture (platform, python, CPU/GPU model, CUDA
+  runtime, CUDA driver via `nvidia-smi`, dependency versions via
+  `importlib.metadata`).
+- `benchmarks/report/render.py` (NEW): cross-experiment assembler
+  that reads the four per-experiment Markdown files +
+  `run_manifest.json` and emits `report.md` with one executive
+  summary, a run-metadata block, four per-experiment sections in
+  B5 -> B6 -> B7 -> B8 order, and a methodology footer.
+- `benchmarks/run.py`: writes the manifest of intent BEFORE any
+  experiment runs (so a crashed run leaves it on disk); rewrites
+  it with `completed_at_utc` populated and assembles `report.md`
+  after every kind succeeds. The CLI dispatch was refactored into
+  `_dispatch_kinds(...)` so a single try/except wraps every
+  driver's `ValueError` and exits 1 cleanly (absorbs the B7
+  Gemini-deferral + B8 commit-msg note).
+- `benchmarks/config.py`: new `_at_most_one_spec_per_kind`
+  model_validator rejects duplicate `ExperimentSpec.kind` entries
+  at config-load time (absorbs B8 arch-I2).
+- `benchmarks/hpo/_base.py`: dual-dict `HPO_REGISTRY` +
+  `_HPO_SAMPLERS` collapsed into a single `dict[ModelFamily,
+  HPORegistration]` (absorbs B8 arch-I5).
+- `docs/explanation/benchmarks/index.md` (NEW): methodology index
+  the assembled report's footer links into.
+
+**B8 deferrals absorbed in B9**: arch-I2 (duplicate-kinds
+validator), arch-I5 (HPO registry collapse), cross-driver
+ValueError -> exit 1 (B7 Gemini deferral).
+
+**B9-followup deferrals** (out of scope):
+- Comparator-version registry: B9 captures harness-process
+  package versions via `importlib.metadata`. A future GBM / TSC
+  adapter family registering pins extends `_PINNED_PACKAGES` in
+  `run_manifest.py`; the registry is open by design.
+- ResultRow run_id reconciliation: B9 ensures the CLI builds a
+  single RunEnvironment per invocation so every cell shares the
+  manifest's `run_id`. Older manifests (B5-B8 builds) carry one
+  `run_id` per experiment kind; B9 onwards is uniform.
+
 ## Risk register
 
 | ID | Risk | Severity | Mitigation |

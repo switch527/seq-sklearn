@@ -134,18 +134,25 @@ def is_cell_complete(root: Path, key: str) -> bool:
     return sentinel_path(root, key).exists()
 
 
-def _atomic_write_bytes(payload: bytes, dest: Path) -> None:
+def atomic_write_bytes(payload: bytes, dest: Path) -> None:
     """Write `payload` to `dest` atomically.
 
     Uses the write-to-temp-then-`os.replace` POSIX-atomic pattern;
     the temp path is `dest` with a `.tmp.{pid}` suffix so two
     concurrent writers (which the harness never produces, but
-    defense in depth) cannot collide on the temp.
+    defense in depth) cannot collide on the temp. Public so the
+    run-manifest writer + the cross-experiment report assembler
+    can share the same atomicity guarantee.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + f".tmp.{os.getpid()}")
     tmp.write_bytes(payload)
     tmp.replace(dest)
+
+
+# Backwards-compat alias for any internal callers still on the
+# leading-underscore form; remove after B9-followup audits.
+_atomic_write_bytes = atomic_write_bytes
 
 
 def _atomic_write_parquet(df: pd.DataFrame, dest: Path) -> None:

@@ -22,12 +22,7 @@ from benchmarks.experiments import (
     run_hpo_uplift,
     run_raw_loss,
 )
-from benchmarks.hpo._base import (  # pyright: ignore[reportPrivateUsage]
-    _HPO_SAMPLERS,
-    HPO_REGISTRY,
-    HPOSpace,
-    register_hpo_space,
-)
+from benchmarks.hpo._base import HPO_REGISTRY, HPOSpace, register_hpo_space
 from benchmarks.manifest import load_run
 from benchmarks.report.hpo_uplift import (
     aggregate_hpo_uplift,
@@ -62,8 +57,8 @@ def fake_registry_and_hpo() -> list[PanelDataset]:
     """Register the synthetic dataset/model registry AND a fake HPO
     space for the `sklearn_passthrough` family. The autouse
     `isolated_registry` fixture in conftest.py snapshots+restores
-    `HPO_REGISTRY` + `_HPO_SAMPLERS` (Phase B8 R1 arch-I6), so this
-    fixture does not need a manual teardown."""
+    `HPO_REGISTRY` (the dual-dict was collapsed in B9 arch-I5),
+    so this fixture does not need a manual teardown."""
     panels = register_all_fakes_and_get_panels()
     space = HPOSpace(
         family="sklearn_passthrough",
@@ -162,7 +157,6 @@ def test_run_hpo_uplift_skips_unregistered_family(
     # has no search space available; conftest's `isolated_registry`
     # restores both dicts after the test.
     HPO_REGISTRY.pop("sklearn_passthrough", None)
-    _HPO_SAMPLERS.pop("sklearn_passthrough", None)
 
     config = _make_config(
         datasets=("fake_binary",),
@@ -359,7 +353,6 @@ def test_run_hpo_uplift_records_all_trials_pruned_when_sampler_always_raises(
     # Replace the default passthrough HPO space with one whose
     # sampler always prunes.
     HPO_REGISTRY.pop("sklearn_passthrough", None)
-    _HPO_SAMPLERS.pop("sklearn_passthrough", None)
     space = HPOSpace(
         family="sklearn_passthrough",
         search_space_size=1,

@@ -12,4 +12,5 @@ why_tft_for_classification
 how_variable_selection_and_attention_work
 design_sklearn_api_over_lightning
 determinism_and_precision
+benchmarks/index
 ```
