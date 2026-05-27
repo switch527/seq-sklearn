@@ -1,15 +1,18 @@
-"""Model-adapter registrations (Phase B2).
+"""Model-adapter registrations (Phase B2 + Phase B10).
 
 Importing this package triggers each adapter module's
-``register_model(spec)`` call. Phase B2 ships the protocol + the
+``register_model(spec)`` call. Phase B2 shipped the protocol + the
 seq-sklearn adapter pair (TFTClassifier + TFTRegressor) as the
-primary deliverable; comparator families (GBMs via sklearn-API,
-classical TSC via aeon) land in Phase B2-followup branches
-(`benchmark-phase-B2-<family>`), each gated by the adapter-protocol
-conformance test so the cumulative roster cannot regress silently.
+primary deliverable. Phase B10 adds the GBM family
+(LightGBM / XGBoost / CatBoost via sklearn-API; six model specs
+total) per the B2.x roster. The classical TSC family
+(aeon-blocked) lands in a future B2-followup branch.
 """
 
-from benchmarks.adapters import seq_sklearn  # pyright: ignore[reportUnusedImport]
+from benchmarks.adapters import (
+    gbm,  # pyright: ignore[reportUnusedImport]
+    seq_sklearn,  # pyright: ignore[reportUnusedImport]
+)
 from benchmarks.adapters._base import (
     ProbaUnsupportedError,  # pyright: ignore[reportUnusedImport]
     QuantilesUnsupportedError,  # pyright: ignore[reportUnusedImport]
@@ -20,5 +23,6 @@ __all__ = [
     "ProbaUnsupportedError",
     "QuantilesUnsupportedError",
     "SeqSklearnAdapter",
+    "gbm",
     "seq_sklearn",
 ]

@@ -41,9 +41,13 @@ logger = logging.getLogger(__name__)
 _RUN_MANIFEST_FILENAME = "run_manifest.json"
 
 # Dependency packages the manifest pins. The list is intentionally
-# the harness's STABLE supply chain; a future GBM or TSC adapter
-# branch extends this list when those adapters register. Packages
-# not installed return `None` (best-effort).
+# the harness's STABLE supply chain; a future TSC adapter branch
+# extends this list when its optional deps land. Packages not
+# installed return `None` (best-effort). The Phase B10 GBM
+# adapter family (LightGBM / XGBoost / CatBoost) adds the three
+# library entries below; the manifest's reproducibility contract
+# pins each library's version on every run that touches the
+# corresponding adapter.
 _PINNED_PACKAGES: tuple[str, ...] = (
     "seq-sklearn",
     "torch",
@@ -54,6 +58,9 @@ _PINNED_PACKAGES: tuple[str, ...] = (
     "scipy",
     "optuna",
     "pydantic",
+    "lightgbm",
+    "xgboost",
+    "catboost",
 )
 
 
