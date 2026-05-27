@@ -1,12 +1,12 @@
 """Phase B10 / B3-followup: cross-consumer lookback binding.
 
 `L_resolved` is the single source of truth bound to:
-1. The splitter (`benchmarks.protocol.split.make_splitter`) — A9.1.
+1. The splitter (`benchmarks.protocol.split.make_splitter`) (A9.1).
 2. The seq_sklearn adapter's `tabular_config.lookback`.
 3. The GBM / sklearn-passthrough featurizer
    (`benchmarks.protocol.featurize.lag_featurize`).
-4. (B3-followup) The raw-MTS reshape for TSC adapters — aeon-blocked
-   and not in B10's scope.
+4. (B3-followup) The raw-MTS reshape for TSC adapters;
+   aeon-blocked and not in B10's scope.
 
 Before B10 the test had only two live consumers (splitter + deep
 adapter); the GBM adapter (B10) is the third, so the cross-
@@ -113,6 +113,28 @@ def test_lookback_perturbation_changes_featurizer_column_count(
     x_override = lag_featurize(ds.panel, spec, lookback_override=spec.lookback + 1)
     n_features = len(spec.feature_real_cols) + len(spec.feature_categorical_cols)
     assert x_override.shape[1] - x_default.shape[1] == n_features
+
+
+def test_seq_sklearn_adapter_binds_tabular_config_lookback_to_spec(
+    fake_panels: list[PanelDataset],
+) -> None:
+    """R1 arch-I3 / qa-NIT close: consumer 2 of the
+    cross-consumer identity invariant is the seq_sklearn deep
+    adapter. The adapter constructs `TabularConfigParams(...,
+    lookback=spec.lookback, ...)` in
+    `benchmarks/adapters/seq_sklearn.py::_build_tabular_config`,
+    so a regression that hardcoded a different lookback would
+    silently produce a mismatched feature surface vs the
+    splitter + GBM featurizer. Pin the identity directly."""
+    del fake_panels
+    from benchmarks.adapters.seq_sklearn import (
+        _build_tabular_config,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    spec = get_dataset("fake_binary")
+    tab = _build_tabular_config(spec)
+    assert tab.lookback == resolve_lookback(spec)
+    assert tab.lookback == spec.lookback
 
 
 def test_gbm_predict_proba_after_lookback_aware_featurize_aligns_with_panel(

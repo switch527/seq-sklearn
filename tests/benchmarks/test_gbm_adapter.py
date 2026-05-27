@@ -12,12 +12,14 @@ The e2e fit + predict smoke lives in
 fast-only protocol pass.
 """
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
 from benchmarks.adapters._base import (
+    ProbaUnsupportedError,
     QuantilesUnsupportedError,
     SeqSklearnAdapter,
 )
@@ -121,16 +123,37 @@ def test_gbm_classifier_predict_proba_before_fit_raises(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", _GBM_REGRESSOR_NAMES)
-def test_gbm_regressor_predict_proba_raises_typed(name: str) -> None:
-    """Regressor adapters raise `ProbaUnsupportedError` on
-    `predict_proba` per the protocol contract. The error fires
-    AFTER fit (since the harness's pre-call gate skips classifier-
-    only datasets); pin both pre-fit and post-fit paths."""
+def test_gbm_regressor_predict_proba_pre_fit_raises_not_fitted(name: str) -> None:
+    """Pre-fit: `NotFittedError` takes precedence over the typed
+    `ProbaUnsupportedError` because the adapter's null `_est` is
+    checked first."""
     spec = _dataset_spec(task_type="regression_point")
     adapter = instantiate_adapter(name, spec=spec)
-    # Pre-fit: NotFittedError takes precedence.
     with pytest.raises(NotFittedError):
         adapter.predict_proba(pd.DataFrame())
+
+
+@pytest.mark.parametrize("name", _GBM_REGRESSOR_NAMES)
+def test_gbm_regressor_predict_proba_post_fit_raises_proba_unsupported(name: str) -> None:
+    """R1 qa-CRIT-1 close: AFTER fit (so `_est` is bound), a
+    regressor adapter's `predict_proba` raises `ProbaUnsupportedError`
+    per the protocol contract. The harness's outer gate routes
+    around this normally; the typed error is the defense-in-depth
+    backstop for a caller that bypasses the gate."""
+    from tests.benchmarks._fakes import register_all_fakes_and_get_panels
+
+    register_all_fakes_and_get_panels()
+    from benchmarks.registry import get_dataset, get_loader
+
+    spec = get_dataset("fake_regression_point")
+    loader = get_loader("fake_regression_point")
+    ds = loader(Path("/tmp/cache-b10-r1-proba"))
+    # CatBoost uses `iterations`; the other two use `n_estimators`.
+    overrides: dict[str, Any] = {"iterations": 10} if "catboost" in name else {"n_estimators": 10}
+    adapter = instantiate_adapter(name, spec=spec, hyperparameters=overrides)
+    adapter.fit(ds.panel, ds.y.astype(np.float64))
+    with pytest.raises(ProbaUnsupportedError, match="do not produce class probabilities"):
+        adapter.predict_proba(ds.panel)
 
 
 @pytest.mark.parametrize("name", _GBM_ALL_NAMES)
@@ -184,3 +207,72 @@ def test_gbm_regressor_rejects_classification_task_at_fit() -> None:
     adapter = instantiate_adapter("lightgbm_regressor", spec=spec)
     with pytest.raises(ValueError, match="does not support task_type"):
         adapter.fit(pd.DataFrame(), np.array([]))
+
+
+# --- hyperparameters override reach -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "kw"),
+    [
+        ("lightgbm_classifier", "n_estimators"),
+        ("xgboost_classifier", "n_estimators"),
+        ("catboost_classifier", "iterations"),
+    ],
+)
+def test_gbm_classifier_hyperparameter_override_reaches_underlying_estimator(
+    name: str, kw: str
+) -> None:
+    """R1 qa-CRIT-2 close: the adapter forwards the
+    `hyperparameters` dict through to the underlying sklearn-API
+    estimator. The protocol-level test only instantiates the
+    adapter without reading back the estimator's params, so a
+    silent dropped-override could pass that test. Pin that an
+    explicit value ACTUALLY reaches the estimator post-fit.
+
+    Uses `7` as the sentinel value (smaller than every factory
+    default; no library coerces it; well-formed for both
+    `n_estimators` and `iterations`)."""
+    from tests.benchmarks._fakes import register_all_fakes_and_get_panels
+
+    register_all_fakes_and_get_panels()
+    from benchmarks.registry import get_dataset, get_loader
+
+    spec = get_dataset("fake_binary")
+    loader = get_loader("fake_binary")
+    ds = loader(Path("/tmp/cache-b10-r1-override"))
+    adapter = instantiate_adapter(name, spec=spec, hyperparameters={kw: 7})
+    adapter.fit(ds.panel, ds.y)
+    # Read back the underlying estimator's resolved parameter; the
+    # sklearn-API `get_params()` is the contract every library
+    # honors (LightGBM, XGBoost, CatBoost all expose it).
+    est = adapter._est  # pyright: ignore[reportAttributeAccessIssue]
+    assert est is not None
+    params = est.get_params()  # pyright: ignore[reportAttributeAccessIssue]
+    assert params[kw] == 7
+
+
+# --- factory pre-init guard -------------------------------------------------
+
+
+def test_gbm_adapter_missing_estimator_factory_raises_runtime_error() -> None:
+    """R1 qa-IMP close: the `_estimator_factory is None` guard in
+    `_GBMAdapter.fit` is the runtime backstop for a future
+    subclass that forgets to set the factory in `__post_init__`.
+    Pin the typed error so a regression here surfaces explicitly."""
+    from benchmarks.adapters.gbm import _GBMAdapter  # pyright: ignore[reportPrivateUsage]
+
+    spec = _dataset_spec(task_type="binary")
+    # Construct the base directly (no subclass `__post_init__` to
+    # set the factory). `_GBMAdapter` declares the metadata as
+    # `ClassVar`s that aren't satisfied for the base, but `fit`
+    # short-circuits on the task-type check first; pin the
+    # `_estimator_factory is None` branch by passing a matching
+    # task_type via a subclass-shaped spec.
+    adapter = _GBMAdapter(spec=spec)
+    # The base class declares `task_types = ()`, so the task-type
+    # check fires before the factory guard. Override the ClassVar
+    # via direct assignment to force the factory branch.
+    adapter.task_types = ("binary",)  # pyright: ignore[reportAttributeAccessIssue]
+    with pytest.raises(RuntimeError, match="missing `_estimator_factory`"):
+        adapter.fit(pd.DataFrame({"id": [1], "t": [0], "x": [0.0]}), np.array([0]))

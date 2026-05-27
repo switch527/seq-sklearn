@@ -114,6 +114,26 @@ def test_sample_gbm_catboost_keys() -> None:
     assert "depth" in kwargs
     assert "l2_leaf_reg" in kwargs
     assert "random_strength" in kwargs
+    # R1 arch-CRIT-1 close: `bagging_temperature` is the sixth
+    # CatBoost param that aligns the sampled dimensionality with
+    # the registered `search_space_size=6` disclosure.
+    assert "bagging_temperature" in kwargs
+
+
+def test_sample_gbm_all_libraries_emit_six_searched_params() -> None:
+    """R1 arch-CRIT-1 close: the disclosed `search_space_size=6`
+    must hold per library, not just for the family. Pin that
+    each library's sampler returns a dict of exactly 6 keys."""
+    for name, task_types in (
+        ("lightgbm_classifier", ("binary", "multiclass")),
+        ("xgboost_classifier", ("binary", "multiclass")),
+        ("catboost_classifier", ("binary", "multiclass")),
+    ):
+        kwargs = _sample_once(name, task_types)
+        assert len(kwargs) == 6, (
+            f"{name} emits {len(kwargs)} params; expected 6 for "
+            f"_GBM_SEARCH_SPACE_SIZE alignment: got {sorted(kwargs)}"
+        )
 
 
 def test_sample_gbm_regressors_use_same_library_search_space() -> None:
@@ -132,6 +152,65 @@ def test_sample_gbm_regressors_use_same_library_search_space() -> None:
             f"{cls} and {reg} sampled different kwarg key sets: "
             f"{sorted(set(cls_kwargs) ^ set(reg_kwargs))}"
         )
+
+
+@pytest.mark.parametrize(
+    ("library_pair", "fixed_params"),
+    [
+        (
+            ("lightgbm_classifier", "lightgbm_regressor"),
+            {
+                "n_estimators": 100,
+                "learning_rate": 0.05,
+                "num_leaves": 31,
+                "min_child_samples": 20,
+                "reg_alpha": 0.5,
+                "reg_lambda": 0.5,
+            },
+        ),
+        (
+            ("xgboost_classifier", "xgboost_regressor"),
+            {
+                "n_estimators": 100,
+                "learning_rate": 0.05,
+                "max_depth": 6,
+                "min_child_weight": 1.0,
+                "reg_alpha": 0.5,
+                "reg_lambda": 0.5,
+            },
+        ),
+        (
+            ("catboost_classifier", "catboost_regressor"),
+            {
+                "iterations": 100,
+                "learning_rate": 0.05,
+                "depth": 6,
+                "l2_leaf_reg": 3.0,
+                "random_strength": 1.0,
+                "bagging_temperature": 0.5,
+            },
+        ),
+    ],
+)
+def test_sample_gbm_same_library_classifier_regressor_produce_identical_values_on_fixed_trial(
+    library_pair: tuple[str, str], fixed_params: dict[str, Any]
+) -> None:
+    """R1 qa-IMP close: the same-library sampler is task-agnostic
+    (the seq_sklearn comparator's F5 closure makes its sampler
+    task-dependent; GBMs do not). Pin VALUE identity under a
+    fixed trial (not just key-set equality) so a future refactor
+    that accidentally wires the regressor to a different sampler
+    function with the same keys would fail."""
+    cls_name, reg_name = library_pair
+    cls_spec = _model_spec(cls_name, ("binary", "multiclass"))
+    reg_spec = _model_spec(reg_name, ("regression_point",))
+    cls_ds = _dataset_spec(task_type="binary")
+    reg_ds = _dataset_spec(task_type="regression_point")
+    cls_trial = optuna.trial.FixedTrial(fixed_params)
+    reg_trial = optuna.trial.FixedTrial(fixed_params)
+    cls_kwargs = sample_gbm_hyperparameters(cls_trial, cls_spec, cls_ds)
+    reg_kwargs = sample_gbm_hyperparameters(reg_trial, reg_spec, reg_ds)
+    assert cls_kwargs == reg_kwargs
 
 
 def test_sample_gbm_rejects_non_gbm_family() -> None:

@@ -77,6 +77,13 @@ def _sample_catboost_hyperparameters(trial: optuna.trial.BaseTrial) -> dict[str,
         "depth": int(trial.suggest_int("depth", 3, 10)),
         "l2_leaf_reg": float(trial.suggest_float("l2_leaf_reg", 1e-2, 10.0, log=True)),
         "random_strength": float(trial.suggest_float("random_strength", 1e-3, 10.0, log=True)),
+        # B10 R1 arch-CRIT-1 close: align CatBoost's sampled
+        # dimensionality with LightGBM + XGBoost so the B6.4.0
+        # disclosure `_GBM_SEARCH_SPACE_SIZE = 6` is accurate per
+        # cell, not per family. `bagging_temperature` controls the
+        # subsampling stochasticity (CatBoost's analogue of the
+        # other libraries' `subsample` knob).
+        "bagging_temperature": float(trial.suggest_float("bagging_temperature", 0.0, 1.0)),
     }
 
 
