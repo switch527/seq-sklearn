@@ -646,3 +646,158 @@ def test_result_types_are_frozen_and_forbid_extra_fields() -> None:
         )
     with pytest.raises(ValidationError):
         result.run_id = "mutated"  # type: ignore[misc]
+
+
+# --- _per_dataset_lift intersect-branch e2e (R2 fix) -------------------------
+
+
+def test_per_dataset_lift_intersect_trims_to_common_rows(tmp_path: Path) -> None:
+    """When the GBM cell's panel rows are [0,1,2,3] and the seq
+    cell's are [1,2,3], the intersect branch must trim BOTH
+    ensembles to rows [1,2,3] before computing Δloss. A
+    pos_a/pos_b transposition bug in the subscript would produce
+    a different value; this test kills that mutation by checking
+    the result against a hand-computed loss on the [1,2,3] subset.
+    """
+    from benchmarks.experiments.ensemble_lift import _per_dataset_lift
+
+    gbm_key = "ds__m_gbm__seed_0__default__fold_0"
+    seq_key = "ds__m_seq__seed_0__default__fold_0"
+    # GBM covers all 4 rows with one proba; seq covers rows 1..3
+    # with a DIFFERENT proba so a pos_a/pos_b swap would shift the
+    # averaged probabilities and the resulting loss.
+    gbm_proba = np.full((4, 2), 0.5, dtype=np.float64)
+    gbm_proba[:, 1] = 0.5
+    seq_proba = np.full((3, 2), 0.5, dtype=np.float64)
+    seq_proba[:, 0] = 0.9  # confident class 0
+    seq_proba[:, 1] = 0.1
+    y_true_full = np.array([1.0, 0.0, 0.0, 1.0], dtype=np.float64)
+    write_predictions(
+        tmp_path,
+        gbm_key,
+        panel_row_index=np.arange(4, dtype=np.int64),
+        y_true=y_true_full,
+        y_pred=np.zeros(4),
+        y_proba=gbm_proba,
+    )
+    write_predictions(
+        tmp_path,
+        seq_key,
+        panel_row_index=np.array([1, 2, 3], dtype=np.int64),
+        y_true=y_true_full[1:4],
+        y_pred=np.zeros(3),
+        y_proba=seq_proba,
+    )
+
+    gbm_cells = pd.DataFrame(
+        [
+            {
+                "dataset_name": "ds",
+                "model_name": "m_gbm",
+                "seed": 0,
+                "fold_index": 0,
+                "task_type": "binary",
+                "variant": "default",
+                "cell_key": gbm_key,
+            }
+        ]
+    )
+    seq_cells = pd.DataFrame(
+        [
+            {
+                "dataset_name": "ds",
+                "model_name": "m_seq",
+                "seed": 0,
+                "fold_index": 0,
+                "task_type": "binary",
+                "variant": "default",
+                "cell_key": seq_key,
+            }
+        ]
+    )
+
+    out = _per_dataset_lift(
+        dataset_name="ds",
+        task_type="binary",
+        seed_fold_pairs=[(0, 0)],
+        gbm_cells=gbm_cells,
+        seq_cells=seq_cells,
+        output_root=tmp_path,
+    )
+
+    # Hand-compute the expected loss on the [1,2,3] subset.
+    y_sub = y_true_full[1:4].astype(np.int64)
+    gbm_sub = gbm_proba[1:4]
+    avg_sub = (gbm_sub + seq_proba) / 2.0
+    eps = 1e-15
+    expected_loss_a = float(-np.log(np.clip(gbm_sub, eps, 1 - eps)[np.arange(3), y_sub]).mean())
+    expected_loss_b = float(-np.log(np.clip(avg_sub, eps, 1 - eps)[np.arange(3), y_sub]).mean())
+
+    assert out.n_cells_paired == 1
+    assert out.loss_gbm_only_mean is not None
+    assert out.loss_gbm_plus_seq_mean is not None
+    np.testing.assert_allclose(out.loss_gbm_only_mean, expected_loss_a, atol=1e-9)
+    np.testing.assert_allclose(out.loss_gbm_plus_seq_mean, expected_loss_b, atol=1e-9)
+
+
+# --- multi-dataset e2e (R2 fix) ----------------------------------------------
+
+
+def _register_second_binary_panel() -> None:
+    """Register a second binary panel under name `fake_binary_b`
+    so the multi-dataset e2e test can drive `run_ensemble_lift`
+    through the n_datasets>=2 Wilcoxon path."""
+    from benchmarks.datasets._base import PanelDataset
+    from benchmarks.registry import register_dataset
+
+    from tests.benchmarks._fakes import make_binary_panel
+
+    base = make_binary_panel(n_entities=5, n_periods=8)
+    spec = base.spec.model_copy(
+        update={
+            "name": "fake_binary_b",
+            "archive_basename": "binary_b.csv",
+            "source_uri": "https://example.test/binary_b.csv",
+        }
+    )
+    panel = PanelDataset(spec=spec, panel=base.panel, y=base.y)
+
+    def _loader(_root: Path, _captured: PanelDataset = panel) -> PanelDataset:
+        return _captured
+
+    register_dataset(spec, _loader)
+
+
+def test_run_ensemble_lift_multi_dataset_aggregates_n_ge_2_wilcoxon(
+    tmp_path: Path,
+) -> None:
+    """End-to-end with TWO datasets so the per-dataset loop
+    iterates twice and `_wilcoxon_across_datasets` lands on the
+    n>=2 branch. Validates that the assembled result has
+    n_datasets==2 with a real (non-None) Wilcoxon statistic."""
+    register_all_fakes_and_get_panels()
+    _register_fake_seq_classifier()
+    _register_second_binary_panel()
+    config = BenchmarkConfig(
+        datasets=("fake_binary", "fake_binary_b"),
+        models=("lightgbm_classifier", "fake_seq_constant_classifier"),
+        experiments=(
+            ExperimentSpec(kind="raw_loss", seeds=(0,)),
+            ExperimentSpec(kind="ensemble_lift", seeds=(0,)),
+        ),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    run_raw_loss(config, output_root=output_root, env=env)
+    result = run_ensemble_lift(config, output_root=output_root, env=env)
+    assert len(result.rows) == 2
+    dataset_names = {row.dataset_name for row in result.rows}
+    assert dataset_names == {"fake_binary", "fake_binary_b"}
+    # Wilcoxon's n>=2 branch fires; family_size=1 so Holm-adjusted
+    # equals raw.
+    assert result.wilcoxon.n_datasets == 2
+    assert result.wilcoxon.statistic is not None
+    assert result.wilcoxon.p_value is not None
+    assert result.wilcoxon.holm_adjusted_p_value == result.wilcoxon.p_value
