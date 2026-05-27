@@ -136,7 +136,11 @@ def _render_wilcoxon_block(result: EnsembleLiftExperimentResult) -> str:
     )
     parts.append("")
     if wilcoxon.statistic is None or wilcoxon.p_value is None:
-        parts.append(f"_Wilcoxon skipped: n_datasets={wilcoxon.n_datasets} (need >= 1)._")
+        parts.append(
+            f"_Wilcoxon skipped: n_datasets={wilcoxon.n_datasets} "
+            "(paired signed-rank needs >= 2 datasets for inference; "
+            "the single-dataset Δloss above is informational)._"
+        )
         parts.append("")
         return "\n".join(parts)
     parts.append(

@@ -65,13 +65,14 @@ from scipy import stats
 
 from benchmarks.config import BenchmarkConfig, ExperimentSpec
 from benchmarks.experiments.raw_loss import RunEnvironment
-from benchmarks.manifest import load_run
+from benchmarks.manifest import cell_key, load_run
 from benchmarks.predictions import (
     has_predictions,
     load_predictions,
     proba_matrix,
 )
 from benchmarks.registry import get_model
+from benchmarks.registry.models import ModelNotRegisteredError
 from benchmarks.stats.friedman import holm_correction
 
 logger = logging.getLogger(__name__)
@@ -163,18 +164,21 @@ class EnsembleLiftExperimentResult(BaseModel):
     wilcoxon: WilcoxonResult
 
 
-def _resolve_ensemble_lift_seeds(experiments: Iterable[ExperimentSpec]) -> tuple[int, ...]:
-    seeds: set[int] = set()
+def _assert_ensemble_lift_configured(experiments: Iterable[ExperimentSpec]) -> None:
+    """Raise if no `ensemble_lift` spec is declared.
+
+    The driver aggregates over the (seed, fold) pairs found in the
+    B5 manifest rather than the spec's `seeds`, so this validator
+    is side-effect-only.
+    """
     for spec in experiments:
         if spec.kind == "ensemble_lift":
-            seeds.update(spec.seeds)
-    if not seeds:
-        raise ValueError(
-            "run_ensemble_lift: BenchmarkConfig declares no "
-            "ensemble_lift experiment; add ExperimentSpec(kind="
-            "'ensemble_lift') to the config"
-        )
-    return tuple(sorted(seeds))
+            return
+    raise ValueError(
+        "run_ensemble_lift: BenchmarkConfig declares no "
+        "ensemble_lift experiment; add ExperimentSpec(kind="
+        "'ensemble_lift') to the config"
+    )
 
 
 def _model_families(manifest: pd.DataFrame) -> dict[str, str]:
@@ -190,7 +194,7 @@ def _model_families(manifest: pd.DataFrame) -> dict[str, str]:
     for name in manifest["model_name"].dropna().unique():
         try:
             spec = get_model(str(name))
-        except Exception:
+        except ModelNotRegisteredError:
             out[str(name)] = ""
             continue
         out[str(name)] = spec.family
@@ -398,14 +402,16 @@ def _build_cells_table(
         keep["cell_key"] = pd.Series([], dtype=str)
     else:
 
-        def _cell_key(row: pd.Series) -> str:
-            return (
-                f"{row['dataset_name']}__{row['model_name']}__"
-                f"seed_{int(row['seed'])}__{row['variant']}__"
-                f"fold_{int(row['fold_index'])}"
+        def _row_cell_key(row: pd.Series) -> str:
+            return cell_key(
+                dataset_name=str(row["dataset_name"]),
+                model_name=str(row["model_name"]),
+                seed=int(row["seed"]),
+                variant=str(row["variant"]),
+                fold_index=int(row["fold_index"]),
             )
 
-        keep["cell_key"] = keep.apply(_cell_key, axis=1)
+        keep["cell_key"] = keep.apply(_row_cell_key, axis=1)
     return keep[
         [
             "dataset_name",
@@ -465,32 +471,55 @@ def _per_dataset_lift(
         gbm_plus_seq = _join_predictions(cells=combined, output_root=output_root)
         if gbm_only is None or gbm_plus_seq is None:
             continue
-        _, y_true_a, value_a = gbm_only
-        _, y_true_b, value_b = gbm_plus_seq
+        idx_a, y_true_a, value_a = gbm_only
+        idx_b, y_true_b, value_b = gbm_plus_seq
+
+        # Restrict both ensembles to the panel-row intersection so
+        # `loss_a`, `loss_b`, and the oracle sit on the SAME rows.
+        # The seq adapter strips below-floor rows (A9.1) but the
+        # GBM adapters do not, so `len(idx_b) <= len(idx_a)` in
+        # production; without this intersection, `delta_loss`
+        # would compare means over different populations and the
+        # oracle would crash on row-misaligned arrays.
+        common, pos_a, pos_b = np.intersect1d(idx_a, idx_b, return_indices=True)
+        if common.size == 0:
+            continue
+        y_true_common = y_true_b[pos_b]
+        if not np.array_equal(y_true_a[pos_a], y_true_common):
+            logger.warning(
+                "_per_dataset_lift: y_true disagrees on the gbm/gbm+seq "
+                "intersection for dataset=%s seed=%d fold=%d; skipping pair",
+                dataset_name,
+                seed,
+                fold,
+            )
+            continue
+        value_a_common = value_a[pos_a]
+        value_b_common = value_b[pos_b]
 
         # Per-task ensemble value type.
         if task_type in {"binary", "multiclass"}:
-            proba_a = value_a if value_a.ndim == 2 else None
-            proba_b = value_b if value_b.ndim == 2 else None
+            proba_a = value_a_common if value_a_common.ndim == 2 else None
+            proba_b = value_b_common if value_b_common.ndim == 2 else None
             pred_a = None
             pred_b = None
         else:
             proba_a = None
             proba_b = None
-            pred_a = value_a if value_a.ndim == 1 else None
-            pred_b = value_b if value_b.ndim == 1 else None
+            pred_a = value_a_common if value_a_common.ndim == 1 else None
+            pred_b = value_b_common if value_b_common.ndim == 1 else None
 
         loss_a = _per_cell_primary_loss(
-            task_type=task_type, y_true=y_true_a, proba=proba_a, y_pred=pred_a
+            task_type=task_type, y_true=y_true_common, proba=proba_a, y_pred=pred_a
         )
         loss_b = _per_cell_primary_loss(
-            task_type=task_type, y_true=y_true_b, proba=proba_b, y_pred=pred_b
+            task_type=task_type, y_true=y_true_common, proba=proba_b, y_pred=pred_b
         )
         if loss_a is None or loss_b is None:
             continue
         oracle = _per_sample_oracle_loss(
             task_type=task_type,
-            y_true=y_true_a,
+            y_true=y_true_common,
             proba_a=proba_a,
             proba_b=proba_b,
             pred_a=pred_a,
@@ -539,15 +568,19 @@ def _wilcoxon_across_datasets(rows: list[PerDatasetLift], *, family_size: int) -
     a future multi-pair test family extends the size.
     """
     deltas = [r.delta_loss_mean for r in rows if r.delta_loss_mean is not None]
-    if len(deltas) < 1:
+    arr = np.asarray(deltas, dtype=float)
+    # Wilcoxon signed-rank needs >= 2 paired observations for any
+    # inferential content (the statistic is well-defined at n=1 but
+    # carries no signal). Surface the skip path so the renderer can
+    # flag the result as informational rather than significant.
+    if arr.size < 2:
         return WilcoxonResult(
             statistic=None,
             p_value=None,
             holm_adjusted_p_value=None,
-            n_datasets=0,
+            n_datasets=int(arr.size),
             family_size=family_size,
         )
-    arr = np.asarray(deltas, dtype=float)
     # All-zero diffs: Wilcoxon is undefined; surface a neutral
     # p-value (matches the friedman_holm convention).
     if np.count_nonzero(arr) == 0:
@@ -581,13 +614,14 @@ def run_ensemble_lift(
     *,
     output_root: Path,
     env: RunEnvironment,
-    seq_family: str = _DEFAULT_SEQ_FAMILY,
-    baseline_family: str = _DEFAULT_BASELINE_FAMILY,
 ) -> EnsembleLiftExperimentResult:
     """Read the B5 manifest under `output_root`, build the
     per-(dataset, seed, fold) GBM-only and GBM+seq ensembles
     from the cached predictions, compute the per-dataset Δloss +
     oracle, and run the Wilcoxon signed-rank across datasets.
+
+    The seq + baseline family pair is fixed at v1 (seq_sklearn vs
+    gbm); a cross-family-set lift driver is a B11-followup.
 
     Returns a structured summary; the report-rendering layer
     (`benchmarks/report/ensemble_lift.py`) turns the summary into
@@ -597,7 +631,9 @@ def run_ensemble_lift(
         ValueError: no `ensemble_lift` experiment in the config,
             or the B5 manifest under `output_root` is empty.
     """
-    _resolve_ensemble_lift_seeds(config.experiments)
+    seq_family = _DEFAULT_SEQ_FAMILY
+    baseline_family = _DEFAULT_BASELINE_FAMILY
+    _assert_ensemble_lift_configured(config.experiments)
     manifest = load_run(output_root)
     if manifest.empty:
         raise ValueError(

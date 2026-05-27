@@ -227,7 +227,7 @@ def _dispatch_kinds(
             logger.error(
                 "experiment driver for kind=%s not yet implemented; "
                 "every shipped kind (raw_loss, ensemble, training_time, "
-                "hpo_uplift) is dispatched above",
+                "hpo_uplift, ensemble_lift) is dispatched above",
                 kind,
             )
             return 2
