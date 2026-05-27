@@ -898,6 +898,86 @@ ValueError -> exit 1 (B7 Gemini deferral).
   manifest's `run_id`. Older manifests (B5-B8 builds) carry one
   `run_id` per experiment kind; B9 onwards is uniform.
 
+### Phase B11: Ensemble-lift experiment (B6.2.5 deliverable)
+
+**Goal**: a separate experiment from B6's pairwise complementarity
+that quantifies how much adding a `seq_sklearn` model to the
+baseline GBM ensemble lowers loss across the dataset roster.
+B6 answers "which two models complement each other"; B11 answers
+"does adding the deep model to the GBM ensemble lift it, and is
+the lift significant across datasets?"
+
+**Modules**:
+
+- `benchmarks/experiments/ensemble_lift.py` (NEW): report-only
+  driver. Reads the B5 manifest + per-cell predictions shards,
+  partitions OK cells by `ModelSpec.family` into a baseline
+  family (default `"gbm"`) and the seq family (default
+  `"seq_sklearn"`), builds two equal-weight averaged ensembles
+  per (dataset, seed, fold) pair (`gbm` only vs `gbm + seq`),
+  computes per-cell primary loss (`log_loss` for classification,
+  `RMSE` for regression), and produces `PerDatasetLift` rows with
+  seed-mean `delta_loss = loss(gbm) - loss(gbm + seq)`. A
+  per-sample best oracle bound is computed alongside. The
+  per-dataset means feed `scipy.stats.wilcoxon` with Holm
+  correction (`family_size=1` at v1 since only one seq+baseline
+  pair is shipped).
+- `benchmarks/report/ensemble_lift.py` (NEW): renderer for the
+  `EnsembleLiftExperimentResult` -> `ensemble_lift.md`. Sorted
+  per-dataset table (`task_type ASC, delta_loss_mean DESC`),
+  incomplete-datasets footnote (no GBM cells / no seq cells / no
+  paired cells), Wilcoxon block with raw + Holm-adjusted p-values.
+  Deliberately filesystem-free; the CLI calls the driver then
+  pipes the structured result straight in. (No `render_from_dir`
+  convenience because building the result requires the structured
+  `BenchmarkConfig`.)
+- `benchmarks/config.py`: `ExperimentKind` Literal extended with
+  `"ensemble_lift"`.
+- `benchmarks/run.py`: dispatch arm for `ensemble_lift`; writes
+  `ensemble_lift.md` via the B7-style `atomic_write_bytes` shard.
+- `benchmarks/experiments/__init__.py`: exports
+  `EnsembleLiftExperimentResult` + `run_ensemble_lift`.
+- `tests/benchmarks/test_ensemble_lift_experiment.py` (NEW): the
+  e2e tests. Includes a `_ConstantSeqClassifierAdapter` test
+  fixture (a fresh `family="seq_sklearn"` constant-classifier
+  adapter; the existing `NaNProbaAdapter` fake returns NaN proba
+  which would block `log_loss`). Covers: refusal when no
+  `ensemble_lift` spec, refusal on empty manifest,
+  `no_gbm_predictions` sentinel, `no_seq_predictions` sentinel,
+  the happy path (paired cells produce Δloss + oracle row +
+  Wilcoxon), Markdown rendering, and empty-result rendering.
+
+**Dependencies**: B5 (per-cell predictions shards), B8 (Holm
+correction reused), B10 (the GBM family providing the baseline
+half of the pairing).
+
+**Deliverable tests**: 7 tests; key assertion is
+`oracle_loss_mean <= min(loss_gbm_only_mean, loss_gbm_plus_seq_mean)`
+by construction.
+
+**Done when**: `python -m benchmarks.run --config <cfg>
+--experiment ensemble_lift` emits a per-dataset Δloss table +
+Wilcoxon significance call against the B5 manifest, and the
+result type round-trips through the renderer.
+
+**B11-followup deferrals** (out of scope for v1):
+- Stacked / meta-learner ensembles: v1 ships equal-weight
+  averaging only. A logistic stacking head over the same per-cell
+  predictions is a follow-up driver and does not change the B5
+  shard schema.
+- Cross-family-set lift: the v1 pairing is fixed to one baseline
+  family + one seq family. A future driver could sweep
+  `family_size > 1` by accepting a `tuple[Family, ...]` baseline
+  pool; Holm correction is already shape-correct.
+- Additional baseline families beyond GBM (e.g. TSC, MLP): the
+  partition is keyed by `ModelSpec.family`; the driver accepts a
+  `baseline_family` kwarg and is open by design. The v1 default
+  is `"gbm"`.
+- Per-fold confidence intervals: v1 ships seed-fold means + the
+  Wilcoxon across datasets. Bootstrap CIs on Δloss within a
+  dataset are a B11-followup; the per-cell loss vectors are
+  already materialized for them.
+
 ## Risk register
 
 | ID | Risk | Severity | Mitigation |

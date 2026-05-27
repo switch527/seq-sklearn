@@ -37,6 +37,7 @@ ExperimentKind = Literal[
     "ensemble",
     "training_time",
     "hpo_uplift",
+    "ensemble_lift",
 ]
 
 

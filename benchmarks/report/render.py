@@ -44,6 +44,7 @@ REPORT_FILENAME = "report.md"
 _EXPERIMENT_FILES: tuple[tuple[str, str], ...] = (
     ("leaderboard.md", "Raw loss leaderboard (B5 / B6.1)"),
     ("pairwise.md", "Ensemble complementarity (B6 / B6.2)"),
+    ("ensemble_lift.md", "Ensemble lift Wilcoxon (B11 / B6.2.5)"),
     ("training_time.md", "Training-time table (B7 / B6.3)"),
     ("hpo_uplift.md", "HPO uplift + Friedman/Holm (B8 / B6.4)"),
 )
