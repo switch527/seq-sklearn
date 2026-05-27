@@ -29,7 +29,7 @@ from benchmarks.experiments import (
     run_ensemble_lift,
     run_raw_loss,
 )
-from benchmarks.experiments.ensemble_lift import (
+from benchmarks.experiments.ensemble_lift import (  # pyright: ignore[reportPrivateUsage]
     PerDatasetLift,
     WilcoxonResult,
     _wilcoxon_across_datasets,
@@ -347,6 +347,36 @@ def test_wilcoxon_filters_none_deltas() -> None:
     assert result.n_datasets == 2
 
 
+def test_wilcoxon_at_count_nonzero_one_short_circuits_to_skip_path() -> None:
+    """A diff vector like [0.0, 1.0] has size>=2 but only ONE
+    non-zero entry. scipy's `zero_method='wilcox'` drops zeros,
+    so the call would otherwise execute on n=1 effective. The
+    guard now uses `count_nonzero<2` so the inferential floor
+    matches scipy's internal behavior."""
+    rows = [_row(dataset_name="a", delta=0.0), _row(dataset_name="b", delta=1.0)]
+    result = _wilcoxon_across_datasets(rows, family_size=1)
+    assert result.statistic is None
+    assert result.p_value is None
+    assert result.n_datasets == 2
+
+
+def test_wilcoxon_drops_nan_deltas_before_scipy() -> None:
+    """NaN deltas are filtered alongside None deltas so a
+    NaN-tinged upstream cell loss does not poison the Wilcoxon
+    call (which would return a NaN p-value that crashes the Holm
+    correction sort)."""
+    rows = [
+        _row(dataset_name="a", delta=float("nan")),
+        _row(dataset_name="b", delta=0.2),
+        _row(dataset_name="c", delta=-0.1),
+    ]
+    result = _wilcoxon_across_datasets(rows, family_size=1)
+    assert result.n_datasets == 2  # only the two finite deltas
+    assert result.statistic is not None
+    assert result.p_value is not None
+    assert not np.isnan(result.p_value)
+
+
 def test_wilcoxon_all_zero_deltas_returns_neutral_p_one() -> None:
     """An all-zero diff vector triggers the early-return branch
     that surfaces statistic=0, p=1 (scipy.stats.wilcoxon would
@@ -428,6 +458,26 @@ def test_join_predictions_returns_none_on_y_true_mismatch(tmp_path: Path) -> Non
             {"cell_key": "ds__m_b__seed_0__default__fold_0"},
         ]
     )
+    assert _join_predictions(cells=cells, output_root=tmp_path) is None
+
+
+def test_join_predictions_rejects_duplicate_panel_row_index(tmp_path: Path) -> None:
+    """A shard with a duplicate `panel_row_index` would cause the
+    inner-join to silently produce a Cartesian product, inflating
+    row counts and biasing the averaged probabilities. The guard
+    short-circuits to None instead."""
+    from benchmarks.experiments.ensemble_lift import _join_predictions
+
+    # Write a shard with a duplicate panel_row_index (1 appears twice).
+    write_predictions(
+        tmp_path,
+        "ds__m_a__seed_0__default__fold_0",
+        panel_row_index=np.array([0, 1, 1, 2], dtype=np.int64),
+        y_true=np.zeros(4, dtype=np.float64),
+        y_pred=np.zeros(4),
+        y_proba=np.full((4, 2), 0.5, dtype=np.float64),
+    )
+    cells = pd.DataFrame([{"cell_key": "ds__m_a__seed_0__default__fold_0"}])
     assert _join_predictions(cells=cells, output_root=tmp_path) is None
 
 
@@ -560,6 +610,39 @@ def test_render_incomplete_paired_but_no_overlap_arm_lists_overlap_reason() -> N
 
 
 # --- regression task path (R1 fixes) -----------------------------------------
+
+
+def test_per_cell_primary_loss_regression_point_skips_nan_rows() -> None:
+    """NaN in y_true would otherwise propagate through the
+    arithmetic; the guard skips NaN rows so the per-cell loss is
+    finite even under upstream B5 contract violations."""
+    from benchmarks.experiments.ensemble_lift import _per_cell_primary_loss
+
+    y_true = np.array([1.0, np.nan, 3.0], dtype=np.float64)
+    y_pred = np.array([1.5, 0.0, 3.5], dtype=np.float64)
+    # Expected RMSE over the two finite rows: rows 0 and 2.
+    expected = float(np.sqrt(np.mean(np.array([0.25, 0.25]))))
+    got = _per_cell_primary_loss(
+        task_type="regression_point", y_true=y_true, proba=None, y_pred=y_pred
+    )
+    assert got is not None
+    np.testing.assert_allclose(got, expected, atol=1e-9)
+
+
+def test_per_cell_primary_loss_regression_point_all_nan_returns_none() -> None:
+    """An all-NaN y_true is unrecoverable; the helper returns
+    None so the upstream loop skips the cell rather than
+    polluting the seed-mean with NaN."""
+    from benchmarks.experiments.ensemble_lift import _per_cell_primary_loss
+
+    y_true = np.array([np.nan, np.nan], dtype=np.float64)
+    y_pred = np.array([0.0, 0.0], dtype=np.float64)
+    assert (
+        _per_cell_primary_loss(
+            task_type="regression_point", y_true=y_true, proba=None, y_pred=y_pred
+        )
+        is None
+    )
 
 
 def test_per_cell_primary_loss_regression_point_hand_oracle() -> None:

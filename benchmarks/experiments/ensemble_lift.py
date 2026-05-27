@@ -236,7 +236,15 @@ def _per_cell_primary_loss(
     if task_type == "regression_point":
         if y_pred is None:
             return None
-        return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+        # The B5 contract guarantees `y_true` is finite, but a buggy
+        # upstream adapter could write NaN-tinged predictions. Skip
+        # NaN rows rather than poisoning the dataset mean (which
+        # would propagate through Δloss into the Wilcoxon vector).
+        mask = ~(np.isnan(y_true) | np.isnan(y_pred))
+        if not mask.any():
+            return None
+        diff = y_true[mask] - y_pred[mask]
+        return float(np.sqrt(np.mean(diff**2)))
     return None
 
 
@@ -277,8 +285,11 @@ def _per_sample_oracle_loss(
     if task_type == "regression_point":
         if pred_a is None or pred_b is None:
             return None
-        sqerr_a = (y_true - pred_a) ** 2
-        sqerr_b = (y_true - pred_b) ** 2
+        mask = ~(np.isnan(y_true) | np.isnan(pred_a) | np.isnan(pred_b))
+        if not mask.any():
+            return None
+        sqerr_a = (y_true[mask] - pred_a[mask]) ** 2
+        sqerr_b = (y_true[mask] - pred_b[mask]) ** 2
         per_row = np.minimum(sqerr_a, sqerr_b)
         return float(np.sqrt(per_row.mean()))
     return None
@@ -318,6 +329,18 @@ def _join_predictions(
         prefixed = frame.add_prefix(f"c{i}_")
         prefixed = prefixed.rename(columns={f"c{i}_panel_row_index": "panel_row_index"})
         prefixed = prefixed.set_index("panel_row_index")
+        # A duplicate panel_row_index in any shard would cause
+        # `DataFrame.join` below to produce a silent Cartesian
+        # product, inflating row counts and biasing the averaged
+        # probabilities. Reject the shard rather than averaging
+        # mis-aligned rows.
+        if prefixed.index.has_duplicates:
+            logger.warning(
+                "_join_predictions: cell %d shard has duplicate panel_row_index "
+                "values; rejecting (B5 contract violation)",
+                i,
+            )
+            return None
         keyed_prefixed.append(prefixed)
     if not keyed_prefixed:
         return None
@@ -567,27 +590,39 @@ def _wilcoxon_across_datasets(rows: list[PerDatasetLift], *, family_size: int) -
     Holm correction with `family_size=1` returns the raw p-value;
     a future multi-pair test family extends the size.
     """
-    deltas = [r.delta_loss_mean for r in rows if r.delta_loss_mean is not None]
+    # Filter `None` AND NaN: an upstream cell loss can produce NaN
+    # when an adapter writes NaN-tinged predictions (e.g., a buggy
+    # comparator). NaN flowing into `scipy.stats.wilcoxon` yields a
+    # NaN p-value that crashes the Holm correction sort downstream.
+    deltas = [
+        r.delta_loss_mean
+        for r in rows
+        if r.delta_loss_mean is not None and not np.isnan(r.delta_loss_mean)
+    ]
     arr = np.asarray(deltas, dtype=float)
-    # Wilcoxon signed-rank needs >= 2 paired observations for any
-    # inferential content (the statistic is well-defined at n=1 but
-    # carries no signal). Surface the skip path so the renderer can
-    # flag the result as informational rather than significant.
-    if arr.size < 2:
+    # Wilcoxon signed-rank needs >= 2 paired observations AFTER
+    # zero-discarding for any inferential content. scipy's
+    # `zero_method="wilcox"` drops zeros, so a vector like
+    # `[0.0, 1.0]` would otherwise bypass this guard and operate on
+    # n=1 effective. Guard on `count_nonzero` so the semantic floor
+    # matches scipy's internal behavior.
+    if np.count_nonzero(arr) < 2:
+        # All-zero or single-non-zero: surface the neutral all-zero
+        # path when there are at least two zero entries (matches
+        # the friedman_holm convention); otherwise route to the
+        # informational skip path.
+        if arr.size >= 2 and np.count_nonzero(arr) == 0:
+            return WilcoxonResult(
+                statistic=0.0,
+                p_value=1.0,
+                holm_adjusted_p_value=1.0,
+                n_datasets=int(arr.size),
+                family_size=family_size,
+            )
         return WilcoxonResult(
             statistic=None,
             p_value=None,
             holm_adjusted_p_value=None,
-            n_datasets=int(arr.size),
-            family_size=family_size,
-        )
-    # All-zero diffs: Wilcoxon is undefined; surface a neutral
-    # p-value (matches the friedman_holm convention).
-    if np.count_nonzero(arr) == 0:
-        return WilcoxonResult(
-            statistic=0.0,
-            p_value=1.0,
-            holm_adjusted_p_value=1.0,
             n_datasets=int(arr.size),
             family_size=family_size,
         )
