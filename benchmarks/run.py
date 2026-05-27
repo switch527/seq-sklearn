@@ -36,6 +36,7 @@ from benchmarks.experiments import (
     RunEnvironment,
     build_run_environment,
     run_ensemble,
+    run_ensemble_lift,
     run_hpo_uplift,
     run_raw_loss,
     run_training_time,
@@ -43,6 +44,7 @@ from benchmarks.experiments import (
 from benchmarks.manifest import atomic_write_bytes
 from benchmarks.registry import list_datasets, list_models
 from benchmarks.report.ensemble import render_from_dir as render_pairwise_from_dir
+from benchmarks.report.ensemble_lift import render_ensemble_lift_markdown
 from benchmarks.report.hpo_uplift import render_from_dir as render_hpo_uplift_from_dir
 from benchmarks.report.raw_loss import render_from_dir as render_leaderboard_from_dir
 from benchmarks.report.render import REPORT_FILENAME, render_report_from_dir
@@ -68,6 +70,7 @@ _DISPATCH_ORDER: tuple[str, ...] = (
     "ensemble",
     "training_time",
     "hpo_uplift",
+    "ensemble_lift",
 )
 
 
@@ -91,7 +94,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--experiment",
-        choices=["raw_loss", "ensemble", "training_time", "hpo_uplift", "all"],
+        choices=[
+            "raw_loss",
+            "ensemble",
+            "training_time",
+            "hpo_uplift",
+            "ensemble_lift",
+            "all",
+        ],
         default="all",
         help="experiment to run; 'all' runs every experiment in the config",
     )
@@ -196,6 +206,23 @@ def _dispatch_kinds(
             hpo_path = output_root / "hpo_uplift.md"
             hpo_path.write_text(hpo_md, encoding="utf-8")
             logger.info("hpo_uplift report written to %s", hpo_path)
+        elif kind == "ensemble_lift":
+            lift_result = run_ensemble_lift(config, output_root=output_root, env=env)
+            logger.info(
+                "ensemble_lift complete: %d datasets aggregated; "
+                "wilcoxon p=%s holm_adj=%s (n_datasets=%d, "
+                "family_size=%d) (run_id=%s)",
+                len(lift_result.rows),
+                lift_result.wilcoxon.p_value,
+                lift_result.wilcoxon.holm_adjusted_p_value,
+                lift_result.wilcoxon.n_datasets,
+                lift_result.wilcoxon.family_size,
+                lift_result.run_id,
+            )
+            lift_md = render_ensemble_lift_markdown(lift_result)
+            lift_path = output_root / "ensemble_lift.md"
+            atomic_write_bytes(lift_md.encode("utf-8"), lift_path)
+            logger.info("ensemble_lift report written to %s", lift_path)
         else:
             logger.error(
                 "experiment driver for kind=%s not yet implemented; "
