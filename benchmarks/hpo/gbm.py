@@ -133,24 +133,30 @@ def sample_gbm_hyperparameters(
 
 
 # Library's STABLE-field search-space dimensionality (B6.4.0
-# disclosure). Six search dims: n_estimators / iterations,
-# learning_rate, depth / num_leaves, min_child_*, two
-# regularization knobs (or one for CatBoost). The cardinality
-# differs per library; v1 does not normalize per the design.
+# disclosure). Six search dims per library: n_estimators (or
+# `iterations` for CatBoost), learning_rate, a depth-like knob, a
+# min-child-* knob, and two regularization terms (L1+L2 for
+# LightGBM/XGBoost; `random_strength` + `bagging_temperature` for
+# CatBoost). The size matches the disclosed value on every
+# library after the R1 CatBoost bump.
 _GBM_SEARCH_SPACE_SIZE = 6
 
 _GBM_SPACE = HPOSpace(
     family="gbm",
     search_space_size=_GBM_SEARCH_SPACE_SIZE,
     description=(
-        "GBM family search: per-library mix of n_estimators / "
-        "iterations, learning_rate (log-uniform), depth-like "
-        "knob (num_leaves for LightGBM, max_depth for XGBoost, "
-        "depth for CatBoost), one regularization-strength knob, "
-        "and two L1/L2 regularization terms (L2 only for "
-        "CatBoost). Library-specific parameter names are sampled "
-        "directly; the adapter's hyperparameters dict passes "
-        "them through to the sklearn-API estimator."
+        "GBM family search (six dims per library): n_estimators "
+        "or iterations (CatBoost), learning_rate (log-uniform), a "
+        "depth-like knob (num_leaves for LightGBM, max_depth for "
+        "XGBoost, depth for CatBoost), a min-child-* knob, and "
+        "two regularization terms (reg_alpha + reg_lambda for "
+        "LightGBM/XGBoost; l2_leaf_reg + random_strength for "
+        "CatBoost). CatBoost additionally samples "
+        "bagging_temperature as its subsampling-stochasticity "
+        "analogue of the other libraries' subsample knob. "
+        "Library-specific parameter names are sampled directly; "
+        "the adapter's hyperparameters dict passes them through "
+        "to the sklearn-API estimator."
     ),
 )
 register_hpo_space(_GBM_SPACE, sample_gbm_hyperparameters)

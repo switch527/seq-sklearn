@@ -91,14 +91,15 @@ def test_gbm_regressor_adapter_fits_and_predicts_regression_point(
     assert np.issubdtype(pred.dtype, np.number)
 
 
-def test_lightgbm_classifier_classes_cache_is_stable_across_predict(
+def test_lightgbm_classifier_predict_proba_is_stable_across_calls(
     fake_panels: list[PanelDataset],
 ) -> None:
-    """The adapter caches `classes_` on fit so a subsequent
-    `predict_proba` call returns columns in the same order as the
-    sklearn convention (`np.unique(y)` ascending). Pin that two
-    consecutive `predict_proba` calls produce identical column
-    orderings."""
+    """Two consecutive `predict_proba` calls on the same panel
+    return bitwise-identical arrays. LightGBM is deterministic at
+    a fixed `random_state`, and the per-instance featurizer cache
+    (B10 R1 arch-I1) short-circuits the second call's
+    `lag_featurize`; both consistency guarantees combine into the
+    array-equality invariant."""
     del fake_panels
     spec = get_dataset("fake_binary")
     loader = get_loader("fake_binary")
@@ -111,9 +112,72 @@ def test_lightgbm_classifier_classes_cache_is_stable_across_predict(
     adapter.fit(ds.panel, ds.y)
     proba_1 = adapter.predict_proba(ds.panel)
     proba_2 = adapter.predict_proba(ds.panel)
-    # Bitwise identical: the underlying LightGBM is deterministic
-    # at the same random_state seed.
     np.testing.assert_array_equal(proba_1, proba_2)
+
+
+def test_gbm_featurizer_cache_invalidates_on_different_panel(
+    fake_panels: list[PanelDataset],
+) -> None:
+    """R2 qa-I1 close: the per-instance featurizer cache (B10 R1
+    arch-I1) keys on `id(panel)`. A second `predict` call with a
+    different panel object MUST evict the cache and recompute,
+    not silently return predictions for the cached panel. Pin
+    the cache-invalidation correctness with two distinct panel
+    objects carrying the same content; the cache's panel-id
+    bookkeeping must update."""
+    del fake_panels
+    spec = get_dataset("fake_binary")
+    loader = get_loader("fake_binary")
+    ds = loader(Path("/tmp/cache-b10-invalidation"))
+    adapter = instantiate_adapter(
+        "lightgbm_classifier",
+        spec=spec,
+        hyperparameters={"n_estimators": 10},
+    )
+    adapter.fit(ds.panel, ds.y)
+    panel_a = ds.panel
+    panel_b = ds.panel.copy()  # fresh object; identical content
+    assert id(panel_a) != id(panel_b)
+    pred_a = adapter.predict(panel_a)
+    cached_id_after_a = adapter._cached_panel_id  # pyright: ignore[reportAttributeAccessIssue]
+    pred_b = adapter.predict(panel_b)
+    cached_id_after_b = adapter._cached_panel_id  # pyright: ignore[reportAttributeAccessIssue]
+    # The cache id MUST have changed (eviction confirmed).
+    assert cached_id_after_a == id(panel_a)
+    assert cached_id_after_b == id(panel_b)
+    # Same content -> same predictions (the GBM is deterministic
+    # at fixed random_state; the cache invalidation produces a
+    # fresh featurize that yields identical values).
+    np.testing.assert_array_equal(pred_a, pred_b)
+
+
+def test_catboost_classifier_accepts_bagging_temperature_override(
+    fake_panels: list[PanelDataset],
+) -> None:
+    """R2 qa-NIT close: `bagging_temperature` is the sixth
+    CatBoost-sampled param (B10 R1 arch-CRIT-1). The factory's
+    `defaults.update(hyperparameters)` path forwards it to the
+    underlying `CatBoostClassifier`. Pin end-to-end that an
+    explicit override of this key trains cleanly + reaches the
+    estimator (smoke + override-reach combined)."""
+    del fake_panels
+    spec = get_dataset("fake_binary")
+    loader = get_loader("fake_binary")
+    ds = loader(Path("/tmp/cache-b10-bagtemp"))
+    adapter = instantiate_adapter(
+        "catboost_classifier",
+        spec=spec,
+        hyperparameters={"iterations": 10, "bagging_temperature": 0.8},
+    )
+    adapter.fit(ds.panel, ds.y)
+    proba = adapter.predict_proba(ds.panel)
+    assert proba.shape == (len(ds.panel), 2)
+    # Read back via the sklearn-API contract; CatBoost's
+    # `get_params()` round-trips the override.
+    est = adapter._est  # pyright: ignore[reportAttributeAccessIssue]
+    assert est is not None
+    params = est.get_params()  # pyright: ignore[reportAttributeAccessIssue]
+    assert params["bagging_temperature"] == 0.8
 
 
 def test_gbm_adapter_uses_featurized_columns_not_raw_panel(

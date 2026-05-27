@@ -259,20 +259,45 @@ def test_gbm_adapter_missing_estimator_factory_raises_runtime_error() -> None:
     """R1 qa-IMP close: the `_estimator_factory is None` guard in
     `_GBMAdapter.fit` is the runtime backstop for a future
     subclass that forgets to set the factory in `__post_init__`.
-    Pin the typed error so a regression here surfaces explicitly."""
+    Pin the typed error so a regression here surfaces explicitly.
+
+    Uses a bare subclass that overrides `__post_init__` to a no-op
+    (the base's `__post_init__` blocks direct instantiation per
+    R2 arch-I1; a subclass that forgets to call
+    `super().__post_init__()` AND forgets to set the factory is
+    the realistic regression scenario)."""
+    from dataclasses import dataclass
+    from typing import ClassVar
+
+    from benchmarks.adapters.gbm import _GBMAdapter  # pyright: ignore[reportPrivateUsage]
+    from benchmarks.config import TaskType
+
+    @dataclass
+    class _BareGBMAdapter(_GBMAdapter):
+        name: ClassVar[str] = "_BareGBMAdapter"
+        task_types: ClassVar[tuple[TaskType, ...]] = ("binary",)
+        supports_proba: ClassVar[bool] = False
+
+        def __post_init__(self) -> None:
+            # Deliberately omits the `_estimator_factory` and
+            # `_classifier` setup the registered concrete
+            # subclasses perform; the base's TypeError guard is
+            # bypassed because `type(self) is _BareGBMAdapter`.
+            pass
+
+    spec = _dataset_spec(task_type="binary")
+    adapter = _BareGBMAdapter(spec=spec)
+    with pytest.raises(RuntimeError, match="missing `_estimator_factory`"):
+        adapter.fit(pd.DataFrame({"id": [1], "t": [0], "x": [0.0]}), np.array([0]))
+
+
+def test_gbm_adapter_direct_base_instantiation_raises_type_error() -> None:
+    """R2 arch-I1 close: the base `_GBMAdapter` is abstract; the
+    `__post_init__` guard raises `TypeError` rather than letting
+    a caller construct a half-configured instance that would
+    pass the runtime `SeqSklearnAdapter` Protocol check."""
     from benchmarks.adapters.gbm import _GBMAdapter  # pyright: ignore[reportPrivateUsage]
 
     spec = _dataset_spec(task_type="binary")
-    # Construct the base directly (no subclass `__post_init__` to
-    # set the factory). `_GBMAdapter` declares the metadata as
-    # `ClassVar`s that aren't satisfied for the base, but `fit`
-    # short-circuits on the task-type check first; pin the
-    # `_estimator_factory is None` branch by passing a matching
-    # task_type via a subclass-shaped spec.
-    adapter = _GBMAdapter(spec=spec)
-    # The base class declares `task_types = ()`, so the task-type
-    # check fires before the factory guard. Override the ClassVar
-    # via direct assignment to force the factory branch.
-    adapter.task_types = ("binary",)  # pyright: ignore[reportAttributeAccessIssue]
-    with pytest.raises(RuntimeError, match="missing `_estimator_factory`"):
-        adapter.fit(pd.DataFrame({"id": [1], "t": [0], "x": [0.0]}), np.array([0]))
+    with pytest.raises(TypeError, match="abstract base"):
+        _GBMAdapter(spec=spec)

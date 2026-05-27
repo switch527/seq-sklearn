@@ -99,8 +99,11 @@ class _GBMAdapter:
 
     # Sentinel name on the base; concrete subclasses below
     # override with the registered model name. The sentinel lets
-    # error messages reference a meaningful identifier when the
-    # base is mis-instantiated directly (R1 fix).
+    # the `__post_init__` TypeError below reference a meaningful
+    # identifier in its error message (R1 + R2 arch-I1 close:
+    # `__post_init__` blocks direct base instantiation so the
+    # runtime `isinstance(_GBMAdapter, SeqSklearnAdapter)` Protocol
+    # gate cannot accept the half-configured base).
     name: ClassVar[str] = "_GBMAdapter"
     family: ClassVar[str] = "gbm"
     task_types: ClassVar[tuple[TaskType, ...]] = ()
@@ -129,6 +132,23 @@ class _GBMAdapter:
     # (the harness never mutates panels in-place).
     _cached_panel_id: int | None = field(default=None, init=False, repr=False)
     _cached_featurized: pd.DataFrame | None = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Block direct instantiation of the base class.
+
+        Concrete per-(library, task) subclasses override
+        `__post_init__` to set `_estimator_factory` + `_classifier`
+        and skip this guard. A caller that constructs `_GBMAdapter`
+        directly (or a subclass that omits the overridden
+        `__post_init__`) trips the runtime `SeqSklearnAdapter`
+        Protocol gate (R2 arch-I1 close).
+        """
+        if type(self) is _GBMAdapter:
+            raise TypeError(
+                "_GBMAdapter is an abstract base; instantiate one of the "
+                "six registered concrete subclasses via "
+                "`instantiate_adapter(name, spec=...)` instead."
+            )
 
     def _featurize(self, panel: pd.DataFrame) -> pd.DataFrame:
         """Build the flat lag-feature X for the GBM.
