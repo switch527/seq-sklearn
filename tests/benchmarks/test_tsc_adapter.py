@@ -257,6 +257,92 @@ def test_run_raw_loss_with_fake_tsc_adapter_routes_to_optional_dep_skip(
 # --- aeon-version capture in the manifest -----------------------------------
 
 
+def test_raw_mts_error_routes_to_adapter_error_skip_not_crash(
+    tmp_path: Path,
+) -> None:
+    """R3 qa-CRIT: a `RawMTSError` raised by `panel_to_tensor`
+    inside `_TSCAdapter.fit` (e.g., on a non-numeric channel
+    column) MUST route to the typed `adapter_error` skip path.
+    The Gemini-C1 fix wraps numpy's `ValueError` in `RawMTSError`
+    so the cast doesn't crash; THIS test pins that `RawMTSError`
+    is a `RuntimeError` subclass and lands in the B5 driver's
+    narrow catch tuple rather than escaping the run."""
+    from benchmarks.protocol.raw_mts import RawMTSError
+
+    # The MRO carries the typed routing: RuntimeError -> caught
+    # by the existing narrow tuple in `raw_loss.py:617-622`.
+    assert issubclass(RawMTSError, RuntimeError)
+    # End-to-end: build a registry with a fake TSC adapter whose
+    # `fit` raises RawMTSError (mimicking what panel_to_tensor
+    # would emit on a bad panel). The driver should skip the
+    # cell via `adapter_error` rather than crashing.
+    from dataclasses import dataclass
+    from dataclasses import field as _field
+    from typing import ClassVar
+
+    @dataclass
+    class _RawMTSErrorAdapter:
+        name: ClassVar[str] = "fake_raw_mts_error_adapter"
+        family: ClassVar[str] = "tsc"
+        task_types: ClassVar[tuple[TaskType, ...]] = ("binary",)
+        supports_proba: ClassVar[bool] = True
+
+        spec: DatasetSpec
+        hyperparameters: dict[str, Any] = _field(default_factory=dict)
+
+        def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:
+            del panel, y
+            raise RawMTSError("fake_raw_mts_error: simulated non-numeric-column cast failure")
+
+        def predict(self, panel: pd.DataFrame) -> np.ndarray:
+            return np.zeros(len(panel))
+
+        def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:
+            return np.full((len(panel), 2), 0.5)
+
+        def predict_quantiles(self, panel: pd.DataFrame) -> np.ndarray:
+            del panel
+            raise QuantilesUnsupportedError(self.name)
+
+    from benchmarks.config import ModelSpec
+
+    register_all_fakes_and_get_panels()
+    fake_spec = ModelSpec(
+        name="fake_raw_mts_error_adapter",
+        family="tsc",
+        task_types=("binary",),
+        supports_proba=True,
+        reason="RawMTSError driver-skip wire-up test fixture",
+    )
+
+    def _factory(
+        *,
+        spec: DatasetSpec,
+        hyperparameters: dict[str, Any] | None = None,
+    ) -> SeqSklearnAdapter:
+        return cast(
+            SeqSklearnAdapter,
+            _RawMTSErrorAdapter(spec=spec, hyperparameters=hyperparameters or {}),
+        )
+
+    register_adapter(fake_spec, _factory)
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_raw_mts_error_adapter",),
+        experiments=(ExperimentSpec(kind="raw_loss", seeds=(0,)),),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    # The driver must NOT raise; the cell skips via adapter_error.
+    result = run_raw_loss(config, output_root=output_root, env=env)
+    assert result.cells_attempted == 0
+    assert result.cells_skipped_adapter_error > 0
+    assert result.cells_skipped_optional_dep_missing == 0
+
+
 def test_aeon_appears_in_pinned_packages_list() -> None:
     """B12 touch point (k): `_PINNED_PACKAGES` includes `"aeon"`
     so the manifest fingerprint records the version on every run

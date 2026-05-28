@@ -36,13 +36,22 @@ from benchmarks.config import DatasetSpec
 from benchmarks.protocol.lookback import resolve_lookback
 
 
-class RawMTSError(Exception):
+class RawMTSError(RuntimeError):
     """Typed reshape failure for the raw-MTS data view.
 
     Raised by `panel_to_tensor` when the panel cannot be reshaped
     into a valid `(n_instances, n_channels, n_timesteps)` tensor:
     no real-valued channels declared on the spec, no entities
-    survive the below-floor strip, or the channel set is empty.
+    survive the below-floor strip, the channel set has a non-
+    numeric column, or the entity rows are not time-monotone.
+
+    Subclasses `RuntimeError` so the B5/B8 driver's narrow
+    adapter-error catch tuple (`(RuntimeError, MemoryError,
+    NotFittedError, ProbaUnsupportedError,
+    QuantilesUnsupportedError)`) routes the failure as a typed
+    `adapter_error` skip rather than crashing the run. The
+    failure shape IS a runtime data-shape error semantically,
+    so the inheritance reflects intent rather than masking it.
     """
 
 

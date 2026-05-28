@@ -182,10 +182,14 @@ def test_panel_to_tensor_all_below_floor_raises() -> None:
 
 
 def test_panel_to_tensor_raises_on_non_monotone_time_in_kept_window() -> None:
-    """R1 qa-C1: out-of-order time within the trailing window
+    """R1 qa-C1: out-of-order time within the kept window
     silently corrupts the tensor; the guard at
-    `raw_mts.py:_kept[time_col].is_monotonic_increasing` rejects it
-    with `RawMTSError`."""
+    `raw_mts.py:group[time_col].is_monotonic_increasing` rejects
+    it with `RawMTSError`. (Gemini-C2 moved the check from
+    `kept` to `group` to also catch the case where the
+    integer-position slice would silently re-monotone an
+    originally out-of-order group; see
+    `test_panel_to_tensor_raises_when_group_is_misordered_before_clip`.)"""
     spec = _spec(lookback=4)
     # Entity 0 has 4 rows but in scrambled time order [3, 1, 2, 0].
     rows: list[dict[str, object]] = [
@@ -228,10 +232,7 @@ def test_panel_to_tensor_raises_on_non_numeric_real_column() -> None:
     typed `RawMTSError` so the upstream driver routes it as an
     `adapter_error` skip rather than crashing."""
     spec = _spec(real_cols=("x1",))
-    rows = [
-        {"entity_id": "e_0", "period": t, "x1": "not_a_number", "y": 0}
-        for t in range(4)
-    ]
+    rows = [{"entity_id": "e_0", "period": t, "x1": "not_a_number", "y": 0} for t in range(4)]
     panel = pd.DataFrame(rows)
     with pytest.raises(RawMTSError, match="could not cast"):
         panel_to_tensor(panel, spec)
