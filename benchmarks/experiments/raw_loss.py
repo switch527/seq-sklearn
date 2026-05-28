@@ -55,6 +55,7 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict
 
 from benchmarks.adapters._base import (
+    OptionalDependencyMissingError,
     ProbaUnsupportedError,
     QuantilesUnsupportedError,
     SeqSklearnAdapter,
@@ -112,6 +113,7 @@ _SKIP_REASON_PROBA_UNAVAILABLE = "probabilities_required_for_classification"
 _SKIP_REASON_PROBA_RUNTIME_UNAVAILABLE = "probabilities_required_but_runtime_unavailable"
 _SKIP_REASON_QUANTILE_FOLLOWUP = "regression_quantile_b5_followup"
 _SKIP_REASON_ADAPTER_ERROR = "adapter_error"
+_SKIP_REASON_OPTIONAL_DEP_MISSING = "optional_dep_missing"
 
 
 class RunEnvironment(BaseModel):
@@ -158,6 +160,7 @@ class RawLossExperimentResult(BaseModel):
     )
     cells_skipped_quantile_followup: int  # regression_quantile pending B5-followup
     cells_skipped_adapter_error: int  # adapter raised at fit / predict / proba
+    cells_skipped_optional_dep_missing: int  # adapter raised OptionalDependencyMissingError (B12)
     cells_already_complete: int  # sentinel present at scan time
 
 
@@ -581,6 +584,36 @@ def _run_one_cell(
             latency=latency,
             n_below_floor_dropped=n_dropped,
         )
+    except OptionalDependencyMissingError as exc:
+        # B12: an adapter declared an optional dependency
+        # (e.g. aeon for TSC) that isn't installed. Skip with a
+        # typed reason that the report renders as a footnote
+        # ("N TSC cells skipped: aeon not installed") rather than
+        # looking like a silent failure. Caught BEFORE the generic
+        # adapter-error tuple so it wins on ordering.
+        logger.info(
+            "run_raw_loss: cell %s/%s seed=%d fold=%d skipped: optional dependency %r missing",
+            spec.name,
+            model_name,
+            seed,
+            fold_index,
+            exc.package_name,
+        )
+        return _build_row(
+            env=env,
+            spec=spec,
+            model_name=model_name,
+            seed=seed,
+            fold_index=fold_index,
+            n_folds=n_folds,
+            split_fingerprint=split_fingerprint,
+            l_resolved=l_resolved,
+            started_at_utc=started_at_utc,
+            skipped_reason=f"{_SKIP_REASON_OPTIONAL_DEP_MISSING}: {exc.package_name}",
+            metrics_dump=None,
+            fit_resource=None,
+            latency=None,
+        )
     except (
         RuntimeError,
         MemoryError,
@@ -735,6 +768,7 @@ def run_raw_loss(
     skipped_proba_runtime_unavailable = 0
     skipped_quantile_followup = 0
     skipped_adapter_error = 0
+    skipped_optional_dep_missing = 0
     already_complete = 0
     # arch-I3 (R2): hoist the completed-keys set out of the
     # per-dataset loop so the sentinel directory is globbed once per
@@ -892,6 +926,8 @@ def run_raw_loss(
                             skipped_quantile_followup += 1
                         elif row.skipped_reason.startswith(_SKIP_REASON_PROBA_RUNTIME_UNAVAILABLE):
                             skipped_proba_runtime_unavailable += 1
+                        elif row.skipped_reason.startswith(_SKIP_REASON_OPTIONAL_DEP_MISSING):
+                            skipped_optional_dep_missing += 1
                         else:
                             skipped_adapter_error += 1
 
@@ -911,6 +947,7 @@ def run_raw_loss(
         cells_skipped_proba_runtime_unavailable=skipped_proba_runtime_unavailable,
         cells_skipped_quantile_followup=skipped_quantile_followup,
         cells_skipped_adapter_error=skipped_adapter_error,
+        cells_skipped_optional_dep_missing=skipped_optional_dep_missing,
         cells_already_complete=already_complete,
     )
     logger.info("run_raw_loss: complete: %s", summary.model_dump())

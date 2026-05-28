@@ -59,6 +59,7 @@ from optuna.exceptions import TrialPruned
 from pydantic import BaseModel, ConfigDict
 
 from benchmarks.adapters._base import (
+    OptionalDependencyMissingError,
     ProbaUnsupportedError,
     QuantilesUnsupportedError,
     SeqSklearnAdapter,
@@ -132,6 +133,7 @@ _SKIP_REASON_HPO_FAMILY_NOT_REGISTERED = "hpo_family_not_registered"
 _SKIP_REASON_HPO_BUDGET_ZERO = "hpo_budget_zero_for_profile"
 _SKIP_REASON_HPO_ALL_TRIALS_PRUNED = "hpo_all_trials_pruned"
 _SKIP_REASON_ADAPTER_ERROR = "adapter_error"
+_SKIP_REASON_OPTIONAL_DEP_MISSING = "optional_dep_missing"
 
 
 class HPOUpliftExperimentResult(BaseModel):
@@ -154,6 +156,7 @@ class HPOUpliftExperimentResult(BaseModel):
     cells_skipped_hpo_budget_zero: int
     cells_skipped_hpo_all_trials_pruned: int
     cells_skipped_adapter_error: int
+    cells_skipped_optional_dep_missing: int  # B12: adapter raised OptionalDependencyMissingError
     cells_already_complete: int
 
 
@@ -633,6 +636,42 @@ def _run_one_hpo_cell(
             timeout_seconds=timeout_seconds,
             seed=seed,
         )
+    except OptionalDependencyMissingError as exc:
+        # B12: trial fit raised OptionalDependencyMissingError. The
+        # outer cell-level skip keeps the HPO budget from burning
+        # on a missing-dep error that would never resolve. Caught
+        # BEFORE the generic adapter-error tuple so it wins on
+        # ordering.
+        logger.info(
+            "run_hpo_uplift: cell %s/%s seed=%d fold=%d skipped: optional dependency %r missing",
+            spec.name,
+            model_name,
+            seed,
+            fold_index,
+            exc.package_name,
+        )
+        return _build_tuned_row(
+            env=env,
+            spec=spec,
+            model_name=model_name,
+            seed=seed,
+            fold_index=fold_index,
+            n_folds=n_folds,
+            split_fingerprint=split_fingerprint,
+            l_resolved=l_resolved,
+            started_at_utc=started_at_utc,
+            hpo_tier=hpo_tier,
+            hpo_n_trials_completed=None,
+            hpo_n_trials_pruned=None,
+            hpo_search_space_size=hpo_space.search_space_size,
+            hpo_timeout_seconds=timeout_seconds,
+            hpo_best_trial_number=None,
+            hpo_time_to_best_seconds=None,
+            hpo_best_val_loss=None,
+            skipped_reason=f"{_SKIP_REASON_OPTIONAL_DEP_MISSING}: {exc.package_name}",
+            metrics_dump=None,
+            fit_resource=None,
+        )
     except (
         RuntimeError,
         MemoryError,
@@ -892,6 +931,7 @@ def run_hpo_uplift(
     skipped_hpo_budget_zero = 0
     skipped_hpo_all_trials_pruned = 0
     skipped_adapter_error = 0
+    skipped_optional_dep_missing = 0
     already_complete = 0
     completed_keys = set(list_completed_keys(output_root))
 
@@ -1050,6 +1090,8 @@ def run_hpo_uplift(
                             skipped_hpo_all_trials_pruned += 1
                         elif row.skipped_reason.startswith(_SKIP_REASON_PROBA_RUNTIME_UNAVAILABLE):
                             skipped_proba_runtime_unavailable += 1
+                        elif row.skipped_reason.startswith(_SKIP_REASON_OPTIONAL_DEP_MISSING):
+                            skipped_optional_dep_missing += 1
                         else:
                             skipped_adapter_error += 1
 
@@ -1072,6 +1114,7 @@ def run_hpo_uplift(
         cells_skipped_hpo_budget_zero=skipped_hpo_budget_zero,
         cells_skipped_hpo_all_trials_pruned=skipped_hpo_all_trials_pruned,
         cells_skipped_adapter_error=skipped_adapter_error,
+        cells_skipped_optional_dep_missing=skipped_optional_dep_missing,
         cells_already_complete=already_complete,
     )
     logger.info("run_hpo_uplift: complete: %s", summary.model_dump())

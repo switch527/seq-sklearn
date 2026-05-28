@@ -61,6 +61,10 @@ _PINNED_PACKAGES: tuple[str, ...] = (
     "lightgbm",
     "xgboost",
     "catboost",
+    # B12: aeon for classical-TSC family. Optional dep; absent in
+    # the default CI install. `_safe_pkg_version` records None
+    # when the package is missing.
+    "aeon",
 )
 
 
