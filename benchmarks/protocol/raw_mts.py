@@ -126,6 +126,12 @@ def panel_to_tensor(
                 "groupby's group.index labels resolve to a single panel "
                 "position"
             ) from exc
+        # Defense-in-depth: the InvalidIndexError wrap above catches
+        # the only pandas-2.x path that produces -1 here (non-unique
+        # panel index). Retained so a future pandas behavior change
+        # (e.g. returning -1 instead of raising) still surfaces as
+        # the typed RawMTSError. Removing the wrap above is NOT a
+        # safe substitution for this guard.
         if (panel_positions < 0).any():
             raise RawMTSError(
                 "panel_to_tensor: groupby produced rows not present in "
