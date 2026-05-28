@@ -199,6 +199,44 @@ def test_panel_to_tensor_raises_on_non_monotone_time_in_kept_window() -> None:
         panel_to_tensor(panel, spec)
 
 
+def test_panel_to_tensor_raises_when_group_is_misordered_before_clip() -> None:
+    """Gemini-C2: an entity with rows in non-time-order would
+    silently produce a wrong trailing window if the monotonicity
+    check ran on `iloc[-L:]` (the integer-position slice) instead
+    of the full group. For `group=[t=3, t=1, t=2]` with L=2 the
+    integer slice yields `[t=1, t=2]` which IS monotone, but the
+    true last-two-periods window is `[t=2, t=3]`. The fix
+    validates `group` BEFORE the slice. This test pins the fix
+    by constructing exactly that misorder."""
+    spec = _spec(lookback=2)
+    rows = [
+        {"entity_id": "e_0", "period": 3, "x1": 1.0, "x2": 2.0, "y": 0},
+        {"entity_id": "e_0", "period": 1, "x1": 1.0, "x2": 2.0, "y": 0},
+        {"entity_id": "e_0", "period": 2, "x1": 1.0, "x2": 2.0, "y": 0},
+    ]
+    panel = pd.DataFrame(rows)
+    with pytest.raises(RawMTSError, match="non-decreasing"):
+        panel_to_tensor(panel, spec)
+
+
+def test_panel_to_tensor_raises_on_non_numeric_real_column() -> None:
+    """Gemini-C1: a `feature_real_cols` entry that turns out to
+    be a string column would cause numpy's float32 cast to raise
+    `ValueError` / `TypeError`, which would escape the B5/B8
+    driver's narrow `(RuntimeError, MemoryError, ...)` catch
+    tuple and crash the entire run. The fix wraps the cast in a
+    typed `RawMTSError` so the upstream driver routes it as an
+    `adapter_error` skip rather than crashing."""
+    spec = _spec(real_cols=("x1",))
+    rows = [
+        {"entity_id": "e_0", "period": t, "x1": "not_a_number", "y": 0}
+        for t in range(4)
+    ]
+    panel = pd.DataFrame(rows)
+    with pytest.raises(RawMTSError, match="could not cast"):
+        panel_to_tensor(panel, spec)
+
+
 def test_panel_to_tensor_raises_on_panel_with_non_unique_index() -> None:
     """R1 qa-C2: when a panel has a duplicated row index,
     `panel.index.get_indexer(group.index)` cannot resolve uniquely

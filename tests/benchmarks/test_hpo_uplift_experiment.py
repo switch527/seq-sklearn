@@ -11,6 +11,17 @@ speed.
 from pathlib import Path
 from typing import Any
 
+# Eager import of the adapter family so the `isolated_registry`
+# autouse fixture snapshots `_ADAPTER_FACTORIES` AFTER every
+# B10/B12 factory is registered. Without this, under
+# `pytest-randomly` reordering, if this file runs before any
+# test that triggers `benchmarks.adapters` as a side-effect,
+# the snapshot would not contain the TSC factories. The
+# B12 test below pops `rocket_classifier` and re-registers a
+# fake; teardown would then restore an empty snapshot,
+# permanently deleting the TSC adapters for the rest of the
+# session.
+import benchmarks.adapters  # noqa: F401  # pyright: ignore[reportUnusedImport]
 import optuna
 import pandas as pd
 import pytest

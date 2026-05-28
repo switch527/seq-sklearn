@@ -93,19 +93,35 @@ def panel_to_tensor(
             # for every row of this entity. The adapter broadcasts
             # NaN to those rows.
             continue
-        # Trailing-window clip if the entity has more than L rows.
-        kept = group.iloc[-L:]
-        # Sanity check: per-entity time-monotonicity (same
-        # invariant `lag_featurize` enforces). An out-of-order
-        # panel would silently produce wrong windows.
-        if not kept[time_col].is_monotonic_increasing:
+        # Validate per-entity time-monotonicity on the FULL group
+        # BEFORE the trailing-window slice. The integer-position
+        # `iloc[-L:]` reflects insertion order, not time order, so
+        # an out-of-order group like [t=3, t=1, t=2] with L=2 would
+        # silently yield `kept=[t=1, t=2]` (monotone) and feed the
+        # wrong rows to the model. Match `lag_featurize`'s contract:
+        # validate the source group, not the post-slice view.
+        if not group[time_col].is_monotonic_increasing:
             raise RawMTSError(
                 f"panel_to_tensor: panel rows for entity in column "
                 f"{entity_col!r} are not in non-decreasing {time_col!r} "
                 "order; sort the panel before reshape"
             )
-        # Build the (n_channels, L) block for this instance.
-        block = kept[channel_cols].to_numpy(dtype=np.float32, copy=False).T
+        # Trailing-window clip if the entity has more than L rows.
+        kept = group.iloc[-L:]
+        # Build the (n_channels, L) block for this instance. Wrap
+        # the float32 cast in a typed error: if the dataset spec
+        # accidentally declared a non-numeric column under
+        # `feature_real_cols`, numpy raises `ValueError`/`TypeError`
+        # which would otherwise escape the B5/B8 driver's narrow
+        # adapter-error tuple and crash the entire run.
+        try:
+            block = kept[channel_cols].to_numpy(dtype=np.float32, copy=False).T
+        except (ValueError, TypeError) as exc:
+            raise RawMTSError(
+                f"panel_to_tensor: could not cast channels {channel_cols!r} "
+                f"to np.float32 for dataset {spec.name!r}; verify that every "
+                "column in `feature_real_cols` is numeric"
+            ) from exc
         instance_blocks.append(block)
         # Map every panel row of this entity to this instance index
         # (the adapter broadcasts the per-instance prediction to ALL
