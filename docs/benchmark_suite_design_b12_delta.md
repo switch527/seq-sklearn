@@ -605,6 +605,16 @@ related IMPROVEMENTs and NITs.
   `_base.py` and (g)/(h) live in `manifest.py` /
   `run_manifest.py`, not in the driver itself.
 
+B12 code R1 swarm noted that the actual implementation shape
+of `_check_aeon_available` is a MODULE-LEVEL FREE FUNCTION in
+`benchmarks/adapters/tsc.py`, not a method on `_TSCAdapter` as
+this delta's B12.1 section reads. The free-function form uses
+no `self` state and is structurally cleaner; the delta is
+correct in intent (the adapter's `fit` is what calls it) but
+the prose suggests an `instance` method which the code does
+not deliver. Doc-level note for future readers; the function's
+behavior is otherwise as specified.
+
 Gemini final-pass (architecture-reviewer model). 3 CRITICAL +
 2 IMPROVEMENT, all addressed in this revision:
 

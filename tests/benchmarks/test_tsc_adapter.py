@@ -264,3 +264,178 @@ def test_aeon_appears_in_pinned_packages_list() -> None:
     from benchmarks.run_manifest import _PINNED_PACKAGES
 
     assert "aeon" in _PINNED_PACKAGES
+
+
+# --- R1 unit-level pins on adapter branches --------------------------------
+
+
+def test_tsc_adapter_fit_rejects_unsupported_task_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R1 qa-C3: `_TSCAdapter.fit` rejects datasets whose
+    `task_type` is not in the adapter's `task_types` tuple. The
+    check happens BEFORE `_check_aeon_available` so an aeon-
+    missing CI still surfaces the typed `ValueError` rather than
+    `OptionalDependencyMissingError`."""
+    from benchmarks.adapters.tsc import _RocketClassifierAdapter
+
+    monkeypatch.setitem(sys.modules, "aeon", None)
+    # ROCKET only supports binary + multiclass; build a regression spec.
+    spec = DatasetSpec(
+        name="ds_tsc_regr",
+        task_type="regression_point",
+        access_tier="OPEN",
+        size_tier="small",
+        balance="balanced",
+        modality="numeric",
+        source_uri="https://example.test/x.csv",
+        integrity_sha256="0" * 64,
+        archive_basename="x.csv",
+        entity_col="entity_id",
+        time_col="period",
+        target_col="y",
+        feature_real_cols=("x1",),
+        feature_categorical_cols=(),
+        lookback=3,
+        citation="task-type mismatch test",
+    )
+    adapter = _RocketClassifierAdapter(spec=spec, hyperparameters={})
+    panel = _make_binary_panel()
+    with pytest.raises(ValueError, match="does not support task_type"):
+        adapter.fit(panel, np.zeros(len(panel)))
+
+
+def test_tsc_adapter_predict_raises_not_fitted_before_fit() -> None:
+    """R1 qa-I2: `_TSCAdapter.predict` raises `NotFittedError`
+    when called before `fit`. The B5 driver's narrow catch tuple
+    includes `NotFittedError` so an unfitted-adapter bug surfaces
+    as a typed skip rather than an `AttributeError`."""
+    from benchmarks.adapters.tsc import _RocketClassifierAdapter
+
+    from seq_sklearn import NotFittedError
+
+    spec = _make_binary_spec()
+    adapter = _RocketClassifierAdapter(spec=spec, hyperparameters={})
+    panel = _make_binary_panel()
+    with pytest.raises(NotFittedError, match="before fit"):
+        adapter.predict(panel)
+
+
+def test_tsc_adapter_predict_proba_raises_not_fitted_before_fit() -> None:
+    """R1 qa-I2: same intent as the `predict` test, for the
+    proba surface."""
+    from benchmarks.adapters.tsc import _RocketClassifierAdapter
+
+    from seq_sklearn import NotFittedError
+
+    spec = _make_binary_spec()
+    adapter = _RocketClassifierAdapter(spec=spec, hyperparameters={})
+    panel = _make_binary_panel()
+    with pytest.raises(NotFittedError, match="before fit"):
+        adapter.predict_proba(panel)
+
+
+def test_tsc_adapter_predict_proba_raises_when_supports_proba_false() -> None:
+    """R1 qa-I3: the `supports_proba=False` guard in
+    `predict_proba`. All three concrete adapters set
+    `supports_proba=True` so the branch is otherwise unreachable
+    through the registered roster. Pin via a synthetic subclass
+    with `supports_proba=False`."""
+    from dataclasses import dataclass
+
+    from benchmarks.adapters._base import ProbaUnsupportedError
+    from benchmarks.adapters.tsc import _RocketClassifierAdapter
+
+    @dataclass
+    class _NoProbaAdapter(_RocketClassifierAdapter):
+        supports_proba: ClassVar[bool] = False
+
+    spec = _make_binary_spec()
+    adapter = _NoProbaAdapter(spec=spec, hyperparameters={})
+    # Manually mark "fitted" so the supports_proba check runs
+    # before the NotFittedError check.
+    adapter._est = object()  # type: ignore[assignment]
+    panel = _make_binary_panel()
+    with pytest.raises(ProbaUnsupportedError, match="check `supports_proba`"):
+        adapter.predict_proba(panel)
+
+
+def test_tsc_adapter_reshape_caches_by_panel_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R1 qa-I4: `_reshape` caches the (tensor, mapping) pair by
+    `id(panel)`. A second call on the same panel object reuses
+    the cached arrays rather than re-reshaping. Pin via a
+    monkey-patched `panel_to_tensor` that counts calls."""
+    from benchmarks.adapters.tsc import _RocketClassifierAdapter
+    from benchmarks.protocol import raw_mts as _raw_mts_module
+
+    spec = _make_binary_spec()
+    adapter = _RocketClassifierAdapter(spec=spec, hyperparameters={})
+    panel = _make_binary_panel()
+
+    call_count = 0
+    real_panel_to_tensor = _raw_mts_module.panel_to_tensor
+
+    def _counting_panel_to_tensor(p: pd.DataFrame, s: DatasetSpec) -> Any:
+        nonlocal call_count
+        call_count += 1
+        return real_panel_to_tensor(p, s)
+
+    monkeypatch.setattr("benchmarks.adapters.tsc.panel_to_tensor", _counting_panel_to_tensor)
+
+    # First call populates the cache.
+    adapter._reshape(panel)
+    assert call_count == 1
+    # Second call on the SAME panel object reuses the cache.
+    adapter._reshape(panel)
+    assert call_count == 1, "cache hit expected; panel_to_tensor was called twice"
+
+
+# --- broadcast preserves identity, not NaN, for above-floor early rows -----
+
+
+def test_broadcast_above_floor_early_rows_carry_instance_value_not_nan() -> None:
+    """R1 code-I2: an entity with more than L_resolved rows
+    has its trailing window IN the tensor; the early (pre-window)
+    rows are NOT below-floor and the broadcast MUST emit the
+    instance value (not NaN) for them. A bug that NaN-fills
+    early-window rows would silently strip them via
+    `_strip_below_floor_rows` and corrupt the metric."""
+    import benchmarks.protocol.raw_mts as _raw_mts_module
+
+    spec = DatasetSpec(
+        name="ds_above_floor",
+        task_type="binary",
+        access_tier="OPEN",
+        size_tier="small",
+        balance="balanced",
+        modality="numeric",
+        source_uri="https://example.test/x.csv",
+        integrity_sha256="0" * 64,
+        archive_basename="x.csv",
+        entity_col="entity_id",
+        time_col="period",
+        target_col="y",
+        feature_real_cols=("x1",),
+        feature_categorical_cols=(),
+        lookback=3,
+        positive_label=1,
+        citation="above-floor broadcast pin",
+    )
+    # One entity with 5 rows; L=3. The trailing window is rows
+    # [2, 3, 4]; rows [0, 1] are EARLY rows of a KEPT entity.
+    panel = pd.DataFrame(
+        [{"entity_id": "e_0", "period": t, "x1": float(t), "y": 1} for t in range(5)]
+    )
+    _, mapping = _raw_mts_module.panel_to_tensor(panel, spec)
+    # Every panel row (early + kept) maps to instance 0; none -1.
+    assert (mapping >= 0).all()
+    # Simulate a per-instance proba [[0.3, 0.7]] and broadcast.
+    per_instance = np.array([[0.3, 0.7]], dtype=np.float64)
+    broadcast_out = _raw_mts_module.broadcast_per_instance_to_per_row(per_instance, mapping)
+    # Every row, including early rows 0 and 1, carries (0.3, 0.7).
+    for row_idx in range(len(panel)):
+        np.testing.assert_array_equal(broadcast_out[row_idx], np.array([0.3, 0.7]))
+    # No NaN anywhere.
+    assert not np.isnan(broadcast_out).any()

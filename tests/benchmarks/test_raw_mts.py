@@ -181,6 +181,39 @@ def test_panel_to_tensor_all_below_floor_raises() -> None:
         panel_to_tensor(panel, spec)
 
 
+def test_panel_to_tensor_raises_on_non_monotone_time_in_kept_window() -> None:
+    """R1 qa-C1: out-of-order time within the trailing window
+    silently corrupts the tensor; the guard at
+    `raw_mts.py:_kept[time_col].is_monotonic_increasing` rejects it
+    with `RawMTSError`."""
+    spec = _spec(lookback=4)
+    # Entity 0 has 4 rows but in scrambled time order [3, 1, 2, 0].
+    rows: list[dict[str, object]] = [
+        {"entity_id": "e_0", "period": 3, "x1": 1.0, "x2": 2.0, "y": 0},
+        {"entity_id": "e_0", "period": 1, "x1": 1.0, "x2": 2.0, "y": 0},
+        {"entity_id": "e_0", "period": 2, "x1": 1.0, "x2": 2.0, "y": 0},
+        {"entity_id": "e_0", "period": 0, "x1": 1.0, "x2": 2.0, "y": 0},
+    ]
+    panel = pd.DataFrame(rows)
+    with pytest.raises(RawMTSError, match="non-decreasing"):
+        panel_to_tensor(panel, spec)
+
+
+def test_panel_to_tensor_raises_on_panel_with_non_unique_index() -> None:
+    """R1 qa-C2: when a panel has a duplicated row index,
+    `panel.index.get_indexer(group.index)` cannot resolve uniquely
+    and returns -1 for the ambiguous row. The guard rejects it
+    rather than silently mis-mapping panel rows to instances."""
+    spec = _spec(lookback=4)
+    panel = _equal_length_panel(n_entities=2, n_periods=4)
+    # Force a duplicate row label so get_indexer returns -1 for it.
+    duplicated_index = list(panel.index)
+    duplicated_index[3] = duplicated_index[0]
+    panel.index = pd.Index(duplicated_index)
+    with pytest.raises(RawMTSError, match="unique"):
+        panel_to_tensor(panel, spec)
+
+
 # --- categorical handling (Gemini-C3 / D-B12.6) ------------------------------
 
 

@@ -114,12 +114,23 @@ def panel_to_tensor(
         # below-floor rows of a kept entity are still broadcast to.
         # (Every kept-entity row sees the same per-instance
         # prediction by F2.)
-        panel_positions = panel.index.get_indexer(group.index)
+        try:
+            panel_positions = panel.index.get_indexer(group.index)
+        except pd.errors.InvalidIndexError as exc:
+            # pandas raises InvalidIndexError on non-unique indices
+            # before the negative-position guard below has a chance
+            # to see them. Reraise as RawMTSError so the typed
+            # contract holds.
+            raise RawMTSError(
+                "panel_to_tensor: the panel's row index must be unique so "
+                "groupby's group.index labels resolve to a single panel "
+                "position"
+            ) from exc
         if (panel_positions < 0).any():
             raise RawMTSError(
                 "panel_to_tensor: groupby produced rows not present in "
-                "the panel's index; the panel must have a unique "
-                "RangeIndex or otherwise unique row labels"
+                "the panel's index; the panel must have a unique row "
+                "index that matches groupby's group.index labels"
             )
         panel_row_to_instance[panel_positions] = instance_idx
         instance_idx += 1

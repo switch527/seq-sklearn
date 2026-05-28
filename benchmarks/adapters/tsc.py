@@ -80,7 +80,6 @@ class _TSCAdapter:
     hyperparameters: dict[str, Any] = field(default_factory=dict)
     _estimator_factory: Callable[..., Any] | None = field(default=None, init=False, repr=False)
     _est: Any = field(default=None, init=False, repr=False)
-    _classes_: np.ndarray | None = field(default=None, init=False, repr=False)
     # Per-instance reshape cache keyed by `id(panel)`; the B5
     # driver calls `predict` then `predict_proba` on the same panel
     # object and the reshape is O(N * channels * L) at fit time and
@@ -128,11 +127,6 @@ class _TSCAdapter:
         y_per_instance = instance_labels(np.asarray(y), row_to_instance)
         self._est = self._estimator_factory(**self.hyperparameters)
         self._est.fit(X_3d, y_per_instance)
-        # Cache the classes for the broadcast-aware predict_proba
-        # path (aeon's predict_proba returns columns in
-        # `self._est.classes_` order; we match that on the
-        # broadcast so the panel-row output column count is stable).
-        self._classes_ = np.asarray(getattr(self._est, "classes_", np.unique(y_per_instance)))
         return self
 
     def predict(self, panel: pd.DataFrame) -> np.ndarray:
