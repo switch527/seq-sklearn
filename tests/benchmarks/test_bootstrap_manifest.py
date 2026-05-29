@@ -548,7 +548,7 @@ def _make_ensemble_lift_row(**overrides: object) -> _EnsembleLiftRollupRow:
         "bootstrap_rng_algorithm": "PCG64",
         "bootstrap_numpy_version": "2.3.0",
         "bootstrap_skipped_reason": None,
-        "manifest_fingerprint": "feedbeef" * 8,
+        "manifest_fingerprint": "beeff00d" * 8,
     }
     defaults.update(overrides)
     return _EnsembleLiftRollupRow(**defaults)  # type: ignore[arg-type]
@@ -594,6 +594,7 @@ def test_write_ensemble_lift_rollup_then_load_round_trips_all_fields(
     rows = [
         _make_ensemble_lift_row(),
         _make_ensemble_lift_row(
+            dataset_name="fake_regression",
             task_type="regression_point",
             primary_loss_column="rmse",
             primary_loss_mean=-0.05,

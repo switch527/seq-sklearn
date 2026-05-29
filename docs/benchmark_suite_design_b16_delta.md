@@ -724,3 +724,37 @@ with rationale):
   `baseline_family` on the schema for forward-compatibility
   was the alternative; option (a) (drop) was chosen.
 - **style-N1**: D-B16.4/5/6 line-wrap preserves clarity.
+
+### Stage 1 R1 swarm closure (commit `5299eeb`)
+
+Stage 1 confirming swarm: code-reviewer (0C/1I/1N APPROVE),
+architecture-reviewer (0C/0I/0N APPROVE), qa-test-coverage
+(0C/2I/1N APPROVE), style-reviewer (0C/0I/0N APPROVE).
+Total: 0 CRITICAL, 3 IMPROVEMENT, 2 NITPICK. Closures:
+
+- **code-R1-I1** (round-trip rows[0] and rows[1] both used
+  `dataset_name="fake_binary"`): second row now overrides
+  `dataset_name="fake_regression"` so a hypothetical
+  `dataset_name`-keyed dedup/reorder bug in the load path
+  would surface.
+- **code-R1-N1** (`_make_ensemble_lift_row` reused the B15
+  factory's `"feedbeef" * 8` hex string): switched to
+  `"beeff00d" * 8` so the B16 factory is orthogonal from the
+  B15 factory.
+- **qa-R1-I1** (parametrize list in
+  `test_benchmark_config_rejects_duplicates_for_every_kind`
+  was stale): added `"ensemble_lift"` so a future
+  kind-specific carve-out in `_at_most_one_spec_per_kind`
+  cannot silently exempt B11.
+- **qa-R1-I2** (no dedicated atomic-replace overwrite test
+  for `write_ensemble_lift_rollup`): DEFERRED. The
+  `_write_rows_atomic` helper is shared with B14/B15 and
+  the atomic-replace contract is already pinned end-to-end
+  by `test_write_rollup_atomic_replace_on_overwrite` against
+  the same helper; B16 invokes it with the same arguments
+  shape as B15. No silent-failure risk.
+- **qa-R1-N1** (`manifest_fingerprint` accepts any string;
+  no SHA-256 `pattern=` constraint): DEFERRED under D-B16.5
+  (coordinated rename + audit across all five RollupRow
+  schemas) so the constraint lands uniformly rather than
+  drifting across phases.
