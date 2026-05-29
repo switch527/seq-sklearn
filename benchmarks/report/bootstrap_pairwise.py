@@ -31,6 +31,7 @@ sections B14.0, B14.2):
 """
 
 import logging
+from pathlib import Path
 from typing import cast
 
 import numpy as np
@@ -240,7 +241,7 @@ def _build_group_rollup(
 def aggregate_bootstrap_pairwise_rollup(
     config: BenchmarkConfig,
     *,
-    output_root: "object",
+    output_root: Path,
     env: RunEnvironment,
     manifest: RunManifest,
 ) -> list[PairwiseRollupRow]:
@@ -265,7 +266,7 @@ def aggregate_bootstrap_pairwise_rollup(
             count. The CLI wrapper catches this and drops the
             failure sentinel.
     """
-    pairwise_df = load_pairwise(output_root)  # type: ignore[arg-type]
+    pairwise_df = load_pairwise(output_root)
     if pairwise_df.empty:
         return []
 
@@ -293,7 +294,7 @@ def aggregate_bootstrap_pairwise_rollup(
             )
         )
 
-    write_pairwise_rollup(output_root, rows)  # type: ignore[arg-type]
+    write_pairwise_rollup(output_root, rows)
     logger.info(
         "aggregate_bootstrap_pairwise_rollup: wrote %d rollup rows to %s",
         len(rows),

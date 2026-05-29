@@ -133,6 +133,30 @@ def test_run_bootstrap_pairwise_rollup_skips_via_opt_out(
     assert not pairwise_rollup_path(output_root).exists()
 
 
+# --- Missing pairwise manifest ----------------------------------------------
+
+
+def test_run_bootstrap_pairwise_rollup_skips_when_pairwise_manifest_absent(
+    tmp_path: Path,
+) -> None:
+    """Stage-2 qa-C1: when the B6 pairwise manifest directory is
+    absent (run_ensemble never ran successfully), the wrapper
+    runs the aggregator which returns `[]`; no rollup file is
+    written and no sentinel appears. Pins the empty-rows success
+    path through the wrapper distinct from the run_manifest-
+    absent guard."""
+    config = _build_config(tmp_path=tmp_path)
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    # Do NOT call _write_minimal_pairwise; pairwise_dir is absent.
+    _write_run_manifest(config, output_root)
+
+    env = build_run_environment(profile="smoke")
+    _run_bootstrap_pairwise_rollup(config, env=env, output_root=output_root)
+    assert not pairwise_rollup_path(output_root).exists()
+    assert not pairwise_aggregator_failed_sentinel_path(output_root).exists()
+
+
 # --- Missing run_manifest ---------------------------------------------------
 
 
@@ -204,6 +228,39 @@ def test_run_bootstrap_pairwise_rollup_catches_raw_rollup_error_and_continues(
     # Partial output deleted.
     assert not pairwise_rollup_path(output_root).exists()
     # Sentinel written with the exception class name.
+    sentinel = pairwise_aggregator_failed_sentinel_path(output_root)
+    assert sentinel.exists()
+    assert sentinel.read_text(encoding="utf-8").strip() == "RawRollupError"
+
+
+# --- Sentinel write contract (Stage-2 qa-C2 dedicated pin) ------------------
+
+
+def test_run_bootstrap_pairwise_rollup_writes_failure_sentinel_on_raw_rollup_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stage-2 qa-C2 closure: a dedicated pin for the sentinel-
+    write contract independent from the exception-not-propagated
+    contract. If a future refactor drops the sentinel assertion
+    from the combined `catches_..._and_continues` test, this
+    standalone test keeps the contract pinned."""
+    config = _build_config(tmp_path=tmp_path)
+    output_root = tmp_path / "out"
+    _write_minimal_pairwise(output_root)
+    _write_run_manifest(config, output_root)
+
+    from benchmarks.report.bootstrap_rollup import RawRollupError as _Err
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise _Err("simulated aggregator failure")
+
+    import benchmarks.run as _run_module
+
+    monkeypatch.setattr(_run_module, "aggregate_bootstrap_pairwise_rollup", _boom)
+    _run_bootstrap_pairwise_rollup(
+        config, env=build_run_environment(profile="smoke"), output_root=output_root
+    )
     sentinel = pairwise_aggregator_failed_sentinel_path(output_root)
     assert sentinel.exists()
     assert sentinel.read_text(encoding="utf-8").strip() == "RawRollupError"

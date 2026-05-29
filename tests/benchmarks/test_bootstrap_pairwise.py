@@ -12,13 +12,12 @@ import numpy as np
 import pandas as pd
 import pytest
 from benchmarks.bootstrap_manifest import (
-    PairwiseRollupRow,
     load_pairwise_rollup,
     pairwise_rollup_path,
 )
 from benchmarks.config import BenchmarkConfig, ExperimentSpec
 from benchmarks.experiments import build_run_environment
-from benchmarks.experiments.ensemble import pairwise_dir, pairwise_shard_path
+from benchmarks.experiments.ensemble import pairwise_dir
 from benchmarks.report.bootstrap_pairwise import (
     aggregate_bootstrap_pairwise_rollup,
 )
@@ -369,8 +368,113 @@ def test_aggregate_bootstrap_pairwise_rollup_writes_parquet_shard(
     assert loaded[0].model_dump() == rows_out[0].model_dump()
 
 
-# --- silence ruff unused-imports ---
+# --- All-cells-skipped sentinel (Stage-2 qa-I1) ----------------------------
 
 
-def _silence_unused_imports() -> tuple[object, ...]:
-    return (PairwiseRollupRow, pairwise_shard_path, np)
+def test_aggregate_bootstrap_pairwise_rollup_all_cells_skipped_emits_sentinel(
+    tmp_path: Path,
+) -> None:
+    """Classification group where EVERY cell has a non-None
+    skipped_reason -> sentinel row with `bootstrap_skipped_reason=
+    "all_cells_skipped_in_manifest"`. The `ok.empty` branch of
+    `_build_group_rollup` was untested in the first cut."""
+    config, output_root, manifest = _setup(tmp_path)
+    rows_in = [
+        _pairwise_row(seed=0, fold_index=0, skipped_reason="predictions_missing"),
+        _pairwise_row(seed=0, fold_index=1, skipped_reason="empty_panel_row_index_join"),
+        _pairwise_row(seed=1, fold_index=0, skipped_reason="predictions_missing"),
+    ]
+    _write_pairwise_manifest(output_root, rows_in)
+
+    env = build_run_environment(profile="smoke")
+    rows_out = aggregate_bootstrap_pairwise_rollup(
+        config, output_root=output_root, env=env, manifest=manifest
+    )
+    assert len(rows_out) == 1
+    row = rows_out[0]
+    assert row.bootstrap_skipped_reason == "all_cells_skipped_in_manifest"
+    assert row.n_cells_evaluated == 0
+    assert row.n_skipped_cells == 3
+    assert row.primary_loss_mean is None
+
+
+# --- Per-spec n_resamples override (Stage-2 qa-I2) -------------------------
+
+
+def test_aggregate_bootstrap_pairwise_rollup_respects_per_spec_n_resamples_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`ExperimentSpec(kind="ensemble", bootstrap_n_resamples=N)`
+    overrides the profile default. Pinned by monkeypatching the
+    primitive to capture the n_resamples argument."""
+    output_root = tmp_path / "out"
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(
+            ExperimentSpec(kind="raw_loss", seeds=(0,)),
+            ExperimentSpec(kind="ensemble", seeds=(0,), bootstrap_n_resamples=137),
+        ),
+        output_dir=output_root,
+        cache_dir=tmp_path / "cache",
+    )
+    manifest = _make_run_manifest(config, output_root)
+    rows_in = [
+        _pairwise_row(seed=0, fold_index=f, pearson_error_corr=0.30, disagreement_rate=0.20)
+        for f in range(3)
+    ]
+    _write_pairwise_manifest(output_root, rows_in)
+
+    captured: dict[str, int] = {}
+
+    def _capturing_primitive(
+        losses: object,
+        entity_ids: object,
+        *,
+        n_resamples: int,
+        confidence: float,
+        seed: int,
+        **_kwargs: object,
+    ) -> tuple[float, float, float]:
+        captured["n_resamples"] = n_resamples
+        return (0.5, 0.4, 0.6)
+
+    import benchmarks.report.bootstrap_pairwise as _module
+
+    monkeypatch.setattr(_module, "entity_block_bootstrap_ci", _capturing_primitive)
+
+    env = build_run_environment(profile="smoke")
+    aggregate_bootstrap_pairwise_rollup(
+        config, output_root=output_root, env=env, manifest=manifest
+    )
+    assert captured["n_resamples"] == 137
+
+
+# --- OOM ceiling raise (Stage-2 qa-I3 + code-I1) ---------------------------
+
+
+def test_aggregate_bootstrap_pairwise_rollup_oom_gate_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lower BOOTSTRAP_ROW_COUNT_CEILING to 1 so the tiny test
+    fixture trips the OOM gate. Pin the defensive raise added
+    at bootstrap_pairwise.py."""
+    config, output_root, manifest = _setup(tmp_path)
+    rows_in = [
+        _pairwise_row(seed=0, fold_index=f, pearson_error_corr=0.30, disagreement_rate=0.20)
+        for f in range(3)
+    ]
+    _write_pairwise_manifest(output_root, rows_in)
+
+    import benchmarks.report.bootstrap_pairwise as _module
+
+    monkeypatch.setattr(_module, "BOOTSTRAP_ROW_COUNT_CEILING", 1)
+    env = build_run_environment(profile="smoke")
+    with pytest.raises(RawRollupError, match="ceiling"):
+        aggregate_bootstrap_pairwise_rollup(
+            config, output_root=output_root, env=env, manifest=manifest
+        )
+
+
