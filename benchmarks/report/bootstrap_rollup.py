@@ -22,7 +22,7 @@ Design contracts (`docs/benchmark_suite_design_b13_delta.md`):
   `RawRollupError`.
 
 - R-B13-3 (Gemini-C2): the aggregator enforces a row-count
-  ceiling `N * n_resamples > _BOOTSTRAP_ROW_COUNT_CEILING (5e10)`
+  ceiling `N * n_resamples > BOOTSTRAP_ROW_COUNT_CEILING (5e10)`
   via `RawRollupError` so a full-tier dataset doesn't OOM the
   naive bootstrap path. The sufficient-statistics optimization
   is D-B13.7.
@@ -34,8 +34,6 @@ Design contracts (`docs/benchmark_suite_design_b13_delta.md`):
 
 import logging
 from collections.abc import Callable
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
 import numpy as np
@@ -56,6 +54,13 @@ from benchmarks.predictions import (
     proba_matrix,
 )
 from benchmarks.registry import get_dataset, get_loader
+from benchmarks.report._bootstrap_aggregate import (
+    BOOTSTRAP_CONFIDENCE,
+    BOOTSTRAP_DEFAULT_SEED,
+    BOOTSTRAP_N_RESAMPLES_BY_PROFILE,
+    BOOTSTRAP_ROW_COUNT_CEILING,
+    numpy_version,
+)
 from benchmarks.run_manifest import RunManifest
 
 logger = logging.getLogger(__name__)
@@ -81,31 +86,15 @@ class RawRollupError(RuntimeError):
     """
 
 
-# B13 design constants.
-_BOOTSTRAP_N_RESAMPLES_BY_PROFILE: dict[str, int] = {
-    "smoke": 5_000,
-    "standard": 10_000,
-    "full": 10_000,
-}
-_BOOTSTRAP_DEFAULT_SEED: int = 0xB13_5EED_B007
-_BOOTSTRAP_CONFIDENCE: float = 0.95
-# Defensive row-count ceiling (R-B13-3 / Gemini-C2).
-# N * n_resamples > 5e10 is the rough OOM threshold for a naive
-# per-resample row-concat path; D-B13.7 names the sufficient-
-# statistics optimization for the followup.
-_BOOTSTRAP_ROW_COUNT_CEILING: int = 50_000_000_000
+# B13 task-type primary-loss mapping. (The bootstrap constants
+# moved to `benchmarks/report/_bootstrap_aggregate.py` in B14 so
+# the new B6 and B7 rollup aggregators share them; the symbols
+# imported above keep this module's call sites unchanged.)
 _PRIMARY_LOSS_BY_TASK: dict[str, str] = {
     "binary": "log_loss",
     "multiclass": "log_loss",
     "regression_point": "rmse",
 }
-
-
-def _numpy_version() -> str:
-    try:
-        return _pkg_version("numpy")
-    except PackageNotFoundError:
-        return "unknown"
 
 
 def _resolve_n_resamples(experiments: list[ExperimentSpec], profile: str) -> int:
@@ -118,7 +107,7 @@ def _resolve_n_resamples(experiments: list[ExperimentSpec], profile: str) -> int
     for spec in experiments:
         if spec.kind == "raw_loss" and spec.bootstrap_n_resamples is not None:
             return spec.bootstrap_n_resamples
-    return _BOOTSTRAP_N_RESAMPLES_BY_PROFILE.get(profile, 10_000)
+    return BOOTSTRAP_N_RESAMPLES_BY_PROFILE.get(profile, 10_000)
 
 
 def _is_rollup_enabled(experiments: list[ExperimentSpec]) -> bool:
@@ -280,11 +269,11 @@ def _build_group_rollup(
             primary_loss_mean=None,
             primary_loss_ci_lo=None,
             primary_loss_ci_hi=None,
-            bootstrap_seed=_BOOTSTRAP_DEFAULT_SEED,
+            bootstrap_seed=BOOTSTRAP_DEFAULT_SEED,
             bootstrap_n_resamples=n_resamples,
             bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
-            bootstrap_confidence=_BOOTSTRAP_CONFIDENCE,
-            bootstrap_numpy_version=_numpy_version(),
+            bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
+            bootstrap_numpy_version=numpy_version(),
             bootstrap_skipped_reason="all_cells_skipped_in_manifest",
             manifest_fingerprint=manifest_fingerprint,
         )
@@ -340,11 +329,11 @@ def _build_group_rollup(
             primary_loss_mean=None,
             primary_loss_ci_lo=None,
             primary_loss_ci_hi=None,
-            bootstrap_seed=_BOOTSTRAP_DEFAULT_SEED,
+            bootstrap_seed=BOOTSTRAP_DEFAULT_SEED,
             bootstrap_n_resamples=n_resamples,
             bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
-            bootstrap_confidence=_BOOTSTRAP_CONFIDENCE,
-            bootstrap_numpy_version=_numpy_version(),
+            bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
+            bootstrap_numpy_version=numpy_version(),
             bootstrap_skipped_reason="all_predictions_shards_missing_or_unloadable",
             manifest_fingerprint=manifest_fingerprint,
         )
@@ -353,11 +342,11 @@ def _build_group_rollup(
     entities = np.concatenate(entity_blocks)
 
     # OOM gate per R-B13-3 / Gemini-C2.
-    if losses.shape[0] * n_resamples > _BOOTSTRAP_ROW_COUNT_CEILING:
+    if losses.shape[0] * n_resamples > BOOTSTRAP_ROW_COUNT_CEILING:
         raise RawRollupError(
             f"aggregate_bootstrap_rollup: dataset {dataset_name!r} with "
             f"N={losses.shape[0]} rows * n_resamples={n_resamples} exceeds "
-            f"the bootstrap-row-count ceiling ({_BOOTSTRAP_ROW_COUNT_CEILING}); "
+            f"the bootstrap-row-count ceiling ({BOOTSTRAP_ROW_COUNT_CEILING}); "
             "use the per-entity-sufficient-statistics path documented in "
             "D-B13.7 (B13-followup)"
         )
@@ -366,8 +355,8 @@ def _build_group_rollup(
         losses,
         entities,
         n_resamples=n_resamples,
-        confidence=_BOOTSTRAP_CONFIDENCE,
-        seed=_BOOTSTRAP_DEFAULT_SEED,
+        confidence=BOOTSTRAP_CONFIDENCE,
+        seed=BOOTSTRAP_DEFAULT_SEED,
         metric_fn=metric_fn,
     )
 
@@ -385,11 +374,11 @@ def _build_group_rollup(
         primary_loss_mean=mean,
         primary_loss_ci_lo=ci_lo,
         primary_loss_ci_hi=ci_hi,
-        bootstrap_seed=_BOOTSTRAP_DEFAULT_SEED,
+        bootstrap_seed=BOOTSTRAP_DEFAULT_SEED,
         bootstrap_n_resamples=n_resamples,
         bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
-        bootstrap_confidence=_BOOTSTRAP_CONFIDENCE,
-        bootstrap_numpy_version=_numpy_version(),
+        bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
+        bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=None,
         manifest_fingerprint=manifest_fingerprint,
     )
