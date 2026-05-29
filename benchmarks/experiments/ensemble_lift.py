@@ -78,11 +78,16 @@ from benchmarks.stats.friedman import holm_correction
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "DEFAULT_BASELINE_FAMILY",
+    "DEFAULT_SEQ_FAMILY",
+    "ComputePerCellLiftDeltasResult",
     "EnsembleLiftExperimentResult",
     "PerCellLiftDelta",
     "PerDatasetLift",
     "WilcoxonResult",
+    "build_cells_table",
     "compute_per_cell_lift_deltas",
+    "model_families",
     "run_ensemble_lift",
 ]
 
@@ -90,8 +95,8 @@ __all__ = [
 # Default seq family + baseline family. B11 ships one comparison
 # (seq_sklearn vs gbm); a future branch wires multi-family
 # combinations by extending these defaults at the spec level.
-_DEFAULT_SEQ_FAMILY = "seq_sklearn"
-_DEFAULT_BASELINE_FAMILY = "gbm"
+DEFAULT_SEQ_FAMILY = "seq_sklearn"
+DEFAULT_BASELINE_FAMILY = "gbm"
 
 # Primary-loss column per task. Quantile cells inherit B5's skip.
 _PRIMARY_LOSS_BY_TASK: dict[str, str] = {
@@ -183,7 +188,7 @@ def _assert_ensemble_lift_configured(experiments: Iterable[ExperimentSpec]) -> N
     )
 
 
-def _model_families(manifest: pd.DataFrame) -> dict[str, str]:
+def model_families(manifest: pd.DataFrame) -> dict[str, str]:
     """Map every `model_name` in the manifest to its registered
     family.
 
@@ -411,7 +416,7 @@ def _join_predictions(
     return panel_row_index, y_true, averaged_pred
 
 
-def _build_cells_table(
+def build_cells_table(
     manifest: pd.DataFrame, *, families: dict[str, str], target_family: str
 ) -> pd.DataFrame:
     """Filter the manifest to OK cells in `target_family`."""
@@ -473,16 +478,20 @@ class PerCellLiftDelta(BaseModel):
     oracle_loss: float | None = None
 
 
-class _ComputePerCellResult(BaseModel):
-    """Internal return shape for `compute_per_cell_lift_deltas`.
+class ComputePerCellLiftDeltasResult(BaseModel):
+    """Return shape for `compute_per_cell_lift_deltas`.
 
     `cells` is the paired-cell records; `seen_no_gbm` /
     `seen_no_seq` mirror B11's incomplete-block flags so both
     `_per_dataset_lift` (B11) and the B16 aggregator can surface
     the existing sentinel states without recomputing them.
+
+    This is the public return type of a public function; the
+    name carries no leading underscore so cross-module
+    consumers can rely on its field set.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     cells: tuple[PerCellLiftDelta, ...]
     seen_no_gbm: bool = False
@@ -498,7 +507,7 @@ def compute_per_cell_lift_deltas(
     gbm_cells: pd.DataFrame,
     seq_cells: pd.DataFrame,
     output_root: Path,
-) -> _ComputePerCellResult:
+) -> ComputePerCellLiftDeltasResult:
     """Per-(seed, fold) paired-cell delta computation.
 
     Iterates `seed_fold_pairs` and at each pair: builds the
@@ -515,7 +524,7 @@ def compute_per_cell_lift_deltas(
     """
     selector = _PRIMARY_LOSS_BY_TASK.get(task_type)
     if selector is None:
-        return _ComputePerCellResult(cells=(), selector="unknown")
+        return ComputePerCellLiftDeltasResult(cells=(), selector="unknown")
 
     records: list[PerCellLiftDelta] = []
     seen_no_gbm = False
@@ -603,7 +612,7 @@ def compute_per_cell_lift_deltas(
             )
         )
 
-    return _ComputePerCellResult(
+    return ComputePerCellLiftDeltasResult(
         cells=tuple(records),
         seen_no_gbm=seen_no_gbm,
         seen_no_seq=seen_no_seq,
@@ -754,8 +763,8 @@ def run_ensemble_lift(
         ValueError: no `ensemble_lift` experiment in the config,
             or the B5 manifest under `output_root` is empty.
     """
-    seq_family = _DEFAULT_SEQ_FAMILY
-    baseline_family = _DEFAULT_BASELINE_FAMILY
+    seq_family = DEFAULT_SEQ_FAMILY
+    baseline_family = DEFAULT_BASELINE_FAMILY
     _assert_ensemble_lift_configured(config.experiments)
     manifest = load_run(output_root)
     if manifest.empty:
@@ -765,9 +774,9 @@ def run_ensemble_lift(
         )
 
     started_at = time.perf_counter()
-    families = _model_families(manifest)
-    gbm_cells = _build_cells_table(manifest, families=families, target_family=baseline_family)
-    seq_cells = _build_cells_table(manifest, families=families, target_family=seq_family)
+    families = model_families(manifest)
+    gbm_cells = build_cells_table(manifest, families=families, target_family=baseline_family)
+    seq_cells = build_cells_table(manifest, families=families, target_family=seq_family)
     logger.info(
         "run_ensemble_lift: baseline=%s cells=%d, seq=%s cells=%d",
         baseline_family,

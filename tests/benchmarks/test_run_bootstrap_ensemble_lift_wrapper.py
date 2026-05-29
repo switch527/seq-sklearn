@@ -29,8 +29,8 @@ from benchmarks.bootstrap_manifest import (
 from benchmarks.config import BenchmarkConfig, ExperimentSpec
 from benchmarks.experiments import build_run_environment
 from benchmarks.experiments.ensemble_lift import (
+    ComputePerCellLiftDeltasResult,
     PerCellLiftDelta,
-    _ComputePerCellResult,
 )
 from benchmarks.run import _run_bootstrap_ensemble_lift_rollup
 from benchmarks.run_manifest import (
@@ -112,7 +112,7 @@ def _stub_families(monkeypatch: pytest.MonkeyPatch) -> None:
     def _families(_df: pd.DataFrame) -> dict[str, str]:
         return {_GBM_MODEL: "gbm", _SEQ_MODEL: "seq_sklearn"}
 
-    monkeypatch.setattr(_module, "_model_families", _families)  # type: ignore[misc]
+    monkeypatch.setattr(_module, "model_families", _families)  # type: ignore[misc]
 
 
 def _stub_per_cell_happy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,7 +120,7 @@ def _stub_per_cell_happy(monkeypatch: pytest.MonkeyPatch) -> None:
     finite-loss result so the bootstrap path runs to completion."""
     import benchmarks.report.bootstrap_ensemble_lift as _module
 
-    result = _ComputePerCellResult(
+    result = ComputePerCellLiftDeltasResult(
         cells=(
             PerCellLiftDelta(
                 seed=0,
@@ -149,7 +149,7 @@ def _stub_per_cell_no_gbm(monkeypatch: pytest.MonkeyPatch) -> None:
     aggregator emits the `no_gbm_predictions` sentinel."""
     import benchmarks.report.bootstrap_ensemble_lift as _module
 
-    result = _ComputePerCellResult(
+    result = ComputePerCellLiftDeltasResult(
         cells=(), seen_no_gbm=True, seen_no_seq=False, selector="log_loss"
     )
     monkeypatch.setattr(_module, "compute_per_cell_lift_deltas", lambda **_kwargs: result)  # type: ignore[misc]
@@ -159,7 +159,7 @@ def _stub_per_cell_no_seq(monkeypatch: pytest.MonkeyPatch) -> None:
     """Symmetric mirror: seen_no_seq=True."""
     import benchmarks.report.bootstrap_ensemble_lift as _module
 
-    result = _ComputePerCellResult(
+    result = ComputePerCellLiftDeltasResult(
         cells=(), seen_no_gbm=False, seen_no_seq=True, selector="log_loss"
     )
     monkeypatch.setattr(_module, "compute_per_cell_lift_deltas", lambda **_kwargs: result)  # type: ignore[misc]
@@ -296,6 +296,8 @@ def test_run_bootstrap_ensemble_lift_rollup_skips_when_run_manifest_absent(
     env = build_run_environment(profile="smoke")
     _run_bootstrap_ensemble_lift_rollup(config, env=env, output_root=output_root)
     assert not ensemble_lift_rollup_path(output_root).exists()
+    # qa-R1-I1: Gate B must NOT write a failure sentinel.
+    assert not ensemble_lift_aggregator_failed_sentinel_path(output_root).exists()
 
 
 # --- 7. run_manifest load fails (corrupt JSON) ----------------------------
@@ -315,6 +317,8 @@ def test_run_bootstrap_ensemble_lift_rollup_skips_when_run_manifest_load_fails(
     env = build_run_environment(profile="smoke")
     _run_bootstrap_ensemble_lift_rollup(config, env=env, output_root=output_root)
     assert not ensemble_lift_rollup_path(output_root).exists()
+    # qa-R1-I1: Gate C must NOT write a failure sentinel.
+    assert not ensemble_lift_aggregator_failed_sentinel_path(output_root).exists()
 
 
 # --- 8. RawRollupError caught + continues ---------------------------------

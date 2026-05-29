@@ -2,7 +2,7 @@
 
 Reads the B5 manifest, partitions cells into seq-family and
 baseline-family rosters via the existing B11 helpers
-(`_model_families`, `_build_cells_table`), and for each dataset
+(`model_families`, `build_cells_table`), and for each dataset
 calls the shared `compute_per_cell_lift_deltas` helper to compute
 the per-(seed, fold) Δloss records. Bootstraps the per-cell
 `delta_loss` array using the entity-block primitive with
@@ -41,11 +41,11 @@ from benchmarks.bootstrap_manifest import (
 )
 from benchmarks.config import BenchmarkConfig
 from benchmarks.experiments.ensemble_lift import (
-    _DEFAULT_BASELINE_FAMILY,
-    _DEFAULT_SEQ_FAMILY,
-    _build_cells_table,
-    _model_families,
+    DEFAULT_BASELINE_FAMILY,
+    DEFAULT_SEQ_FAMILY,
+    build_cells_table,
     compute_per_cell_lift_deltas,
+    model_families,
 )
 from benchmarks.experiments.raw_loss import RunEnvironment
 from benchmarks.manifest import load_run
@@ -167,8 +167,14 @@ def _build_dataset_rollup(
     n_resamples: int,
     manifest_fingerprint: str,
 ) -> EnsembleLiftRollupRow:
-    """One ensemble-lift rollup row per dataset."""
-    primary_loss_column = _PRIMARY_LOSS_COLUMN_BY_TASK.get(task_type, "log_loss")
+    """One ensemble-lift rollup row per dataset.
+
+    The caller (`aggregate_bootstrap_ensemble_lift_rollup`) early-
+    continues on unsupported `task_type` values, so direct
+    subscription here is safe; a missing key indicates a caller
+    contract violation, not a runtime fallback case.
+    """
+    primary_loss_column = _PRIMARY_LOSS_COLUMN_BY_TASK[task_type]
     n_seeds = int(pd.concat([gbm_cells["seed"], seq_cells["seed"]], ignore_index=True).nunique())
     n_folds = int(
         pd.concat([gbm_cells["fold_index"], seq_cells["fold_index"]], ignore_index=True).nunique()
@@ -187,13 +193,22 @@ def _build_dataset_rollup(
     )
 
     if not computed.cells:
-        # Lexically-first deterministic rule when both flags trip.
+        # Per design B16.0: when both B11 flags trip, emit the
+        # lexically-first sentinel. The two flags map to
+        # sentinel strings whose lexical order matches the
+        # if/elif priority below (`"no_gbm_predictions"` <
+        # `"no_seq_predictions"`), so the cascade is
+        # observationally equivalent to a `sorted(...)[0]`
+        # selection. A future flag rename that breaks that
+        # coincidence must update this cascade in lockstep.
+        candidate_reasons: list[str] = []
         if computed.seen_no_gbm:
-            reason = "no_gbm_predictions"
-        elif computed.seen_no_seq:
-            reason = "no_seq_predictions"
-        else:
-            reason = "all_cells_skipped_in_manifest"
+            candidate_reasons.append("no_gbm_predictions")
+        if computed.seen_no_seq:
+            candidate_reasons.append("no_seq_predictions")
+        reason = (
+            sorted(candidate_reasons)[0] if candidate_reasons else "all_cells_skipped_in_manifest"
+        )
         return _emit_sentinel_row(
             dataset_name=dataset_name,
             task_type=task_type,
@@ -283,11 +298,9 @@ def aggregate_bootstrap_ensemble_lift_rollup(
     if df.empty:
         return []
 
-    families = _model_families(df)
-    gbm_cells_all = _build_cells_table(
-        df, families=families, target_family=_DEFAULT_BASELINE_FAMILY
-    )
-    seq_cells_all = _build_cells_table(df, families=families, target_family=_DEFAULT_SEQ_FAMILY)
+    families = model_families(df)
+    gbm_cells_all = build_cells_table(df, families=families, target_family=DEFAULT_BASELINE_FAMILY)
+    seq_cells_all = build_cells_table(df, families=families, target_family=DEFAULT_SEQ_FAMILY)
 
     # Gate D: both families need at least one OK row in the
     # manifest. Either-empty -> no-op skip (no failure sentinel).

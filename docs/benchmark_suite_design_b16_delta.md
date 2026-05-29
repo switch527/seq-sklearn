@@ -226,7 +226,7 @@ For each dataset:
 2. Sentinel-route per the three enumerated cases above.
 3. For dataset groups that pass the sentinel checks, call the
    NEW shared helper
-   `benchmarks.experiments.ensemble_lift._compute_per_cell_lift_deltas(
+   `benchmarks.experiments.ensemble_lift.compute_per_cell_lift_deltas(
        dataset_name, task_type, seed_fold_pairs, gbm_cells,
        seq_cells, output_root
    ) -> list[PerCellLiftDelta]`
@@ -253,7 +253,7 @@ def aggregate_bootstrap_ensemble_lift_rollup(
     # ... per-dataset group iteration:
     # _build_cells_table -> gbm_cells, seq_cells per dataset
     # sentinel-route empty cases
-    # _compute_per_cell_lift_deltas -> per-cell deltas
+    # compute_per_cell_lift_deltas -> per-cell deltas
     # bootstrap + emit row
 ```
 
@@ -268,7 +268,7 @@ Failure modes (raise `RawRollupError`):
   defensive raise is included for parity with B15.
 - OOM ceiling: reuses `BOOTSTRAP_ROW_COUNT_CEILING`.
 
-## B16.3 B11 refactor: extract `_compute_per_cell_lift_deltas`
+## B16.3 B11 refactor: extract `compute_per_cell_lift_deltas`
 
 Minimal-disruption refactor of
 `benchmarks/experiments/ensemble_lift.py`:
@@ -276,13 +276,13 @@ Minimal-disruption refactor of
 - Extract the body of `_per_dataset_lift` that loops over
   `seed_fold_pairs` and computes per-(seed, fold) delta_loss +
   oracle_delta_loss into a new public-ish helper
-  `_compute_per_cell_lift_deltas`. Returns a list of
+  `compute_per_cell_lift_deltas`. Returns a list of
   `PerCellLiftDelta` records.
 - `_per_dataset_lift` then becomes a thin aggregation over
   these records (mean + std), producing the same
   `PerDatasetLift` it does today.
 - The B16 aggregator imports and calls
-  `_compute_per_cell_lift_deltas` directly.
+  `compute_per_cell_lift_deltas` directly.
 
 Existing B11 tests (`test_ensemble_lift_experiment.py`) MUST
 continue to pass byte-identically. A byte-string regression
@@ -542,7 +542,7 @@ committed in the test file.
 | `benchmarks/bootstrap_manifest.py` (+1 schema + 2 path helpers + 2 I/O helpers) | Small |
 | `benchmarks/config.py` (+1 ExperimentSpec field) | Trivial |
 | `benchmarks/report/bootstrap_ensemble_lift.py` (NEW) | ~320 lines |
-| `benchmarks/experiments/ensemble_lift.py` (refactor: extract `_compute_per_cell_lift_deltas`) | ~40 lines |
+| `benchmarks/experiments/ensemble_lift.py` (refactor: extract `compute_per_cell_lift_deltas`) | ~40 lines |
 | `benchmarks/report/ensemble_lift.py` (+CI variant + dispatch) | ~280 lines |
 | `benchmarks/run.py` (+1 wrapper) | ~80 lines |
 | `tests/benchmarks/test_bootstrap_ensemble_lift.py` (NEW) | ~400 lines |
@@ -558,7 +558,7 @@ B11 refactor adds a regression pin.
 
 | ID | Risk | Severity | Mitigation |
 |---|---|---|---|
-| R-B16-1 | Extracting `_compute_per_cell_lift_deltas` from `_per_dataset_lift` could change the per-dataset summary output, breaking downstream B11 callers. | High | Byte-string regression pin on `_per_dataset_lift` output of a synthetic fixture; ALL existing B11 tests must continue to pass. |
+| R-B16-1 | Extracting `compute_per_cell_lift_deltas` from `_per_dataset_lift` could change the per-dataset summary output, breaking downstream B11 callers. | High | Byte-string regression pin on `_per_dataset_lift` output of a synthetic fixture; ALL existing B11 tests must continue to pass. |
 | R-B16-2 | The aggregator recomputes per-cell deltas (it does not read a persisted shard); a future B11 driver change could make the aggregator's output diverge from the renderer's std view. | Medium | The shared helper is the single source of truth; both the std view AND the CI view consume it. R-B16-1 byte-pin catches drift. |
 | R-B16-3 | The cross-report sentinel-isolation surface is now FOUR other sentinels (B5, B6, B7, B8). The test pre-plants and asserts all four. | Low | Test pin mirrors the B14 Stage-3 qa-I3 pattern. |
 | R-B16-4 | The oracle Δ (per-sample best ceiling) has no CI at v1; reviewers may ask. | Low | Documented as D-B16.1 follow-up. |
@@ -769,3 +769,82 @@ Total: 0 CRITICAL, 3 IMPROVEMENT, 2 NITPICK. Closures:
   (coordinated rename + audit across all five RollupRow
   schemas) so the constraint lands uniformly rather than
   drifting across phases.
+
+### Stage 2 R1 swarm closure
+
+Stage 2 confirming swarm (impl `79fb76e`): code-reviewer
+(0C/1I/1N APPROVE), architecture-reviewer (0C/4I/3N APPROVE),
+qa-test-coverage (0C/2I/1N APPROVE), style-reviewer
+(0C/0I/0N APPROVE). Total: 0 CRITICAL, 7 IMPROVEMENT, 5
+NITPICK. Closures:
+
+- **code-R1-I1** (`arbitrary_types_allowed=True` on
+  `ComputePerCellLiftDeltasResult` was unnecessary): removed.
+  `tuple[PerCellLiftDelta, ...]` round-trips through pydantic
+  v2 without the flag.
+- **arch-R1-I1** (private `_ComputePerCellResult` as the
+  return type of a public function): renamed to
+  `ComputePerCellLiftDeltasResult` and added to B11's
+  `__all__`. The cross-module field-access contract
+  (`.cells`, `.seen_no_gbm`, `.seen_no_seq`, `.selector`) is
+  now explicit.
+- **arch-R1-I2** (`_PRIMARY_LOSS_COLUMN_BY_TASK.get(task_type,
+  "log_loss")` default branch was dead given the
+  `_PRIMARY_LOSS_COLUMN_BY_TASK` containment guard at the
+  caller): replaced with direct subscription
+  `_PRIMARY_LOSS_COLUMN_BY_TASK[task_type]`. A KeyError here
+  now surfaces a caller-contract violation rather than
+  silently mislabeling a future task type.
+- **arch-R1-I3** (four B11 private symbols imported across
+  the module boundary): promoted to public API in B11
+  (`DEFAULT_BASELINE_FAMILY`, `DEFAULT_SEQ_FAMILY`,
+  `model_families`, `build_cells_table`) and added to
+  `__all__`. The B16 aggregator now imports public names; a
+  future rename of any of those four must update both
+  modules in lockstep, with the public symbol making the
+  contract explicit.
+- **arch-R1-I4** (predicate-priority vs lexical-ordering
+  ambiguity at the sentinel-routing cascade): rewritten as
+  an explicit `sorted(candidate_reasons)[0]` selection so
+  the lexical-first rule is observably enforced. The
+  comment now documents the rule as the source of truth.
+- **qa-R1-I1** (Gate B/C wrapper tests missing failure-
+  sentinel-absence assertion): both `_skips_when_run_
+  manifest_absent` and `_skips_when_run_manifest_load_fails`
+  now assert `not ensemble_lift_aggregator_failed_sentinel_
+  path(output_root).exists()` after the skip path.
+- **qa-R1-I2** (the dataset-loop `continue` branches were
+  untested): added
+  `_excludes_unsupported_and_inconsistent_task_type_datasets`
+  with a 3-dataset fixture covering both branches
+  (unsupported `regression_quantile`, mixed-task_type within
+  a single dataset). Assert only the valid binary dataset
+  reaches the rollup.
+
+NITPICKs:
+
+- **code-R1-N1** (`ensemble_lift_rollup_output_path` log-
+  message helper naming): NOT changed. Matches the B15
+  precedent at `bootstrap_hpo_uplift.py:89-91`; renaming
+  would create a B15/B16 asymmetry without a consumer
+  benefit.
+- **arch-R1-N1** (design doc still referred to
+  `_compute_per_cell_lift_deltas` with a leading underscore
+  while the implementation is public): renamed throughout
+  the doc.
+- **arch-R1-N2** (collapses into arch-R1-I2): closed by
+  the I2 fix.
+- **arch-R1-N3** (B16 wrapper call after markdown render vs
+  B5/B6/B7/B8 pattern placing the wrapper before the
+  render): NOT changed. The B16 std renderer
+  (`render_ensemble_lift_markdown`) does not consume the
+  rollup; the future CI-aware `render_from_dir` dispatch
+  ships in Stage 3 and will be placed before its own
+  rollup-aware render at that point. The current ordering
+  is harmless and preserves the existing call sequence.
+- **qa-R1-N1** (byte-pin file location): NOT changed. The
+  test exercises both `compute_per_cell_lift_deltas` AND
+  `_per_dataset_lift` through a monkeypatched call; placing
+  it next to the other B16 aggregator tests keeps the
+  Stage-2 refactor pin co-located with the other B16
+  coverage rather than fragmenting it across two files.

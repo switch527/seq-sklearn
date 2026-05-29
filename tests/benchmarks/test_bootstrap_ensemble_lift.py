@@ -1,7 +1,7 @@
 """Phase B16 D-B13.4 ensemble-lift bootstrap-CI aggregator tests.
 
 Covers the 15 named aggregator tests from the B16.6 design.
-Uses monkeypatch on `load_run`, `_model_families`, and
+Uses monkeypatch on `load_run`, `model_families`, and
 `compute_per_cell_lift_deltas` to inject synthetic manifests +
 per-cell deltas so the tests don't depend on a real B11 driver
 run with cached predictions shards.
@@ -14,8 +14,8 @@ import pytest
 from benchmarks.config import BenchmarkConfig, ExperimentSpec
 from benchmarks.experiments import build_run_environment
 from benchmarks.experiments.ensemble_lift import (
+    ComputePerCellLiftDeltasResult,
     PerCellLiftDelta,
-    _ComputePerCellResult,
 )
 from benchmarks.report.bootstrap_ensemble_lift import (
     aggregate_bootstrap_ensemble_lift_rollup,
@@ -107,26 +107,26 @@ def _stub_families(
     monkeypatch: pytest.MonkeyPatch,
     mapping: dict[str, str] | None = None,
 ) -> None:
-    """Stub `_model_families` to bypass registry lookups."""
+    """Stub `model_families` to bypass registry lookups."""
     import benchmarks.report.bootstrap_ensemble_lift as _module
 
     families = mapping if mapping is not None else {_GBM_MODEL: "gbm", _SEQ_MODEL: "seq_sklearn"}
-    monkeypatch.setattr(_module, "_model_families", lambda _df: dict(families))  # type: ignore[misc]
+    monkeypatch.setattr(_module, "model_families", lambda _df: dict(families))  # type: ignore[misc]
 
 
 def _stub_per_cell(
     monkeypatch: pytest.MonkeyPatch,
-    result_by_dataset: dict[str, _ComputePerCellResult],
+    result_by_dataset: dict[str, ComputePerCellLiftDeltasResult],
 ) -> None:
     """Stub `compute_per_cell_lift_deltas` to return a controlled
     result per dataset, bypassing the B11 predictions-shard
     machinery."""
     import benchmarks.report.bootstrap_ensemble_lift as _module
 
-    def _fake(*, dataset_name: str, **_kwargs: object) -> _ComputePerCellResult:
+    def _fake(*, dataset_name: str, **_kwargs: object) -> ComputePerCellLiftDeltasResult:
         return result_by_dataset.get(
             dataset_name,
-            _ComputePerCellResult(cells=(), selector="log_loss"),
+            ComputePerCellLiftDeltasResult(cells=(), selector="log_loss"),
         )
 
     monkeypatch.setattr(_module, "compute_per_cell_lift_deltas", _fake)  # type: ignore[misc]
@@ -150,8 +150,8 @@ def _ok_rows_both_families(dataset_name: str = "fake_binary") -> list[dict[str, 
     return rows
 
 
-def _per_cell_pairs(values: list[tuple[int, int, float, float]]) -> _ComputePerCellResult:
-    """Build a `_ComputePerCellResult` from (seed, fold, loss_gbm, loss_gbm_plus_seq) tuples."""
+def _per_cell_pairs(values: list[tuple[int, int, float, float]]) -> ComputePerCellLiftDeltasResult:
+    """Build a `ComputePerCellLiftDeltasResult` from (seed, fold, loss_gbm, loss_gbm_plus_seq) tuples."""
     cells = tuple(
         PerCellLiftDelta(
             seed=s,
@@ -163,7 +163,7 @@ def _per_cell_pairs(values: list[tuple[int, int, float, float]]) -> _ComputePerC
         )
         for s, f, lg, lgs in values
     )
-    return _ComputePerCellResult(cells=cells, selector="log_loss")
+    return ComputePerCellLiftDeltasResult(cells=cells, selector="log_loss")
 
 
 # --- 1. Paired cells emit CI ------------------------------------------------
@@ -276,7 +276,7 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_seed_disjoint_yields_no_gbm_pr
     _stub_per_cell(
         monkeypatch,
         {
-            "fake_binary": _ComputePerCellResult(
+            "fake_binary": ComputePerCellLiftDeltasResult(
                 cells=(),
                 seen_no_gbm=True,
                 seen_no_seq=True,
@@ -341,7 +341,7 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_no_gbm_predictions_emits_senti
     _stub_per_cell(
         monkeypatch,
         {
-            "fake_binary": _ComputePerCellResult(
+            "fake_binary": ComputePerCellLiftDeltasResult(
                 cells=(), seen_no_gbm=True, seen_no_seq=False, selector="log_loss"
             ),
             "bypass": _per_cell_pairs([(0, 0, 0.60, 0.40)]),
@@ -377,7 +377,7 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_no_seq_predictions_emits_senti
     _stub_per_cell(
         monkeypatch,
         {
-            "fake_binary": _ComputePerCellResult(
+            "fake_binary": ComputePerCellLiftDeltasResult(
                 cells=(), seen_no_gbm=False, seen_no_seq=True, selector="log_loss"
             ),
             "bypass": _per_cell_pairs([(0, 0, 0.60, 0.40)]),
@@ -428,7 +428,7 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_all_cells_skipped_emits_sentin
     _stub_per_cell(
         monkeypatch,
         {
-            "fake_binary": _ComputePerCellResult(
+            "fake_binary": ComputePerCellLiftDeltasResult(
                 cells=(), seen_no_gbm=False, seen_no_seq=False, selector="log_loss"
             ),
             "bypass": _per_cell_pairs([(0, 0, 0.60, 0.40)]),
@@ -528,7 +528,7 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_records_primary_loss_column_fo
     _stub_per_cell(
         monkeypatch,
         {
-            "fake_binary": _ComputePerCellResult(
+            "fake_binary": ComputePerCellLiftDeltasResult(
                 cells=tuple(
                     PerCellLiftDelta(
                         seed=s,
@@ -569,7 +569,7 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_malformed_cell_raises(
     _stub_per_cell(
         monkeypatch,
         {
-            "fake_binary": _ComputePerCellResult(
+            "fake_binary": ComputePerCellLiftDeltasResult(
                 cells=(
                     PerCellLiftDelta(
                         seed=0,
@@ -694,6 +694,69 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_respects_per_spec_n_resamples_
     assert rollup[0].bootstrap_n_resamples == 137
 
 
+# --- 15b. Unsupported / inconsistent task_type datasets excluded ----------
+
+
+def test_aggregate_bootstrap_ensemble_lift_rollup_excludes_unsupported_and_inconsistent_task_type_datasets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """qa-R1-I2: the dataset loop early-`continue`s on two cases:
+    (1) `len(task_type_values) != 1` (a manifest mixed across
+    distinct task_types within one dataset); (2) `task_type not in
+    _PRIMARY_LOSS_COLUMN_BY_TASK` (e.g., regression_quantile). Pin
+    both: only the valid `binary` dataset appears in the rollup."""
+    config, output_root, manifest = _setup(tmp_path)
+    rows = [
+        # Valid binary dataset with both families
+        _manifest_row(dataset_name="ok_binary", model_name=_GBM_MODEL, seed=0, fold_index=0),
+        _manifest_row(dataset_name="ok_binary", model_name=_SEQ_MODEL, seed=0, fold_index=0),
+        # Unsupported task_type (regression_quantile)
+        _manifest_row(
+            dataset_name="quantile_ds",
+            model_name=_GBM_MODEL,
+            seed=0,
+            fold_index=0,
+            task_type="regression_quantile",
+        ),
+        _manifest_row(
+            dataset_name="quantile_ds",
+            model_name=_SEQ_MODEL,
+            seed=0,
+            fold_index=0,
+            task_type="regression_quantile",
+        ),
+        # Inconsistent: same dataset_name has two distinct task_types
+        _manifest_row(
+            dataset_name="mixed_ds",
+            model_name=_GBM_MODEL,
+            seed=0,
+            fold_index=0,
+            task_type="binary",
+        ),
+        _manifest_row(
+            dataset_name="mixed_ds",
+            model_name=_SEQ_MODEL,
+            seed=0,
+            fold_index=0,
+            task_type="regression_point",
+        ),
+    ]
+    _stub_load_run(monkeypatch, rows)
+    _stub_families(monkeypatch)
+    _stub_per_cell(
+        monkeypatch,
+        {"ok_binary": _per_cell_pairs([(0, 0, 0.60, 0.40)])},
+    )
+
+    env = build_run_environment(profile="smoke")
+    rollup = aggregate_bootstrap_ensemble_lift_rollup(
+        config, output_root=output_root, env=env, manifest=manifest
+    )
+    dataset_names = {row.dataset_name for row in rollup}
+    assert dataset_names == {"ok_binary"}
+
+
 # --- 16. Byte-string regression pin on B11 _per_dataset_lift --------------
 
 
@@ -756,9 +819,9 @@ def test_compute_per_cell_lift_deltas_per_dataset_lift_byte_string_regression(
         gbm_cells: pd.DataFrame,
         seq_cells: pd.DataFrame,
         output_root: Path,
-    ) -> _ComputePerCellResult:
+    ) -> ComputePerCellLiftDeltasResult:
         del dataset_name, task_type, seed_fold_pairs, gbm_cells, seq_cells, output_root
-        return _ComputePerCellResult(cells=records, selector="log_loss")
+        return ComputePerCellLiftDeltasResult(cells=records, selector="log_loss")
 
     monkeypatch.setattr(_b11, "compute_per_cell_lift_deltas", _fake)
 
