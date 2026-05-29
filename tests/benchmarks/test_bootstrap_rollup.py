@@ -311,8 +311,11 @@ def test_aggregate_bootstrap_rollup_row_count_ceiling_raises(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """N * n_resamples > _BOOTSTRAP_ROW_COUNT_CEILING raises
-    `RawRollupError` (defensive OOM gate)."""
+    """N * n_resamples > BOOTSTRAP_ROW_COUNT_CEILING raises
+    `RawRollupError` (defensive OOM gate). B14 hoisted the
+    constant from `bootstrap_rollup` to the shared
+    `_bootstrap_aggregate` module; the importing module's binding
+    is what the aggregator reads at call time."""
     register_all_fakes_and_get_panels()
     config = _make_config(
         datasets=("fake_binary",),
@@ -328,7 +331,7 @@ def test_aggregate_bootstrap_rollup_row_count_ceiling_raises(
     # Lower the ceiling so the tiny fake-binary panel trips it.
     import benchmarks.report.bootstrap_rollup as _module
 
-    monkeypatch.setattr(_module, "_BOOTSTRAP_ROW_COUNT_CEILING", 1)
+    monkeypatch.setattr(_module, "BOOTSTRAP_ROW_COUNT_CEILING", 1)
     manifest = _build_run_manifest_for(config, output_root)
     with pytest.raises(RawRollupError, match="ceiling"):
         aggregate_bootstrap_rollup(config, output_root=output_root, env=env, manifest=manifest)

@@ -6,10 +6,20 @@ from pathlib import Path
 
 import pytest
 from benchmarks.bootstrap_manifest import (
+    PairwiseRollupRow,
     RollupRow,
+    TrainingTimeRollupRow,
+    load_pairwise_rollup,
     load_rollup,
+    load_training_time_rollup,
+    pairwise_aggregator_failed_sentinel_path,
+    pairwise_rollup_path,
     rollup_path,
+    training_time_aggregator_failed_sentinel_path,
+    training_time_rollup_path,
+    write_pairwise_rollup,
     write_rollup,
+    write_training_time_rollup,
 )
 
 
@@ -152,3 +162,229 @@ def test_experiment_spec_bootstrap_n_resamples_below_one_raises_validation() -> 
 
     with pytest.raises(ValidationError, match="bootstrap_n_resamples"):
         ExperimentSpec(kind="raw_loss", bootstrap_n_resamples=0)
+
+
+# --- Phase B14: PairwiseRollupRow + TrainingTimeRollupRow schemas ----------
+
+
+def _make_pairwise_row(**overrides: object) -> PairwiseRollupRow:
+    defaults: dict[str, object] = {
+        "dataset_name": "fake_binary",
+        "model_a": "lightgbm_classifier",
+        "model_b": "tft_classifier",
+        "task_type": "binary",
+        "primary_metric": "complementarity_score",
+        "n_seeds": 3,
+        "n_cells_evaluated": 9,
+        "n_skipped_cells": 0,
+        "primary_loss_mean": 0.612,
+        "primary_loss_ci_lo": 0.581,
+        "primary_loss_ci_hi": 0.643,
+        "bootstrap_seed": 42,
+        "bootstrap_n_resamples": 10_000,
+        "bootstrap_confidence": 0.95,
+        "bootstrap_rng_algorithm": "PCG64",
+        "bootstrap_numpy_version": "2.3.0",
+        "bootstrap_skipped_reason": None,
+        "manifest_fingerprint": "feedface" * 8,
+    }
+    defaults.update(overrides)
+    return PairwiseRollupRow(**defaults)  # type: ignore[arg-type]
+
+
+def _make_training_time_row(**overrides: object) -> TrainingTimeRollupRow:
+    defaults: dict[str, object] = {
+        "dataset_name": "fake_binary",
+        "model_name": "lightgbm_classifier",
+        "hardware_tier": "cpu",
+        "task_type": "binary",
+        "primary_metric": "wall_seconds",
+        "n_seeds": 3,
+        "n_cells_evaluated": 9,
+        "n_skipped_cells": 0,
+        "primary_loss_mean": 1.234,
+        "primary_loss_ci_lo": 1.10,
+        "primary_loss_ci_hi": 1.35,
+        "bootstrap_seed": 42,
+        "bootstrap_n_resamples": 10_000,
+        "bootstrap_confidence": 0.95,
+        "bootstrap_rng_algorithm": "PCG64",
+        "bootstrap_numpy_version": "2.3.0",
+        "bootstrap_skipped_reason": None,
+        "manifest_fingerprint": "cafef00d" * 8,
+    }
+    defaults.update(overrides)
+    return TrainingTimeRollupRow(**defaults)  # type: ignore[arg-type]
+
+
+def test_pairwise_rollup_path_format(tmp_path: Path) -> None:
+    """B14: `pairwise_rollup_path(root)` returns
+    `{root}/bootstrap_pairwise_rollup.parquet`."""
+    assert pairwise_rollup_path(tmp_path) == tmp_path / "bootstrap_pairwise_rollup.parquet"
+
+
+def test_training_time_rollup_path_format(tmp_path: Path) -> None:
+    """B14: `training_time_rollup_path(root)` returns
+    `{root}/bootstrap_training_time_rollup.parquet`."""
+    assert (
+        training_time_rollup_path(tmp_path)
+        == tmp_path / "bootstrap_training_time_rollup.parquet"
+    )
+
+
+def test_pairwise_aggregator_failed_sentinel_path_format(tmp_path: Path) -> None:
+    """B14: pairwise sentinel filename is
+    `bootstrap_pairwise_aggregator_failed.txt`."""
+    assert (
+        pairwise_aggregator_failed_sentinel_path(tmp_path)
+        == tmp_path / "bootstrap_pairwise_aggregator_failed.txt"
+    )
+
+
+def test_training_time_aggregator_failed_sentinel_path_format(tmp_path: Path) -> None:
+    """B14: training-time sentinel filename is
+    `bootstrap_training_time_aggregator_failed.txt`."""
+    assert (
+        training_time_aggregator_failed_sentinel_path(tmp_path)
+        == tmp_path / "bootstrap_training_time_aggregator_failed.txt"
+    )
+
+
+def test_write_pairwise_rollup_then_load_round_trips_all_fields(
+    tmp_path: Path,
+) -> None:
+    """B14: write + load the PairwiseRollupRow shard; every field
+    round-trips. Pins the new pydantic schema's parquet
+    serialization including the `bootstrap_skipped_reason`
+    sentinel branch."""
+    rows = [
+        _make_pairwise_row(),
+        _make_pairwise_row(
+            task_type="regression_point",
+            primary_metric="complementarity_score",
+            primary_loss_mean=None,
+            primary_loss_ci_lo=None,
+            primary_loss_ci_hi=None,
+            bootstrap_skipped_reason="regression_complementarity_undefined",
+        ),
+    ]
+    write_pairwise_rollup(tmp_path, rows)
+    loaded = load_pairwise_rollup(tmp_path)
+    assert len(loaded) == len(rows)
+    for orig, got in zip(rows, loaded, strict=True):
+        assert got.model_dump() == orig.model_dump()
+
+
+def test_write_training_time_rollup_then_load_round_trips_all_fields(
+    tmp_path: Path,
+) -> None:
+    """B14: write + load the TrainingTimeRollupRow shard; every
+    field round-trips including the hardware_tier column."""
+    rows = [
+        _make_training_time_row(),
+        _make_training_time_row(
+            hardware_tier="gpu_single",
+            primary_loss_mean=0.876,
+            primary_loss_ci_lo=0.82,
+            primary_loss_ci_hi=0.93,
+        ),
+        _make_training_time_row(
+            n_cells_evaluated=0,
+            n_skipped_cells=9,
+            primary_loss_mean=None,
+            primary_loss_ci_lo=None,
+            primary_loss_ci_hi=None,
+            bootstrap_skipped_reason="all_cells_skipped_in_manifest",
+        ),
+    ]
+    write_training_time_rollup(tmp_path, rows)
+    loaded = load_training_time_rollup(tmp_path)
+    assert len(loaded) == len(rows)
+    for orig, got in zip(rows, loaded, strict=True):
+        assert got.model_dump() == orig.model_dump()
+
+
+def test_pairwise_rollup_row_extra_forbid_rejects_unknown_field() -> None:
+    """B14: `PairwiseRollupRow.model_config = extra="forbid"`;
+    a future schema-drift extra field raises ValidationError."""
+    with pytest.raises(Exception, match="extra"):
+        PairwiseRollupRow.model_validate(
+            {**_make_pairwise_row().model_dump(), "ghost": 1}
+        )
+
+
+def test_training_time_rollup_row_extra_forbid_rejects_unknown_field() -> None:
+    """B14: `TrainingTimeRollupRow.model_config = extra="forbid"`;
+    a future schema-drift extra field raises ValidationError."""
+    with pytest.raises(Exception, match="extra"):
+        TrainingTimeRollupRow.model_validate(
+            {**_make_training_time_row().model_dump(), "ghost": 1}
+        )
+
+
+def test_write_pairwise_rollup_empty_rows_writes_empty_shard(
+    tmp_path: Path,
+) -> None:
+    """B14: empty rows -> empty parquet shard; subsequent load returns []."""
+    write_pairwise_rollup(tmp_path, [])
+    assert load_pairwise_rollup(tmp_path) == []
+
+
+def test_write_training_time_rollup_empty_rows_writes_empty_shard(
+    tmp_path: Path,
+) -> None:
+    """B14: empty rows -> empty parquet shard; subsequent load returns []."""
+    write_training_time_rollup(tmp_path, [])
+    assert load_training_time_rollup(tmp_path) == []
+
+
+def test_load_pairwise_rollup_returns_empty_when_file_absent(tmp_path: Path) -> None:
+    """B14: absent pairwise shard -> []; matches the B13 dispatch
+    convention so the renderer can detect 'no rollup ran' without
+    raising."""
+    assert load_pairwise_rollup(tmp_path) == []
+
+
+def test_load_training_time_rollup_returns_empty_when_file_absent(
+    tmp_path: Path,
+) -> None:
+    """B14: absent training-time shard -> []."""
+    assert load_training_time_rollup(tmp_path) == []
+
+
+# --- B14 ExperimentSpec extension ------------------------------------------
+
+
+def test_experiment_spec_bootstrap_pairwise_enabled_defaults_true() -> None:
+    """B14: `bootstrap_pairwise_enabled` defaults True so the CI
+    rollup runs by default when an ensemble spec is configured."""
+    from benchmarks.config import ExperimentSpec
+
+    spec = ExperimentSpec(kind="ensemble")
+    assert spec.bootstrap_pairwise_enabled is True
+
+
+def test_experiment_spec_bootstrap_training_time_enabled_defaults_true() -> None:
+    """B14: `bootstrap_training_time_enabled` defaults True so the
+    CI rollup runs by default when a training_time spec is configured."""
+    from benchmarks.config import ExperimentSpec
+
+    spec = ExperimentSpec(kind="training_time")
+    assert spec.bootstrap_training_time_enabled is True
+
+
+def test_experiment_spec_bootstrap_pairwise_enabled_opt_out() -> None:
+    """B14: setting `bootstrap_pairwise_enabled=False` opts out of
+    the CI rollup; the wrapper will see this and skip."""
+    from benchmarks.config import ExperimentSpec
+
+    spec = ExperimentSpec(kind="ensemble", bootstrap_pairwise_enabled=False)
+    assert spec.bootstrap_pairwise_enabled is False
+
+
+def test_experiment_spec_bootstrap_training_time_enabled_opt_out() -> None:
+    """B14: setting `bootstrap_training_time_enabled=False` opts out."""
+    from benchmarks.config import ExperimentSpec
+
+    spec = ExperimentSpec(kind="training_time", bootstrap_training_time_enabled=False)
+    assert spec.bootstrap_training_time_enabled is False

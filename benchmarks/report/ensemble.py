@@ -22,9 +22,21 @@ from pathlib import Path
 from typing import Any, cast
 
 import pandas as pd
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
+from benchmarks.bootstrap_manifest import (
+    PairwiseRollupRow,
+    load_pairwise_rollup,
+    pairwise_aggregator_failed_sentinel_path,
+    pairwise_rollup_path,
+)
 from benchmarks.experiments.ensemble import load_pairwise
+from benchmarks.report._bootstrap_render import (
+    folds_per_group,
+    format_ci_cell,
+    render_rollup_skipped_footnote,
+)
+from benchmarks.run_manifest import load_run_manifest, run_manifest_path
 
 logger = logging.getLogger(__name__)
 
@@ -259,8 +271,232 @@ def render_pairwise_markdown(manifest: pd.DataFrame) -> str:
     return "\n".join(parts)
 
 
+def render_pairwise_markdown_with_ci(
+    manifest: pd.DataFrame,
+    rollup: list[PairwiseRollupRow],
+    *,
+    expected_manifest_fingerprint: str | None = None,
+    aggregator_error_class: str | None = None,
+    manifest_unreadable: bool = False,
+) -> str:
+    """Render the pairwise complementarity report with B14 CIs.
+
+    Joins the pairwise manifest with the rollup table on
+    `(dataset_name, model_a, model_b, task_type)` and replaces
+    the bare `complementarity_score` column with
+    `complementarity_score [95% CI]`.
+
+    Footnote-source precedence (B14.4 mirror of B13):
+
+    1. `aggregator_error_class is not None`: std variant +
+       "Bootstrap aggregator failed: <class>" footnote.
+    2. `not rollup`: std variant silently.
+    3. `expected_manifest_fingerprint` set AND any row mismatch:
+       std variant + "rollup is stale" footnote.
+    4. CI variant body renders; if `manifest_unreadable=True`,
+       append "freshness check skipped" footnote.
+    """
+    if aggregator_error_class is not None:
+        std_body = render_pairwise_markdown(manifest)
+        footnote = (
+            "\n### Bootstrap aggregator failed\n\n"
+            f"_The B14 pairwise bootstrap-rollup aggregator raised "
+            f"`{aggregator_error_class}`; the pairwise report above is "
+            "rendered in the legacy mean-only shape. See the run logs "
+            "for the underlying cause._\n"
+        )
+        return std_body + footnote
+
+    if not rollup:
+        return render_pairwise_markdown(manifest)
+
+    if expected_manifest_fingerprint is not None and any(
+        row.manifest_fingerprint != expected_manifest_fingerprint for row in rollup
+    ):
+        std_body = render_pairwise_markdown(manifest)
+        footnote = (
+            "\n### Bootstrap rollup is stale\n\n"
+            "_The B14 pairwise bootstrap-rollup file's manifest_fingerprint "
+            "does not match the current manifest's; the CI variant was "
+            "suppressed for safety. Re-run with `--experiment=ensemble` "
+            "to refresh the rollup._\n"
+        )
+        return std_body + footnote
+
+    body = _render_with_ci_pairwise(manifest, rollup)
+    if manifest_unreadable:
+        body += (
+            "\n### Bootstrap freshness check skipped\n\n"
+            "_The B14 pairwise freshness check could not run because "
+            "`run_manifest.json` is corrupt or schema-mismatched; the CI "
+            "variant above was NOT verified against the live manifest's "
+            "fingerprint. Re-run `--experiment=ensemble` to refresh both._\n"
+        )
+    return body
+
+
+def _render_with_ci_pairwise(
+    manifest: pd.DataFrame, rollup: list[PairwiseRollupRow]
+) -> str:
+    """B14.4 pairwise CI body: joins manifest + rollup and emits
+    the per-dataset table with the CI column replacing the bare
+    complementarity_score."""
+    rollup_index: dict[tuple[str, str, str, str], PairwiseRollupRow] = {}
+    for row in rollup:
+        key = (row.dataset_name, row.model_a, row.model_b, row.task_type)
+        rollup_index[key] = row
+
+    folds_index = folds_per_group(
+        manifest,
+        group_columns=("dataset_name", "model_a", "model_b"),
+    )
+
+    summaries = aggregate_pairs(manifest)
+    by_dataset: dict[str, list[PairwiseSummary]] = {}
+    for s in summaries:
+        by_dataset.setdefault(s.dataset_name, []).append(s)
+
+    parts = ["# Pairwise ensemble-complementarity report", ""]
+    for dataset_name in sorted(by_dataset):
+        parts.append(
+            _render_dataset_block_with_ci(
+                dataset_name,
+                by_dataset[dataset_name],
+                manifest,
+                rollup_index,
+                folds_index,
+            )
+        )
+    top_n = _render_top_n_summary(summaries)
+    if top_n:
+        parts.append(top_n)
+
+    rollup_skipped = [r for r in rollup if r.bootstrap_skipped_reason is not None]
+    if rollup_skipped:
+        parts.append(
+            render_rollup_skipped_footnote(
+                rollup_skipped,
+                group_columns=("dataset_name", "model_a", "model_b"),
+                header_labels=("Dataset", "Model A", "Model B"),
+            )
+        )
+    return "\n".join(parts)
+
+
+def _render_dataset_block_with_ci(
+    dataset_name: str,
+    summaries: list[PairwiseSummary],
+    manifest: pd.DataFrame,
+    rollup_index: dict[tuple[str, str, str, str], PairwiseRollupRow],
+    folds_index: dict[tuple[str, ...], int],
+) -> str:
+    """Mirror of `_render_dataset_block` with the CI column."""
+    if not summaries:
+        return ""
+    task_type = summaries[0].task_type
+    cols = _stat_columns_for(task_type)
+    header_cells = [
+        "model_a",
+        "model_b",
+        "n_cells",
+        *cols,
+        "complementarity_score [95% CI]",
+    ]
+    sep_cells = ["---"] * len(header_cells)
+    lines = [
+        f"### {dataset_name} ({task_type})",
+        "",
+        "| " + " | ".join(header_cells) + " |",
+        "| " + " | ".join(sep_cells) + " |",
+    ]
+    sorted_summaries = sorted(
+        summaries,
+        key=lambda s: -float("inf") if s.complementarity_score is None else s.complementarity_score,
+        reverse=True,
+    )
+    for summary in sorted_summaries:
+        key = (summary.dataset_name, summary.model_a, summary.model_b, summary.task_type)
+        rollup_row = rollup_index.get(key)
+        if rollup_row is None or rollup_row.bootstrap_skipped_reason is not None:
+            ci_cell = "(no CI)"
+        else:
+            n_folds = folds_index.get(
+                (summary.dataset_name, summary.model_a, summary.model_b), 0
+            )
+            expected = rollup_row.n_seeds * n_folds
+            partial = rollup_row.n_cells_evaluated < expected and expected > 0
+            ci_cell = format_ci_cell(
+                rollup_row.primary_loss_mean,
+                rollup_row.primary_loss_ci_lo,
+                rollup_row.primary_loss_ci_hi,
+                partial=partial,
+            )
+        ok_block = manifest.loc[
+            (manifest["dataset_name"] == dataset_name)
+            & (manifest["model_a"] == summary.model_a)
+            & (manifest["model_b"] == summary.model_b)
+            & manifest["skipped_reason"].isna()
+        ]
+        row_cells = [summary.model_a, summary.model_b, str(summary.n_cells_evaluated)]
+        for col in cols:
+            if col == "n_samples":
+                if col in ok_block.columns:
+                    total = ok_block["n_samples"].dropna()
+                    row_cells.append(
+                        str(int(total.astype(int).sum())) if not total.empty else ""
+                    )
+                else:
+                    row_cells.append("")
+                continue
+            stat_field = {
+                "yule_q": summary.yule_q_mean,
+                "phi": summary.phi_mean,
+                "disagreement_rate": summary.disagreement_mean,
+                "double_fault_rate": summary.double_fault_mean,
+                "pearson_pred_corr": summary.pearson_pred_mean,
+                "spearman_pred_corr": summary.spearman_pred_mean,
+                "pearson_error_corr": summary.pearson_error_mean,
+            }.get(col)
+            row_cells.append(_format_float(stat_field))
+        row_cells.append(ci_cell)
+        lines.append("| " + " | ".join(row_cells) + " |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_from_dir(output_root: Path) -> str:
     """Convenience: load the pairwise manifest under `output_root`
-    and render."""
+    and render. The CI variant kicks in when a rollup file is
+    present AND the rollup's `manifest_fingerprint` matches the
+    live run manifest's (B14.4 freshness check). When the CLI
+    wrapper caught a `RawRollupError` and wrote the failure
+    sentinel, the renderer surfaces the std + footnote."""
     manifest = load_pairwise(output_root)
+
+    failure_sentinel = pairwise_aggregator_failed_sentinel_path(output_root)
+    if failure_sentinel.exists():
+        error_class = failure_sentinel.read_text(encoding="utf-8").strip()
+        return render_pairwise_markdown_with_ci(
+            manifest, [], aggregator_error_class=error_class
+        )
+
+    if pairwise_rollup_path(output_root).exists():
+        rollup = load_pairwise_rollup(output_root)
+        if rollup:
+            expected: str | None = None
+            manifest_unreadable = False
+            if run_manifest_path(output_root).exists():
+                try:
+                    run_manifest = load_run_manifest(output_root)
+                except (FileNotFoundError, ValueError, ValidationError):
+                    run_manifest = None
+                    manifest_unreadable = True
+                if run_manifest is not None:
+                    expected = run_manifest.fingerprint()
+            return render_pairwise_markdown_with_ci(
+                manifest,
+                rollup,
+                expected_manifest_fingerprint=expected,
+                manifest_unreadable=manifest_unreadable,
+            )
     return render_pairwise_markdown(manifest)

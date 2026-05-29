@@ -31,7 +31,14 @@ from pydantic import ValidationError
 # test.
 import benchmarks.adapters  # pyright: ignore[reportUnusedImport]
 import benchmarks.datasets  # noqa: F401  # pyright: ignore[reportUnusedImport]
-from benchmarks.bootstrap_manifest import aggregator_failed_sentinel_path, rollup_path
+from benchmarks.bootstrap_manifest import (
+    aggregator_failed_sentinel_path,
+    pairwise_aggregator_failed_sentinel_path,
+    pairwise_rollup_path,
+    rollup_path,
+    training_time_aggregator_failed_sentinel_path,
+    training_time_rollup_path,
+)
 from benchmarks.config import BenchmarkConfig
 from benchmarks.experiments import (
     RunEnvironment,
@@ -44,10 +51,18 @@ from benchmarks.experiments import (
 )
 from benchmarks.manifest import atomic_write_bytes
 from benchmarks.registry import list_datasets, list_models
+from benchmarks.report.bootstrap_pairwise import (
+    aggregate_bootstrap_pairwise_rollup,
+    is_pairwise_rollup_enabled,
+)
 from benchmarks.report.bootstrap_rollup import (
     RawRollupError,
     aggregate_bootstrap_rollup,
     is_rollup_enabled,
+)
+from benchmarks.report.bootstrap_training_time import (
+    aggregate_bootstrap_training_time_rollup,
+    is_training_time_rollup_enabled,
 )
 from benchmarks.report.ensemble import render_from_dir as render_pairwise_from_dir
 from benchmarks.report.ensemble_lift import render_ensemble_lift_markdown
@@ -158,6 +173,11 @@ def _dispatch_kinds(
                 result.run_id,
             )
             _run_bootstrap_rollup(config, env=env, output_root=output_root)
+            # B14 D-B13.2: training-time CI rollup also reads the
+            # B5 manifest, so it runs at the same hook point as
+            # _run_bootstrap_rollup, gated by a training_time
+            # spec presence + opt-in flag.
+            _run_bootstrap_training_time_rollup(config, env=env, output_root=output_root)
             leaderboard_md = render_leaderboard_from_dir(output_root)
             leaderboard_path = output_root / "leaderboard.md"
             leaderboard_path.write_text(leaderboard_md, encoding="utf-8")
@@ -173,6 +193,7 @@ def _dispatch_kinds(
                 pair_result.pairs_already_complete,
                 pair_result.run_id,
             )
+            _run_bootstrap_pairwise_rollup(config, env=env, output_root=output_root)
             pairwise_md = render_pairwise_from_dir(output_root)
             pairwise_path = output_root / "pairwise.md"
             pairwise_path.write_text(pairwise_md, encoding="utf-8")
@@ -308,6 +329,141 @@ def _run_bootstrap_rollup(
         # "Bootstrap aggregator failed: <class>" footnote
         # (Gemini-C2 wrapper case + R1 code-I1 wire-up).
         sentinel = aggregator_failed_sentinel_path(output_root)
+        sentinel.write_text(type(exc).__name__, encoding="utf-8")
+
+
+def _run_bootstrap_pairwise_rollup(
+    config: BenchmarkConfig,
+    *,
+    env: RunEnvironment,
+    output_root: Path,
+) -> None:
+    """B14 D-B13.1 pairwise CI rollup step. Runs AFTER run_ensemble.
+
+    Mirrors `_run_bootstrap_rollup`'s shape against the B6
+    pairwise manifest:
+    - Skips when `is_pairwise_rollup_enabled(config)` is False
+      (no ensemble spec or opt-out flag).
+    - Catches `RawRollupError`, deletes any partial
+      `bootstrap_pairwise_rollup.parquet`, and drops a B6-
+      specific sentinel file so the renderer surfaces the
+      "Bootstrap aggregator failed" footnote in the std
+      fallback. The B5 + B7 sentinels are NOT touched
+      (B14.0 cross-report independence).
+    """
+    if not is_pairwise_rollup_enabled(config):
+        logger.info(
+            "bootstrap_pairwise_rollup: skipped (no ensemble ExperimentSpec has "
+            "`bootstrap_pairwise_enabled=True`)"
+        )
+        return
+    if not run_manifest_path(output_root).exists():
+        logger.warning(
+            "bootstrap_pairwise_rollup: skipped (run_manifest.json absent at %s)",
+            output_root,
+        )
+        return
+    try:
+        manifest = load_run_manifest(output_root)
+    except (FileNotFoundError, ValueError, ValidationError) as exc:
+        logger.warning(
+            "bootstrap_pairwise_rollup: skipped (failed to load "
+            "run_manifest.json: %s: %s)",
+            type(exc).__name__,
+            exc,
+        )
+        return
+    try:
+        rows = aggregate_bootstrap_pairwise_rollup(
+            config, output_root=output_root, env=env, manifest=manifest
+        )
+        stale = pairwise_aggregator_failed_sentinel_path(output_root)
+        if stale.exists():
+            stale.unlink(missing_ok=True)
+        logger.info(
+            "bootstrap_pairwise_rollup: %d rollup rows written to %s",
+            len(rows),
+            pairwise_rollup_path(output_root),
+        )
+    except RawRollupError as exc:
+        logger.warning(
+            "bootstrap_pairwise_rollup: aggregator failed (%s); deleting any "
+            "partial rollup shard. The pairwise report will fall back to the "
+            "std variant.",
+            exc,
+        )
+        path = pairwise_rollup_path(output_root)
+        if path.exists():
+            path.unlink(missing_ok=True)
+        sentinel = pairwise_aggregator_failed_sentinel_path(output_root)
+        sentinel.write_text(type(exc).__name__, encoding="utf-8")
+
+
+def _run_bootstrap_training_time_rollup(
+    config: BenchmarkConfig,
+    *,
+    env: RunEnvironment,
+    output_root: Path,
+) -> None:
+    """B14 D-B13.2 training-time CI rollup step.
+
+    Runs AFTER `run_raw_loss` (NOT after `run_training_time`):
+    the training-time renderer reads the same B5 manifest, so the
+    CI rollup's data source is the B5 manifest and the wrapper
+    attaches at the same hook point as `_run_bootstrap_rollup`.
+    Gated by an `ExperimentSpec(kind="training_time",
+    bootstrap_training_time_enabled=True)` presence check.
+
+    Catches `RawRollupError`, deletes any partial
+    `bootstrap_training_time_rollup.parquet`, and drops a B7-
+    specific sentinel file. The B5 + B6 sentinels are NOT
+    touched (B14.0 cross-report independence).
+    """
+    if not is_training_time_rollup_enabled(config):
+        logger.info(
+            "bootstrap_training_time_rollup: skipped (no training_time "
+            "ExperimentSpec has `bootstrap_training_time_enabled=True`)"
+        )
+        return
+    if not run_manifest_path(output_root).exists():
+        logger.warning(
+            "bootstrap_training_time_rollup: skipped (run_manifest.json absent at %s)",
+            output_root,
+        )
+        return
+    try:
+        manifest = load_run_manifest(output_root)
+    except (FileNotFoundError, ValueError, ValidationError) as exc:
+        logger.warning(
+            "bootstrap_training_time_rollup: skipped (failed to load "
+            "run_manifest.json: %s: %s)",
+            type(exc).__name__,
+            exc,
+        )
+        return
+    try:
+        rows = aggregate_bootstrap_training_time_rollup(
+            config, output_root=output_root, env=env, manifest=manifest
+        )
+        stale = training_time_aggregator_failed_sentinel_path(output_root)
+        if stale.exists():
+            stale.unlink(missing_ok=True)
+        logger.info(
+            "bootstrap_training_time_rollup: %d rollup rows written to %s",
+            len(rows),
+            training_time_rollup_path(output_root),
+        )
+    except RawRollupError as exc:
+        logger.warning(
+            "bootstrap_training_time_rollup: aggregator failed (%s); deleting "
+            "any partial rollup shard. The training-time report will fall back "
+            "to the std variant.",
+            exc,
+        )
+        path = training_time_rollup_path(output_root)
+        if path.exists():
+            path.unlink(missing_ok=True)
+        sentinel = training_time_aggregator_failed_sentinel_path(output_root)
         sentinel.write_text(type(exc).__name__, encoding="utf-8")
 
 

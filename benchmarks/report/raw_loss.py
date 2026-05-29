@@ -40,6 +40,11 @@ from benchmarks.bootstrap_manifest import (
     rollup_path,
 )
 from benchmarks.manifest import load_run
+from benchmarks.report._bootstrap_render import (
+    folds_per_group,
+    format_ci_cell,
+    render_rollup_skipped_footnote,
+)
 from benchmarks.run_manifest import load_run_manifest, run_manifest_path
 
 logger = logging.getLogger(__name__)
@@ -406,22 +411,6 @@ def render_leaderboard_markdown_with_ci(
     return body
 
 
-def _format_ci_cell(
-    mean: float | None,
-    ci_lo: float | None,
-    ci_hi: float | None,
-    *,
-    partial: bool,
-) -> str:
-    """`mean [ci_lo, ci_hi]` with 4 decimal places; appends `*` when
-    `partial=True` (rollup ran on fewer cells than `n_seeds *
-    n_folds`)."""
-    if mean is None or ci_lo is None or ci_hi is None:
-        return "(no CI)"
-    star = "*" if partial else ""
-    return f"{mean:.4f} [{ci_lo:.4f}, {ci_hi:.4f}]{star}"
-
-
 def _render_with_ci(manifest: pd.DataFrame, rollup: list[Any]) -> str:
     # Index the rollup by (dataset, model, task_type) for the join.
     rollup_index: dict[tuple[str, str, str], Any] = {}
@@ -432,12 +421,10 @@ def _render_with_ci(manifest: pd.DataFrame, rollup: list[Any]) -> str:
     # n_folds per (dataset, model) = the number of distinct
     # fold_index values in the manifest's OK rows for that group.
     # Used for the partial-fold `*` flag (Gemini-I3).
-    ok = manifest.loc[manifest["skipped_reason"].isna()]
-    folds_per_group: dict[tuple[str, str], int] = {}
-    if not ok.empty:
-        for (ds, mdl), block in ok.groupby(["dataset_name", "model_name"]):
-            key = (str(ds), str(mdl))
-            folds_per_group[key] = int(block["fold_index"].nunique())
+    folds_index = folds_per_group(
+        manifest,
+        group_columns=("dataset_name", "model_name"),
+    )
 
     entries = rank_by_primary_loss(manifest)
     by_dataset: dict[str, list[LeaderboardEntry]] = {}
@@ -452,7 +439,7 @@ def _render_with_ci(manifest: pd.DataFrame, rollup: list[Any]) -> str:
             by_dataset[dataset_name],
             manifest,
             rollup_index,
-            folds_per_group,
+            folds_index,
         )
         parts.append(block)
 
@@ -461,7 +448,13 @@ def _render_with_ci(manifest: pd.DataFrame, rollup: list[Any]) -> str:
     if cell_footnote:
         parts.append(cell_footnote)
     if rollup_skipped:
-        parts.append(_render_rollup_skipped_footnote(rollup_skipped))
+        parts.append(
+            render_rollup_skipped_footnote(
+                rollup_skipped,
+                group_columns=("dataset_name", "model_name"),
+                header_labels=("Dataset", "Model"),
+            )
+        )
     return "\n".join(parts)
 
 
@@ -470,7 +463,7 @@ def _render_dataset_block_with_ci(
     entries: list[LeaderboardEntry],
     manifest: pd.DataFrame,
     rollup_index: dict[tuple[str, str, str], Any],
-    folds_per_group: dict[tuple[str, str], int],
+    folds_index: dict[tuple[str, ...], int],
 ) -> str:
     if not entries:
         return ""
@@ -498,10 +491,10 @@ def _render_dataset_block_with_ci(
         if rollup_row is None or rollup_row.bootstrap_skipped_reason is not None:
             ci_cell = "(no CI)"
         else:
-            n_folds = folds_per_group.get((entry.dataset_name, entry.model_name), 0)
+            n_folds = folds_index.get((entry.dataset_name, entry.model_name), 0)
             expected = entry.n_seeds * n_folds
             partial = rollup_row.n_cells_evaluated < expected and expected > 0
-            ci_cell = _format_ci_cell(
+            ci_cell = format_ci_cell(
                 rollup_row.primary_loss_mean,
                 rollup_row.primary_loss_ci_lo,
                 rollup_row.primary_loss_ci_hi,
@@ -528,19 +521,6 @@ def _render_dataset_block_with_ci(
                 continue
             row_cells.append(_format_metric(ok_block[col].astype(float).mean()))
         lines.append("| " + " | ".join(row_cells) + " |")
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _render_rollup_skipped_footnote(rollup_skipped: list[Any]) -> str:
-    lines = ["### Bootstrap skipped", ""]
-    lines.append("| Dataset | Model | Reason |")
-    lines.append("| --- | --- | --- |")
-    for row in rollup_skipped:
-        reason = str(row.bootstrap_skipped_reason or "")
-        if len(reason) > 120:
-            reason = reason[:117] + "..."
-        lines.append(f"| {row.dataset_name} | {row.model_name} | {reason} |")
     lines.append("")
     return "\n".join(lines)
 

@@ -172,6 +172,23 @@ class ExperimentSpec(BaseModel):
     cells complete and writes `bootstrap_rollup.parquet`; the B5
     leaderboard renderer then ships the CI variant. Setting either
     field on a non-raw_loss kind is ignored.
+
+    `bootstrap_pairwise_enabled` is the B14 D-B13.1 CI control used
+    only by `kind="ensemble"`. Default True; the pairwise CI
+    rollup runs after `run_ensemble` succeeds and writes
+    `bootstrap_pairwise_rollup.parquet`. Ignored on other kinds.
+
+    `bootstrap_training_time_enabled` is the B14 D-B13.2 CI control
+    used only by `kind="training_time"`. Default True; the
+    training-time CI rollup reads the B5 manifest after
+    `run_raw_loss` succeeds (B7 is itself a report-only thin pass
+    over the same manifest) and writes
+    `bootstrap_training_time_rollup.parquet`. Ignored on other
+    kinds.
+
+    `bootstrap_n_resamples` is per-ExperimentSpec, NOT shared
+    across kinds; an unset value falls through to the profile-
+    based default in `BOOTSTRAP_N_RESAMPLES_BY_PROFILE`.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -182,6 +199,8 @@ class ExperimentSpec(BaseModel):
     timeout_seconds: float | None = Field(default=None, gt=0.0)
     bootstrap_rollup_enabled: bool = True
     bootstrap_n_resamples: int | None = Field(default=None, ge=1)
+    bootstrap_pairwise_enabled: bool = True
+    bootstrap_training_time_enabled: bool = True
 
 
 _ALL_SENTINEL = "all"
