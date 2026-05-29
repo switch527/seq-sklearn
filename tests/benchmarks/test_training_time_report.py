@@ -13,6 +13,9 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from benchmarks.bootstrap_manifest import (
+    TrainingTimeRollupRow as TrainingTimeRollupRowType,
+)
 from benchmarks.manifest import results_dir
 from benchmarks.report.training_time import (
     TrainingTimeSummary,
@@ -455,7 +458,8 @@ def _b14_rollup_row(
     manifest_fingerprint: str = "cafef00d" * 8,
     model_name: str = "fake_constant_binary",
     n_cells_evaluated: int = 2,
-) -> object:
+    n_seeds: int = 2,
+) -> TrainingTimeRollupRowType:
     from benchmarks.bootstrap_manifest import TrainingTimeRollupRow
 
     return TrainingTimeRollupRow(
@@ -557,6 +561,49 @@ def test_b14_render_training_time_with_ci_manifest_unreadable_appends_freshness_
     )
     assert "wall_seconds [95% CI]" in md
     assert "Bootstrap freshness check skipped" in md
+
+
+def test_b14_render_training_time_with_ci_marks_partial_fold_cell_with_asterisk() -> None:
+    """Stage-4 qa-C2 mirror for B7: when
+    rollup_row.n_cells_evaluated < n_seeds * n_folds, the CI cell
+    ends with `*`."""
+    from benchmarks.report.training_time import render_training_time_markdown_with_ci
+
+    # Two folds per group -> n_seeds * n_folds = 1 * 2 = 2; rollup
+    # has n_cells_evaluated=1 -> partial=True.
+    rows = []
+    for f in (0, 1):
+        rows.append(
+            {
+                "dataset_name": "fake_binary",
+                "model_name": "fake_constant_binary",
+                "hardware_tier": "cpu",
+                "task_type": "binary",
+                "seed": 0,
+                "fold_index": f,
+                "log_loss": 0.22,
+                "wall_seconds": 1.0,
+                "peak_rss_bytes": 1000.0,
+                "peak_cuda_bytes": None,
+                "skipped_reason": None,
+            }
+        )
+    partial_manifest = pd.DataFrame(rows)
+    rollup = [_b14_rollup_row(n_cells_evaluated=1, n_seeds=1)]
+    md = render_training_time_markdown_with_ci(partial_manifest, rollup)
+    assert "1.0500 [0.9800, 1.1200]*" in md
+
+
+def test_b14_render_training_time_with_ci_renders_no_ci_when_rollup_missing_for_group() -> None:
+    """Stage-4 code-I2 mirror for B7: manifest has a (dataset,
+    model, hardware_tier) group but the rollup row is missing
+    -> `(no CI)` cell sentinel."""
+    from benchmarks.report.training_time import render_training_time_markdown_with_ci
+
+    rollup = [_b14_rollup_row(model_name="other_model")]
+    md = render_training_time_markdown_with_ci(_b14_manifest(), rollup)
+    assert "(no CI)" in md
+    assert "wall_seconds [95% CI]" in md
 
 
 def test_b14_render_training_time_with_ci_rollup_skipped_emits_separate_footnote() -> None:

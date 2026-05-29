@@ -199,6 +199,90 @@ def test_render_pairwise_with_ci_manifest_unreadable_appends_freshness_footnote(
     assert "Bootstrap freshness check skipped" in md
 
 
+def test_render_pairwise_with_ci_surfaces_rollup_skipped_in_separate_footnote() -> None:
+    """Stage-4 qa-C1 closure: the 'Bootstrap skipped' footnote
+    for the pairwise rollup uses the B6-specific column-headers
+    `Dataset | Model A | Model B | Reason`. Pins the header_labels
+    argument passed to render_rollup_skipped_footnote so a copy-
+    paste from the B5 (`Dataset | Model |`) shape would fail."""
+    manifest = _make_manifest()
+    rollup = [
+        _make_rollup_row(),  # normal CI row
+        _make_rollup_row(
+            model_a="bad_a",
+            model_b="bad_b",
+            primary_loss_mean=None,
+            primary_loss_ci_lo=None,
+            primary_loss_ci_hi=None,
+            bootstrap_skipped_reason="loader_failed: missing predictions",
+            n_cells_evaluated=0,
+        ),
+    ]
+    md = render_pairwise_markdown_with_ci(manifest, rollup)
+    assert "Bootstrap skipped" in md
+    # Footnote table header carries Model A and Model B columns
+    # (not the B5 single-Model header).
+    lines = md.splitlines()
+    skipped_idx = next(i for i, line in enumerate(lines) if line == "### Bootstrap skipped")
+    # Table header is two lines below the section heading.
+    table_header = lines[skipped_idx + 2]
+    assert "Model A" in table_header
+    assert "Model B" in table_header
+    # The reason string surfaces verbatim.
+    assert "loader_failed: missing predictions" in md
+
+
+def test_render_pairwise_with_ci_marks_partial_fold_cell_with_asterisk() -> None:
+    """Stage-4 qa-C2 closure: when rollup_row.n_cells_evaluated <
+    n_seeds * n_folds, the CI cell ends with `*`. The format_ci_cell
+    asterisk had no coverage prior to this test."""
+    # Manifest has 2 folds (fold_index 0 + 1) for one pair.
+    rows = []
+    for s in (0,):
+        for f in (0, 1):
+            rows.append(
+                {
+                    "library_git_sha": "0" * 40,
+                    "run_id": "b14-partial",
+                    "started_at_utc": "2026-05-30T00:00:00+00:00",
+                    "dataset_name": "fake_binary",
+                    "model_a": "a",
+                    "model_b": "b",
+                    "seed": s,
+                    "fold_index": f,
+                    "task_type": "binary",
+                    "skipped_reason": None,
+                    "n_samples": 100,
+                    "n11": 40, "n10": 10, "n01": 15, "n00": 35,
+                    "yule_q": 0.7, "phi": 0.5,
+                    "disagreement_rate": 0.25,
+                    "double_fault_rate": 0.1,
+                    "pearson_pred_corr": 0.6,
+                    "spearman_pred_corr": 0.55,
+                    "pearson_error_corr": 0.30,
+                }
+            )
+    manifest = pd.DataFrame(rows)
+    # rollup_row.n_cells_evaluated=1 < n_seeds=1 * n_folds=2 = 2 -> partial=True
+    rollup = [_make_rollup_row(n_cells_evaluated=1, n_seeds=1)]
+    md = render_pairwise_markdown_with_ci(manifest, rollup)
+    assert "0.9500 [0.8800, 1.0200]*" in md
+
+
+def test_render_pairwise_with_ci_renders_no_ci_when_rollup_missing_for_pair() -> None:
+    """Stage-4 code-I2 closure: when the manifest has a pair but
+    the rollup has NO row covering it, the CI cell renders as the
+    `(no CI)` sentinel and the rest of the table is unaffected."""
+    manifest = _make_manifest()
+    # Rollup covers a DIFFERENT pair, leaving (a, b) uncovered.
+    rollup = [_make_rollup_row(model_a="other", model_b="pair")]
+    md = render_pairwise_markdown_with_ci(manifest, rollup)
+    assert "(no CI)" in md
+    # The dataset-block table still uses the CI header (the
+    # variant is active even though one row is missing).
+    assert "complementarity_score [95% CI]" in md
+
+
 # --- render_from_dir dispatch tests ----------------------------------------
 
 

@@ -281,9 +281,9 @@ def render_pairwise_markdown_with_ci(
 ) -> str:
     """Render the pairwise complementarity report with B14 CIs.
 
-    The CI variant joins the pairwise manifest with the rollup
-    table on `(dataset_name, model_a, model_b, task_type)` and
-    replaces the bare `complementarity_score` column with
+    Joins the pairwise manifest with the rollup table on
+    `(dataset_name, model_a, model_b, task_type)` and replaces
+    the bare `complementarity_score` column with
     `complementarity_score [95% CI]`.
 
     Footnote-source precedence (B14.4 mirror of B13):
@@ -295,13 +295,6 @@ def render_pairwise_markdown_with_ci(
        std variant + "rollup is stale" footnote.
     4. CI variant body renders; if `manifest_unreadable=True`,
        append "freshness check skipped" footnote.
-
-    Args:
-        manifest: the B6 pairwise manifest (from `load_pairwise`).
-        rollup: the B14 pairwise rollup rows.
-        expected_manifest_fingerprint: live RunManifest.fingerprint().
-        aggregator_error_class: when set, render std + failure footnote.
-        manifest_unreadable: when True, append manifest-unreadable footnote.
     """
     if aggregator_error_class is not None:
         std_body = render_pairwise_markdown(manifest)
