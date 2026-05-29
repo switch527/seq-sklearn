@@ -1,6 +1,6 @@
 """Phase B18 / D-B16.6 shared CLI-wrapper factory tests.
 
-15 collected items:
+17 collected items:
 - 9 gate tests covering every branch of the four-gate cascade
   in `run_bootstrap_rollup_via_factory`.
 - 1 wire-up parametrize over the 5 (wrapper, spec, expected
@@ -8,8 +8,10 @@
   `benchmarks/run.py` actually routes through the factory
   with the right `_BX_SPEC` constant and the correctly-named
   family aggregator (5 collected cells).
-- 1 log-content sanity test asserting the Gate-1 message
-  includes `spec.label`.
+- 3 log-content sanity tests asserting Gate-1 includes
+  `spec.label`, Gate-2 includes `spec.label` AND
+  `output_root`, and the Gate-4a happy-path info log
+  includes the row count + the rollup path.
 """
 
 import logging
