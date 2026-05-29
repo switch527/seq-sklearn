@@ -420,3 +420,160 @@ def test_training_time_summary_is_frozen_and_extra_forbid() -> None:
             peak_cuda_bytes_max=None,
             not_a_real_field=1.0,  # pyright: ignore[reportCallIssue]
         )
+
+
+# --- Phase B14: CI variant renderer tests ---------------------------------
+
+
+def _b14_manifest() -> pd.DataFrame:
+    rows = []
+    for s in (0, 1):
+        rows.append(
+            {
+                "dataset_name": "fake_binary",
+                "model_name": "fake_constant_binary",
+                "hardware_tier": "cpu",
+                "task_type": "binary",
+                "seed": s,
+                "fold_index": 0,
+                "log_loss": 0.22,
+                "wall_seconds": 1.0 + 0.1 * s,
+                "peak_rss_bytes": 1000.0,
+                "peak_cuda_bytes": None,
+                "skipped_reason": None,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _b14_rollup_row(
+    *,
+    primary_loss_mean: float | None = 1.05,
+    primary_loss_ci_lo: float | None = 0.98,
+    primary_loss_ci_hi: float | None = 1.12,
+    bootstrap_skipped_reason: str | None = None,
+    manifest_fingerprint: str = "cafef00d" * 8,
+    model_name: str = "fake_constant_binary",
+    n_cells_evaluated: int = 2,
+) -> object:
+    from benchmarks.bootstrap_manifest import TrainingTimeRollupRow
+
+    return TrainingTimeRollupRow(
+        dataset_name="fake_binary",
+        model_name=model_name,
+        hardware_tier="cpu",
+        task_type="binary",
+        primary_metric="wall_seconds",
+        n_seeds=2,
+        n_cells_evaluated=n_cells_evaluated,
+        n_skipped_cells=0,
+        primary_loss_mean=primary_loss_mean,
+        primary_loss_ci_lo=primary_loss_ci_lo,
+        primary_loss_ci_hi=primary_loss_ci_hi,
+        bootstrap_seed=42,
+        bootstrap_n_resamples=10_000,
+        bootstrap_confidence=0.95,
+        bootstrap_rng_algorithm="PCG64",
+        bootstrap_numpy_version="2.3.0",
+        bootstrap_skipped_reason=bootstrap_skipped_reason,
+        manifest_fingerprint=manifest_fingerprint,
+    )
+
+
+def test_b14_render_training_time_with_ci_renders_mean_and_interval() -> None:
+    """Happy path: rollup + matching fingerprint -> CI variant."""
+    from benchmarks.report.training_time import render_training_time_markdown_with_ci
+
+    md = render_training_time_markdown_with_ci(
+        _b14_manifest(),
+        [_b14_rollup_row()],
+        expected_manifest_fingerprint="cafef00d" * 8,
+    )
+    assert "wall_seconds [95% CI]" in md
+    assert "1.0500 [0.9800, 1.1200]" in md
+
+
+def test_b14_render_training_time_without_ci_falls_back_to_scalar() -> None:
+    """Empty rollup -> std variant silently."""
+    from benchmarks.report.training_time import render_training_time_markdown_with_ci
+
+    md = render_training_time_markdown_with_ci(_b14_manifest(), [])
+    assert "wall_seconds [95% CI]" not in md
+    assert "wall_seconds_mean" in md
+
+
+def test_b14_render_training_time_with_ci_drops_old_mean_and_std_headers_when_ci_present() -> None:
+    """Stage-1 qa-N2 closure: BOTH `wall_seconds_mean` AND
+    `wall_seconds_std` column-headers are ABSENT from the
+    dataset-block table header when CI active. The section
+    heading text 'ranked by wall_seconds_mean' is preserved
+    (it's the section-title prose, not a table header)."""
+    from benchmarks.report.training_time import render_training_time_markdown_with_ci
+
+    md = render_training_time_markdown_with_ci(_b14_manifest(), [_b14_rollup_row()])
+    assert "wall_seconds [95% CI]" in md
+    # The table-header row uses the CI column; the bare-mean
+    # column header must NOT appear in any TABLE header (lines
+    # starting with `| model |`).
+    lines = md.splitlines()
+    table_header_lines = [line for line in lines if line.startswith("| model |")]
+    assert table_header_lines
+    for line in table_header_lines:
+        assert "wall_seconds_mean" not in line
+        assert "wall_seconds_std" not in line
+        assert "wall_seconds [95% CI]" in line
+
+
+def test_b14_render_training_time_with_ci_falls_back_on_manifest_fingerprint_mismatch() -> None:
+    """Stale rollup -> std + footnote."""
+    from benchmarks.report.training_time import render_training_time_markdown_with_ci
+
+    md = render_training_time_markdown_with_ci(
+        _b14_manifest(),
+        [_b14_rollup_row(manifest_fingerprint="oldfingerprint")],
+        expected_manifest_fingerprint="newfingerprint",
+    )
+    assert "Bootstrap rollup is stale" in md
+    assert "wall_seconds [95% CI]" not in md
+
+
+def test_b14_render_training_time_with_ci_surfaces_aggregator_failed_footnote() -> None:
+    """aggregator_error_class -> std + footnote."""
+    from benchmarks.report.training_time import render_training_time_markdown_with_ci
+
+    md = render_training_time_markdown_with_ci(
+        _b14_manifest(), [], aggregator_error_class="RawRollupError"
+    )
+    assert "Bootstrap aggregator failed" in md
+    assert "RawRollupError" in md
+
+
+def test_b14_render_training_time_with_ci_manifest_unreadable_appends_freshness_footnote() -> None:
+    """manifest_unreadable=True -> CI body + freshness-skipped footnote."""
+    from benchmarks.report.training_time import render_training_time_markdown_with_ci
+
+    md = render_training_time_markdown_with_ci(
+        _b14_manifest(), [_b14_rollup_row()], manifest_unreadable=True
+    )
+    assert "wall_seconds [95% CI]" in md
+    assert "Bootstrap freshness check skipped" in md
+
+
+def test_b14_render_training_time_with_ci_rollup_skipped_emits_separate_footnote() -> None:
+    """Sentinel rollup row -> 'Bootstrap skipped' footnote."""
+    from benchmarks.report.training_time import render_training_time_markdown_with_ci
+
+    rollup = [
+        _b14_rollup_row(),
+        _b14_rollup_row(
+            model_name="bad_model",
+            primary_loss_mean=None,
+            primary_loss_ci_lo=None,
+            primary_loss_ci_hi=None,
+            bootstrap_skipped_reason="all_cells_skipped_in_manifest",
+            n_cells_evaluated=0,
+        ),
+    ]
+    md = render_training_time_markdown_with_ci(_b14_manifest(), rollup)
+    assert "Bootstrap skipped" in md
+    assert "all_cells_skipped_in_manifest" in md
