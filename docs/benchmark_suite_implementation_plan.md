@@ -978,6 +978,109 @@ result type round-trips through the renderer.
   dataset are a B11-followup; the per-cell loss vectors are
   already materialized for them.
 
+### Phase B12: Classical-TSC adapter family (B2-followup)
+
+**Goal**: round out the comparator roster with the classical
+time-series-classification family from aeon (ROCKET, MultiRocket,
+Catch22). Mirrors B10's GBM family pattern but with two unique
+constraints: aeon is NOT installed by default (sklearn pin
+conflict), and aeon's classifiers consume `raw-mts` (3D tensor)
+rather than `tabular-window`.
+
+**Modules** (12 wire-up touch points across 5 modules):
+
+- `benchmarks/adapters/_base.py`: `OptionalDependencyMissingError(Exception)`
+  (typed exception; subclasses Exception directly, NOT
+  ImportError, so existing `except ImportError` clauses cannot
+  swallow it).
+- `benchmarks/protocol/raw_mts.py` (NEW): `panel_to_tensor`,
+  `instance_labels`, `broadcast_per_instance_to_per_row`,
+  `RawMTSError`. The reshape returns `np.float32` (Gemini-I2:
+  halves host RAM at scale), drops categorical channels per
+  D-B12.6 (Gemini-C3: ordinal encoding violates ROCKET's
+  metric-space assumption), and emits NaN for below-floor rows
+  so the existing `_strip_below_floor_rows` machinery surfaces
+  the drop count uniformly across families.
+- `benchmarks/adapters/tsc.py` (NEW): `_TSCAdapter` base +
+  three concrete (`_RocketClassifierAdapter`,
+  `_MultiRocketClassifierAdapter`, `_Catch22ClassifierAdapter`).
+  `_check_aeon_available` lazy-imports aeon via
+  `importlib.util.find_spec`; raises the typed exception when
+  aeon is absent. fit/predict/predict_proba route through the
+  raw-mts reshape; the per-instance prediction is broadcast back
+  to per-row via the panel_row_to_instance mapping.
+- `benchmarks/hpo/tsc.py` (NEW): three per-classifier samplers
+  (ROCKET: 1 dim, MultiRocket: 2 dims, Catch22: 2 dims). No
+  per-family trial-count constants; budget comes from B8's
+  profile-tier envelope. `_TSC_SEARCH_SPACE_SIZE=2` with the
+  per-classifier breakdown documented in the B6.4.0 parity
+  disclosure footnote.
+- `benchmarks/experiments/raw_loss.py`: B5 wire-up touch points
+  (b)-(f). New `_SKIP_REASON_OPTIONAL_DEP_MISSING` constant,
+  catch clause appended BEFORE the generic adapter-error tuple,
+  counter init + classifier branch + summary field on
+  `RawLossExperimentResult`.
+- `benchmarks/experiments/hpo_uplift.py`: B8 wire-up touch
+  points (g)-(j). The trial-level fit catch keeps
+  `OptionalDependencyMissingError` OUT so it propagates to the
+  cell-level catch (which routes to the typed skip without
+  burning the budget on a missing-dep error that would never
+  resolve). Counter + summary field added to
+  `HPOUpliftExperimentResult`.
+- `benchmarks/run_manifest.py`: touch point (k). `"aeon"`
+  appended to `_PINNED_PACKAGES` so the fingerprint records the
+  installed version (None when absent, structurally covered by
+  the existing `_safe_pkg_version` PackageNotFoundError catch).
+- `tests/benchmarks/test_raw_mts.py` (NEW, 18 tests): shape,
+  boundary cases at L_resolved (exact/below/above), determinism,
+  Hypothesis happy-path + inverse short-entity property,
+  categorical-drop convention, all-categorical rejection,
+  broadcast NaN-fill, entity-homogeneity oracle.
+- `tests/benchmarks/test_tsc_adapter.py` (NEW, 7 tests):
+  aeon-missing path via `monkeypatch.setitem(sys.modules,
+  "aeon", None)` so pytest auto-restores under
+  `pytest-randomly`. End-to-end e2e through `run_raw_loss` with
+  the typed skip count matching n_tsc_cells_in_run.
+- `tests/benchmarks/test_tsc_adapter_smoke.py` (NEW, 4 tests
+  behind `pytest.importorskip("aeon")`): aeon-installed smoke
+  with `num_kernels=100` override to keep wall-clock under 5s,
+  ROCKET/MultiRocket/Catch22 fit+predict+proba, the
+  entity-homogeneity oracle.
+- `tests/benchmarks/test_hpo_tsc.py` (NEW, 7 tests):
+  per-classifier suggest_params shape, family lookup,
+  wrong-family rejection.
+- `tests/benchmarks/test_hpo_uplift_experiment.py` extension:
+  end-to-end B8 wire-up via a fake TSC adapter that raises the
+  typed error at fit time (reuses the `rocket_classifier`
+  registration name so the HPO sampler dispatches).
+
+**Dependencies**: B2 model registry, B3 protocol layer (lookback
++ split), B4 metrics, B5 raw-loss driver (for the skip wire-up),
+B8 HPO uplift driver (for the skip wire-up).
+
+**Deliverable tests**: 538 total benchmark tests after B12 (was
+505 before); 33 new tests pin the contract.
+
+**Done when**: a CI run with aeon ABSENT emits typed
+`optional_dep_missing: aeon` skip rows for every TSC cell with
+the run completing cleanly; with aeon INSTALLED, the three
+classifiers fit + predict + emit valid per-row probabilities
+broadcast from per-instance predictions.
+
+**B12-followup deferrals** (out of scope for v1):
+- D-B12.1: heavyweight TSC ensembles (HIVE-COTE 2.0,
+  MultiRocket-Hydra). Registry-extensible later.
+- D-B12.2: unequal-length panel support via aeon's per-estimator
+  wrappers.
+- D-B12.3: TSC regression (aeon `BaseRegressor`); v1 is
+  classification-only.
+- D-B12.4: GPU acceleration. aeon 0.11.x is CPU-only.
+- D-B12.5: promote `aeon` into a `benchmarks-tsc` extra. Hinges
+  on aeon loosening its sklearn pin.
+- D-B12.6: categorical channels. v1 drops them entirely from the
+  raw-mts reshape; a follow-up wires aeon's per-categorical
+  wrappers or a fixed one-hot path.
+
 ## Risk register
 
 | ID | Risk | Severity | Mitigation |

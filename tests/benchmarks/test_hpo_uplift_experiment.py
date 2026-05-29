@@ -11,6 +11,17 @@ speed.
 from pathlib import Path
 from typing import Any
 
+# Eager import of the adapter family so the `isolated_registry`
+# autouse fixture snapshots `_ADAPTER_FACTORIES` AFTER every
+# B10/B12 factory is registered. Without this, under
+# `pytest-randomly` reordering, if this file runs before any
+# test that triggers `benchmarks.adapters` as a side-effect,
+# the snapshot would not contain the TSC factories. The
+# B12 test below pops `rocket_classifier` and re-registers a
+# fake; teardown would then restore an empty snapshot,
+# permanently deleting the TSC adapters for the rest of the
+# session.
+import benchmarks.adapters  # noqa: F401  # pyright: ignore[reportUnusedImport]
 import optuna
 import pandas as pd
 import pytest
@@ -610,3 +621,105 @@ def test_render_hpo_uplift_markdown_absent_reference_model_emits_skip_note(
     # not in the matrix.
     assert "Friedman omnibus skipped" in md
     assert "absent_model_name" in md
+
+
+# --- B12 optional-dep skip wire-up ------------------------------------------
+
+
+def test_run_hpo_uplift_records_optional_dep_skip_when_aeon_missing(
+    fake_registry_and_hpo: list[PanelDataset], tmp_path: Path
+) -> None:
+    """B12 touch points (g)-(j): an HPO cell whose adapter raises
+    `OptionalDependencyMissingError` at trial-setup time skips
+    cleanly via the typed `optional_dep_missing` reason rather
+    than burning the budget on a missing-dep error that would
+    never resolve, and the summary counter is wired through.
+
+    Uses a fake TSC adapter that raises the typed error at fit
+    time + a fake TSC HPO space so the test doesn't depend on
+    aeon being installed."""
+    from dataclasses import dataclass, field
+    from typing import ClassVar, Self, cast
+
+    import numpy as np
+    from benchmarks.adapters._base import (
+        OptionalDependencyMissingError,
+        QuantilesUnsupportedError,
+        SeqSklearnAdapter,
+    )
+    from benchmarks.config import TaskType
+    from benchmarks.registry.models import register_adapter_factory
+
+    del fake_registry_and_hpo  # the fake registry is loaded; we add a TSC fake too
+
+    @dataclass
+    class _FakeTSCAdapter:
+        # Re-uses the `rocket_classifier` registration name so the
+        # B12 TSC HPO sampler dispatches to a real per-classifier
+        # sampler; the conftest's `isolated_registry` fixture
+        # restores the real adapter after the test.
+        name: ClassVar[str] = "rocket_classifier"
+        family: ClassVar[str] = "tsc"
+        task_types: ClassVar[tuple[TaskType, ...]] = ("binary",)
+        supports_proba: ClassVar[bool] = True
+
+        spec: DatasetSpec
+        hyperparameters: dict[str, Any] = field(default_factory=dict)
+
+        def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:
+            del panel, y
+            raise OptionalDependencyMissingError("aeon")
+
+        def predict(self, panel: pd.DataFrame) -> np.ndarray:
+            return np.zeros(len(panel))
+
+        def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:
+            return np.full((len(panel), 2), 0.5)
+
+        def predict_quantiles(self, panel: pd.DataFrame) -> np.ndarray:
+            del panel
+            raise QuantilesUnsupportedError(self.name)
+
+    def _factory(
+        *,
+        spec: DatasetSpec,
+        hyperparameters: dict[str, Any] | None = None,
+    ) -> SeqSklearnAdapter:
+        return cast(
+            SeqSklearnAdapter,
+            _FakeTSCAdapter(spec=spec, hyperparameters=hyperparameters or {}),
+        )
+
+    # The real `rocket_classifier` factory is already registered
+    # (B12 ships it); pop it so we can install the fake one.
+    # The conftest's `isolated_registry` autouse fixture restores
+    # `_ADAPTER_FACTORIES` on teardown.
+    from benchmarks.registry import models as _models_reg
+
+    _models_reg._ADAPTER_FACTORIES.pop("rocket_classifier", None)  # type: ignore[attr-defined]
+    register_adapter_factory("rocket_classifier", _factory)
+
+    config = _make_config(
+        datasets=("fake_binary",),
+        models=("rocket_classifier",),
+        seeds=(0,),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    # `run_raw_loss` runs first and also surfaces the typed skip
+    # (B5 touch points); the HPO uplift then iterates over the
+    # tuned arm and uses B8's wire-up to produce the same shape.
+    run_raw_loss(config, output_root=output_root, env=env)
+    result = run_hpo_uplift(config, output_root=output_root, env=env)
+    assert result.cells_skipped_optional_dep_missing > 0
+    assert result.cells_skipped_adapter_error == 0
+    # Manifest: every tuned row carries the typed skip reason.
+    manifest = load_run(output_root)
+    tuned_tsc = manifest.loc[
+        (manifest["variant"] == "tuned") & (manifest["model_name"] == "rocket_classifier")
+    ]
+    assert len(tuned_tsc) > 0
+    for _, row in tuned_tsc.iterrows():
+        assert str(row["skipped_reason"]).startswith("optional_dep_missing: aeon")

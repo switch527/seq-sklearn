@@ -185,7 +185,9 @@ def test_sample_seq_sklearn_includes_quantiles_on_regression_quantile_task() -> 
 
 def test_get_hpo_space_unknown_family_raises_typed() -> None:
     with pytest.raises(HPOFamilyNotRegisteredError, match="no HPO search space"):
-        get_hpo_space("tsc")  # not registered until B8-followup
+        # `sklearn_passthrough` is the design-named family with no HPO module;
+        # B8 ships seq_sklearn, B10 ships gbm, B12 ships tsc.
+        get_hpo_space("sklearn_passthrough")
 
 
 def test_hpo_registration_is_frozen_dataclass() -> None:
@@ -226,8 +228,11 @@ def test_register_hpo_space_conflict_raises() -> None:
         del trial, model_spec, dataset_spec
         return {}
 
-    space_a = _HPOSpace(family="tsc", search_space_size=3, description="a")
-    space_b = _HPOSpace(family="tsc", search_space_size=5, description="b")
+    # `sklearn_passthrough` is the v1 design family with no HPO module shipped,
+    # so this test can register fake spaces there without colliding with a real
+    # one (B8 ships seq_sklearn, B10 ships gbm, B12 ships tsc).
+    space_a = _HPOSpace(family="sklearn_passthrough", search_space_size=3, description="a")
+    space_b = _HPOSpace(family="sklearn_passthrough", search_space_size=5, description="b")
     register_hpo_space(space_a, _sampler1)  # type: ignore[arg-type]
     # Same record + same sampler is idempotent; no raise.
     register_hpo_space(space_a, _sampler1)  # type: ignore[arg-type]

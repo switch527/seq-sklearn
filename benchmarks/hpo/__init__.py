@@ -19,6 +19,7 @@ adapter families register (per `benchmarks/adapters/__init__.py`).
 from benchmarks.hpo import (
     gbm,  # noqa: F401  # pyright: ignore[reportUnusedImport]
     seq_sklearn,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    tsc,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
 from benchmarks.hpo._base import (
     HPO_REGISTRY,

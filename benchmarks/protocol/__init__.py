@@ -20,11 +20,21 @@ to a Phase B3-followup branch alongside the aeon-blocked TSC adapter.
 from benchmarks.protocol.featurize import lag_featurize
 from benchmarks.protocol.fingerprint import fingerprint_folds
 from benchmarks.protocol.lookback import resolve_lookback
+from benchmarks.protocol.raw_mts import (
+    RawMTSError,
+    broadcast_per_instance_to_per_row,
+    instance_labels,
+    panel_to_tensor,
+)
 from benchmarks.protocol.split import make_splitter
 
 __all__ = [
+    "RawMTSError",
+    "broadcast_per_instance_to_per_row",
     "fingerprint_folds",
+    "instance_labels",
     "lag_featurize",
     "make_splitter",
+    "panel_to_tensor",
     "resolve_lookback",
 ]

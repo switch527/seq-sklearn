@@ -42,6 +42,26 @@ class ProbaUnsupportedError(NotImplementedError):
     """
 
 
+class OptionalDependencyMissingError(Exception):
+    """Adapter requires an optional dependency that is not installed.
+
+    Subclasses ``Exception`` directly, NOT ``ImportError``, so the
+    existing ``except ImportError`` clauses at
+    ``raw_loss.py:_detect_hardware_tier`` and ``run_manifest.py``'s
+    torch probes cannot silently swallow the typed skip error if a
+    future code move puts an adapter import on their path.
+
+    The B5 raw-loss driver and the B8 hpo-uplift driver both catch
+    this in their narrow per-cell exception tuple and route to a
+    typed ``skipped_reason="optional_dep_missing: <package>"`` row
+    rather than crashing the run.
+    """
+
+    def __init__(self, package_name: str) -> None:
+        self.package_name = package_name
+        super().__init__(f"optional dependency '{package_name}' is not installed")
+
+
 class QuantilesUnsupportedError(NotImplementedError):
     """Adapter does not expose quantile predictions.
 
