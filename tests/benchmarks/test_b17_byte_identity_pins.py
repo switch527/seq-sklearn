@@ -321,6 +321,11 @@ def _make_ensemble_lift_rollup() -> list[EnsembleLiftRollupRow]:
             n_seeds=2,
             n_folds=1,
             n_cells_paired=1,
+            # B19 / D-B16.7 closure: set n_pair_grid > n_cells_paired so
+            # the partial=True flag fires and the byte-pin's mandatory
+            # trailing-asterisk regex (B17 R2 mutation-sensitivity
+            # tightening) keeps matching.
+            n_pair_grid=2,
             n_skipped_cells=1,
             primary_metric_mean=0.20,
             primary_metric_ci_lo=0.15,
