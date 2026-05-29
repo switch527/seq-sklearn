@@ -33,6 +33,8 @@ import benchmarks.adapters  # pyright: ignore[reportUnusedImport]
 import benchmarks.datasets  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from benchmarks.bootstrap_manifest import (
     aggregator_failed_sentinel_path,
+    hpo_uplift_aggregator_failed_sentinel_path,
+    hpo_uplift_rollup_path,
     pairwise_aggregator_failed_sentinel_path,
     pairwise_rollup_path,
     rollup_path,
@@ -51,6 +53,10 @@ from benchmarks.experiments import (
 )
 from benchmarks.manifest import atomic_write_bytes
 from benchmarks.registry import list_datasets, list_models
+from benchmarks.report.bootstrap_hpo_uplift import (
+    aggregate_bootstrap_hpo_uplift_rollup,
+    is_hpo_uplift_rollup_enabled,
+)
 from benchmarks.report.bootstrap_pairwise import (
     aggregate_bootstrap_pairwise_rollup,
     is_pairwise_rollup_enabled,
@@ -230,6 +236,7 @@ def _dispatch_kinds(
                 hpo_result.cells_already_complete,
                 hpo_result.run_id,
             )
+            _run_bootstrap_hpo_uplift_rollup(config, env=env, output_root=output_root)
             hpo_md = render_hpo_uplift_from_dir(output_root)
             hpo_path = output_root / "hpo_uplift.md"
             hpo_path.write_text(hpo_md, encoding="utf-8")
@@ -464,6 +471,74 @@ def _run_bootstrap_training_time_rollup(
         if path.exists():
             path.unlink(missing_ok=True)
         sentinel = training_time_aggregator_failed_sentinel_path(output_root)
+        sentinel.write_text(type(exc).__name__, encoding="utf-8")
+
+
+def _run_bootstrap_hpo_uplift_rollup(
+    config: BenchmarkConfig,
+    *,
+    env: RunEnvironment,
+    output_root: Path,
+) -> None:
+    """B15 D-B13.3 HPO-uplift CI rollup step. Runs after run_hpo_uplift.
+
+    Per B15.4 the wrapper has four gates:
+    - Gate A: opt-out (is_hpo_uplift_rollup_enabled).
+    - Gate B: run_manifest presence.
+    - Gate C: load_run_manifest with narrow except tuple.
+    - Gate D: aggregator returns [] when the manifest has no
+      variant=tuned rows. The wrapper treats this as a no-op
+      skip (no failure sentinel written).
+
+    Catches RawRollupError, deletes any partial
+    bootstrap_hpo_uplift_rollup.parquet, drops a B8-specific
+    sentinel file. INDEPENDENT from B5 + B6 + B7 sentinels.
+    """
+    if not is_hpo_uplift_rollup_enabled(config):
+        logger.info(
+            "bootstrap_hpo_uplift_rollup: skipped (no hpo_uplift ExperimentSpec "
+            "has `bootstrap_hpo_uplift_enabled=True`)"
+        )
+        return
+    if not run_manifest_path(output_root).exists():
+        logger.warning(
+            "bootstrap_hpo_uplift_rollup: skipped (run_manifest.json absent at %s)",
+            output_root,
+        )
+        return
+    try:
+        manifest = load_run_manifest(output_root)
+    except (FileNotFoundError, ValueError, ValidationError) as exc:
+        logger.warning(
+            "bootstrap_hpo_uplift_rollup: skipped (failed to load "
+            "run_manifest.json: %s: %s)",
+            type(exc).__name__,
+            exc,
+        )
+        return
+    try:
+        rows = aggregate_bootstrap_hpo_uplift_rollup(
+            config, output_root=output_root, env=env, manifest=manifest
+        )
+        stale = hpo_uplift_aggregator_failed_sentinel_path(output_root)
+        if stale.exists():
+            stale.unlink(missing_ok=True)
+        logger.info(
+            "bootstrap_hpo_uplift_rollup: %d rollup rows written to %s",
+            len(rows),
+            hpo_uplift_rollup_path(output_root),
+        )
+    except RawRollupError as exc:
+        logger.warning(
+            "bootstrap_hpo_uplift_rollup: aggregator failed (%s); deleting any "
+            "partial rollup shard. The HPO-uplift report will fall back to the "
+            "std variant.",
+            exc,
+        )
+        path = hpo_uplift_rollup_path(output_root)
+        if path.exists():
+            path.unlink(missing_ok=True)
+        sentinel = hpo_uplift_aggregator_failed_sentinel_path(output_root)
         sentinel.write_text(type(exc).__name__, encoding="utf-8")
 
 
