@@ -519,20 +519,25 @@ def test_render_from_dir_falls_back_silently_when_rollup_file_empty(
 def test_render_ensemble_lift_with_ci_renders_no_ci_when_rollup_row_has_skipped_reason_with_complete_delta_loss() -> (
     None
 ):
-    """Closes Stage 3 R1 code-I1 / qa-I1 dead-predicate gap: a
-    complete `PerDatasetLift` row (`delta_loss_mean` is not None)
-    paired with a rollup row that DOES carry a non-None
-    `bootstrap_skipped_reason` renders `(no CI)` in the CI cell
-    via the second predicate of the OR guard. Pins the branch
-    so a future edit that drops the predicate would surface
-    here."""
+    """Closes Stage 3 R1 code-I1 / qa-I1 dead-predicate gap +
+    Stage 3 R2 qa CRITICAL (mutation-insensitivity): a complete
+    `PerDatasetLift` row (`delta_loss_mean` is not None) paired
+    with a rollup row that DOES carry a non-None
+    `bootstrap_skipped_reason` AND VALID NUMERIC CI VALUES
+    renders `(no CI)` in the CI cell. If the second predicate
+    of the OR guard at `_render_complete_table_with_ci:148`
+    were removed, the code would fall through to
+    `format_ci_cell` with the row's real numeric values and
+    surface `0.4000 [0.3500, 0.4500]` instead of `(no CI)` —
+    the bare-equality `not in md` assertion on the numeric
+    string then kills the mutation."""
     result = _make_lift_result((_make_per_dataset_row(),))
     rollup = [
         _make_rollup_row(
-            primary_loss_mean=None,
-            primary_loss_ci_lo=None,
-            primary_loss_ci_hi=None,
-            n_cells_paired=0,
+            primary_loss_mean=0.40,
+            primary_loss_ci_lo=0.35,
+            primary_loss_ci_hi=0.45,
+            n_cells_paired=4,
             bootstrap_skipped_reason="all_cells_skipped_in_manifest",
         ),
     ]
@@ -541,5 +546,7 @@ def test_render_ensemble_lift_with_ci_renders_no_ci_when_rollup_row_has_skipped_
     # is "(no CI)" because the rollup row sentinel suppresses it.
     assert "ds_one" in md
     assert "(no CI)" in md
-    # The full numeric interval must NOT render.
-    assert "0.2000 [0.1500, 0.2500]" not in md
+    # The full numeric interval that the rollup row carries must
+    # NOT render in the table cell; this kills the mutation where
+    # the second predicate is removed.
+    assert "0.4000 [0.3500, 0.4500]" not in md
