@@ -468,7 +468,7 @@ def _b14_rollup_row(
         hardware_tier="cpu",
         task_type="binary",
         primary_metric="wall_seconds",
-        n_seeds=2,
+        n_seeds=n_seeds,
         n_cells_evaluated=n_cells_evaluated,
         n_skipped_cells=0,
         primary_loss_mean=primary_loss_mean,
