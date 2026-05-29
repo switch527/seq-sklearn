@@ -528,7 +528,7 @@ def test_render_ensemble_lift_with_ci_renders_no_ci_when_rollup_row_has_skipped_
     of the OR guard at `_render_complete_table_with_ci:148`
     were removed, the code would fall through to
     `format_ci_cell` with the row's real numeric values and
-    surface `0.4000 [0.3500, 0.4500]` instead of `(no CI)` —
+    surface `0.4000 [0.3500, 0.4500]` instead of `(no CI)`;
     the bare-equality `not in md` assertion on the numeric
     string then kills the mutation."""
     result = _make_lift_result((_make_per_dataset_row(),))
