@@ -21,13 +21,17 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
+    "EnsembleLiftRollupRow",
     "HPOUpliftRollupRow",
     "PairwiseRollupRow",
     "RollupRow",
     "TrainingTimeRollupRow",
     "aggregator_failed_sentinel_path",
+    "ensemble_lift_aggregator_failed_sentinel_path",
+    "ensemble_lift_rollup_path",
     "hpo_uplift_aggregator_failed_sentinel_path",
     "hpo_uplift_rollup_path",
+    "load_ensemble_lift_rollup",
     "load_hpo_uplift_rollup",
     "load_pairwise_rollup",
     "load_rollup",
@@ -37,6 +41,7 @@ __all__ = [
     "rollup_path",
     "training_time_aggregator_failed_sentinel_path",
     "training_time_rollup_path",
+    "write_ensemble_lift_rollup",
     "write_hpo_uplift_rollup",
     "write_pairwise_rollup",
     "write_rollup",
@@ -48,13 +53,11 @@ _AGGREGATOR_FAILED_SENTINEL_FILENAME = "bootstrap_aggregator_failed.txt"
 _PAIRWISE_ROLLUP_FILENAME = "bootstrap_pairwise_rollup.parquet"
 _PAIRWISE_AGGREGATOR_FAILED_SENTINEL_FILENAME = "bootstrap_pairwise_aggregator_failed.txt"
 _TRAINING_TIME_ROLLUP_FILENAME = "bootstrap_training_time_rollup.parquet"
-_TRAINING_TIME_AGGREGATOR_FAILED_SENTINEL_FILENAME = (
-    "bootstrap_training_time_aggregator_failed.txt"
-)
+_TRAINING_TIME_AGGREGATOR_FAILED_SENTINEL_FILENAME = "bootstrap_training_time_aggregator_failed.txt"
 _HPO_UPLIFT_ROLLUP_FILENAME = "bootstrap_hpo_uplift_rollup.parquet"
-_HPO_UPLIFT_AGGREGATOR_FAILED_SENTINEL_FILENAME = (
-    "bootstrap_hpo_uplift_aggregator_failed.txt"
-)
+_HPO_UPLIFT_AGGREGATOR_FAILED_SENTINEL_FILENAME = "bootstrap_hpo_uplift_aggregator_failed.txt"
+_ENSEMBLE_LIFT_ROLLUP_FILENAME = "bootstrap_ensemble_lift_rollup.parquet"
+_ENSEMBLE_LIFT_AGGREGATOR_FAILED_SENTINEL_FILENAME = "bootstrap_ensemble_lift_aggregator_failed.txt"
 
 
 class RollupRow(BaseModel):
@@ -328,9 +331,7 @@ def load_pairwise_rollup(root: Path) -> list[PairwiseRollupRow]:
     return rows
 
 
-def write_training_time_rollup(
-    root: Path, rows: Sequence[TrainingTimeRollupRow]
-) -> None:
+def write_training_time_rollup(root: Path, rows: Sequence[TrainingTimeRollupRow]) -> None:
     """Persist the training-time rollup rows as a single parquet shard.
 
     Atomic-rename semantics matching `write_rollup` (B14).
@@ -434,4 +435,106 @@ def load_hpo_uplift_rollup(root: Path) -> list[HPOUpliftRollupRow]:
             if value is pd.NA or (isinstance(value, float) and pd.isna(value)):
                 record[key] = None
         rows.append(HPOUpliftRollupRow.model_validate(record))
+    return rows
+
+
+class EnsembleLiftRollupRow(BaseModel):
+    """One per-dataset ensemble-lift Δ CI entry (B16 / D-B13.4).
+
+    Δ = `loss(GBM) - loss(GBM + seq)` on the primary loss
+    (positive Δ means the seq-augmented ensemble helped). The
+    bootstrap resamples paired (seed, fold) cells where BOTH
+    GBM and the GBM+seq ensemble produced predictions; each
+    resample's mean Δ is one statistic.
+
+    Sentinel rows (`primary_loss_*=None`,
+    `bootstrap_skipped_reason` populated) cover three cases
+    matching B11's actual driver flags:
+
+    - `no_gbm_predictions`: the baseline (GBM) family is
+      absent from the manifest cells consumed by the join
+      (mirrors `PerDatasetLift.no_gbm_predictions=True`).
+    - `no_seq_predictions`: the seq family is absent
+      (mirrors `PerDatasetLift.no_seq_predictions=True`).
+    - `all_cells_skipped_in_manifest`: the manifest rows for
+      this dataset exist but all map to skipped cells.
+
+    When both B11 flags trip on the same group, the
+    aggregator emits the lexically-first sentinel string
+    (`no_gbm_predictions` < `no_seq_predictions`) for
+    determinism. The seq-family and baseline-family
+    identifiers are NOT carried on every row; the renderer
+    reads them from `EnsembleLiftExperimentResult` directly.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    dataset_name: str
+    task_type: str
+    primary_metric: str  # always "delta_loss" at v1
+    primary_loss_column: str  # the underlying loss column for audit ("log_loss" | "rmse")
+    n_seeds: int = Field(ge=0)  # seeds in the OK B11 manifest for this dataset
+    n_folds: int = Field(ge=0)  # folds in the OK B11 manifest for this dataset
+    n_cells_paired: int = Field(ge=0)  # cells where BOTH GBM + GBM+seq ran
+    n_skipped_cells: int = Field(ge=0)  # paired cells dropped from the bootstrap (NaN loss)
+    primary_loss_mean: float | None = None
+    primary_loss_ci_lo: float | None = None
+    primary_loss_ci_hi: float | None = None
+    bootstrap_seed: int
+    bootstrap_n_resamples: int = Field(ge=0)
+    bootstrap_confidence: float = 0.95
+    bootstrap_rng_algorithm: str = "PCG64"
+    bootstrap_numpy_version: str
+    bootstrap_skipped_reason: str | None = None
+    manifest_fingerprint: str
+
+
+def ensemble_lift_rollup_path(root: Path) -> Path:
+    """`{root}/bootstrap_ensemble_lift_rollup.parquet` (B16)."""
+    return root / _ENSEMBLE_LIFT_ROLLUP_FILENAME
+
+
+def ensemble_lift_aggregator_failed_sentinel_path(root: Path) -> Path:
+    """`{root}/bootstrap_ensemble_lift_aggregator_failed.txt` (B16).
+
+    Cross-module FS contract (B16.0): the ensemble-lift CLI
+    wrapper writes this file on `RawRollupError`; the
+    ensemble-lift renderer reads it before rollup dispatch.
+    Independent from the B5 + B6 + B7 + B8 sentinels so a B11
+    failure must not mask any other report's success.
+    """
+    return root / _ENSEMBLE_LIFT_AGGREGATOR_FAILED_SENTINEL_FILENAME
+
+
+def write_ensemble_lift_rollup(root: Path, rows: Sequence[EnsembleLiftRollupRow]) -> None:
+    """Persist the ensemble-lift rollup rows as a single parquet shard.
+
+    Atomic-rename semantics matching `write_rollup` (B16).
+    """
+    _write_rows_atomic(
+        ensemble_lift_rollup_path(root),
+        rows,
+        column_names=list(EnsembleLiftRollupRow.model_fields.keys()),
+    )
+
+
+def load_ensemble_lift_rollup(root: Path) -> list[EnsembleLiftRollupRow]:
+    """Load the ensemble-lift rollup shard from
+    `{root}/bootstrap_ensemble_lift_rollup.parquet`.
+
+    Returns `[]` when the shard is absent.
+    """
+    dest = ensemble_lift_rollup_path(root)
+    if not dest.exists():
+        return []
+    df = pd.read_parquet(dest)
+    if df.empty:
+        return []
+    rows: list[EnsembleLiftRollupRow] = []
+    records: list[dict[str, Any]] = df.to_dict(orient="records")
+    for record in records:
+        for key, value in list(record.items()):
+            if value is pd.NA or (isinstance(value, float) and pd.isna(value)):
+                record[key] = None
+        rows.append(EnsembleLiftRollupRow.model_validate(record))
     return rows

@@ -227,8 +227,7 @@ def test_training_time_rollup_path_format(tmp_path: Path) -> None:
     """B14: `training_time_rollup_path(root)` returns
     `{root}/bootstrap_training_time_rollup.parquet`."""
     assert (
-        training_time_rollup_path(tmp_path)
-        == tmp_path / "bootstrap_training_time_rollup.parquet"
+        training_time_rollup_path(tmp_path) == tmp_path / "bootstrap_training_time_rollup.parquet"
     )
 
 
@@ -308,18 +307,14 @@ def test_pairwise_rollup_row_extra_forbid_rejects_unknown_field() -> None:
     """B14: `PairwiseRollupRow.model_config = extra="forbid"`;
     a future schema-drift extra field raises ValidationError."""
     with pytest.raises(Exception, match="extra"):
-        PairwiseRollupRow.model_validate(
-            {**_make_pairwise_row().model_dump(), "ghost": 1}
-        )
+        PairwiseRollupRow.model_validate({**_make_pairwise_row().model_dump(), "ghost": 1})
 
 
 def test_training_time_rollup_row_extra_forbid_rejects_unknown_field() -> None:
     """B14: `TrainingTimeRollupRow.model_config = extra="forbid"`;
     a future schema-drift extra field raises ValidationError."""
     with pytest.raises(Exception, match="extra"):
-        TrainingTimeRollupRow.model_validate(
-            {**_make_training_time_row().model_dump(), "ghost": 1}
-        )
+        TrainingTimeRollupRow.model_validate({**_make_training_time_row().model_dump(), "ghost": 1})
 
 
 def test_write_pairwise_rollup_empty_rows_writes_empty_shard(
@@ -426,10 +421,7 @@ def test_hpo_uplift_rollup_path_format(tmp_path: Path) -> None:
     `{root}/bootstrap_hpo_uplift_rollup.parquet`."""
     from benchmarks.bootstrap_manifest import hpo_uplift_rollup_path
 
-    assert (
-        hpo_uplift_rollup_path(tmp_path)
-        == tmp_path / "bootstrap_hpo_uplift_rollup.parquet"
-    )
+    assert hpo_uplift_rollup_path(tmp_path) == tmp_path / "bootstrap_hpo_uplift_rollup.parquet"
 
 
 def test_hpo_uplift_aggregator_failed_sentinel_path_format(tmp_path: Path) -> None:
@@ -489,9 +481,7 @@ def test_write_hpo_uplift_rollup_then_load_round_trips_all_fields(
 def test_hpo_uplift_rollup_row_extra_forbid_rejects_unknown_field() -> None:
     """B15: extra="forbid" -> unknown field raises ValidationError."""
     with pytest.raises(Exception, match="extra"):
-        _HPOUpliftRollupRow.model_validate(
-            {**_make_hpo_uplift_row().model_dump(), "ghost": 1}
-        )
+        _HPOUpliftRollupRow.model_validate({**_make_hpo_uplift_row().model_dump(), "ghost": 1})
 
 
 def test_write_hpo_uplift_rollup_empty_rows_writes_empty_shard(
@@ -530,3 +520,166 @@ def test_experiment_spec_bootstrap_hpo_uplift_enabled_opt_out() -> None:
 
     spec = ExperimentSpec(kind="hpo_uplift", bootstrap_hpo_uplift_enabled=False)
     assert spec.bootstrap_hpo_uplift_enabled is False
+
+
+# --- Phase B16: EnsembleLiftRollupRow + ExperimentSpec extension -----------
+
+from benchmarks.bootstrap_manifest import (  # noqa: E402
+    EnsembleLiftRollupRow as _EnsembleLiftRollupRow,
+)
+
+
+def _make_ensemble_lift_row(**overrides: object) -> _EnsembleLiftRollupRow:
+    defaults: dict[str, object] = {
+        "dataset_name": "fake_binary",
+        "task_type": "binary",
+        "primary_metric": "delta_loss",
+        "primary_loss_column": "log_loss",
+        "n_seeds": 3,
+        "n_folds": 2,
+        "n_cells_paired": 6,
+        "n_skipped_cells": 0,
+        "primary_loss_mean": 0.20,
+        "primary_loss_ci_lo": 0.15,
+        "primary_loss_ci_hi": 0.25,
+        "bootstrap_seed": 42,
+        "bootstrap_n_resamples": 10_000,
+        "bootstrap_confidence": 0.95,
+        "bootstrap_rng_algorithm": "PCG64",
+        "bootstrap_numpy_version": "2.3.0",
+        "bootstrap_skipped_reason": None,
+        "manifest_fingerprint": "feedbeef" * 8,
+    }
+    defaults.update(overrides)
+    return _EnsembleLiftRollupRow(**defaults)  # type: ignore[arg-type]
+
+
+def test_ensemble_lift_rollup_path_format(tmp_path: Path) -> None:
+    """B16: `ensemble_lift_rollup_path(root)` returns
+    `{root}/bootstrap_ensemble_lift_rollup.parquet`."""
+    from benchmarks.bootstrap_manifest import ensemble_lift_rollup_path
+
+    assert (
+        ensemble_lift_rollup_path(tmp_path) == tmp_path / "bootstrap_ensemble_lift_rollup.parquet"
+    )
+
+
+def test_ensemble_lift_aggregator_failed_sentinel_path_format(
+    tmp_path: Path,
+) -> None:
+    """B16: sentinel filename is
+    `bootstrap_ensemble_lift_aggregator_failed.txt`. Independent
+    from the B5/B6/B7/B8 sentinels."""
+    from benchmarks.bootstrap_manifest import (
+        ensemble_lift_aggregator_failed_sentinel_path,
+    )
+
+    assert (
+        ensemble_lift_aggregator_failed_sentinel_path(tmp_path)
+        == tmp_path / "bootstrap_ensemble_lift_aggregator_failed.txt"
+    )
+
+
+def test_write_ensemble_lift_rollup_then_load_round_trips_all_fields(
+    tmp_path: Path,
+) -> None:
+    """B16: write + load the EnsembleLiftRollupRow shard; every
+    field round-trips. Pins `primary_loss_column`, `n_seeds`,
+    `n_folds`, `n_cells_paired`, and each sentinel-reason branch."""
+    from benchmarks.bootstrap_manifest import (
+        load_ensemble_lift_rollup,
+        write_ensemble_lift_rollup,
+    )
+
+    rows = [
+        _make_ensemble_lift_row(),
+        _make_ensemble_lift_row(
+            task_type="regression_point",
+            primary_loss_column="rmse",
+            primary_loss_mean=-0.05,
+            primary_loss_ci_lo=-0.10,
+            primary_loss_ci_hi=0.00,
+        ),
+        _make_ensemble_lift_row(
+            dataset_name="bad_dataset_a",
+            n_cells_paired=0,
+            n_skipped_cells=0,
+            primary_loss_mean=None,
+            primary_loss_ci_lo=None,
+            primary_loss_ci_hi=None,
+            bootstrap_skipped_reason="no_gbm_predictions",
+        ),
+        _make_ensemble_lift_row(
+            dataset_name="bad_dataset_b",
+            n_cells_paired=0,
+            n_skipped_cells=0,
+            primary_loss_mean=None,
+            primary_loss_ci_lo=None,
+            primary_loss_ci_hi=None,
+            bootstrap_skipped_reason="no_seq_predictions",
+        ),
+        _make_ensemble_lift_row(
+            dataset_name="bad_dataset_c",
+            n_cells_paired=0,
+            n_skipped_cells=0,
+            primary_loss_mean=None,
+            primary_loss_ci_lo=None,
+            primary_loss_ci_hi=None,
+            bootstrap_skipped_reason="all_cells_skipped_in_manifest",
+        ),
+    ]
+    write_ensemble_lift_rollup(tmp_path, rows)
+    loaded = load_ensemble_lift_rollup(tmp_path)
+    assert len(loaded) == len(rows)
+    for orig, got in zip(rows, loaded, strict=True):
+        assert got.model_dump() == orig.model_dump()
+        assert got.primary_loss_column == orig.primary_loss_column
+        assert got.n_seeds == orig.n_seeds
+        assert got.n_folds == orig.n_folds
+        assert got.n_cells_paired == orig.n_cells_paired
+
+
+def test_ensemble_lift_rollup_row_extra_forbid_rejects_unknown_field() -> None:
+    """B16: extra="forbid" -> unknown field raises ValidationError."""
+    with pytest.raises(Exception, match="extra"):
+        _EnsembleLiftRollupRow.model_validate(
+            {**_make_ensemble_lift_row().model_dump(), "ghost": 1}
+        )
+
+
+def test_write_ensemble_lift_rollup_empty_rows_writes_empty_shard(
+    tmp_path: Path,
+) -> None:
+    """B16: empty rows -> empty shard; load returns []."""
+    from benchmarks.bootstrap_manifest import (
+        load_ensemble_lift_rollup,
+        write_ensemble_lift_rollup,
+    )
+
+    write_ensemble_lift_rollup(tmp_path, [])
+    assert load_ensemble_lift_rollup(tmp_path) == []
+
+
+def test_load_ensemble_lift_rollup_returns_empty_when_file_absent(
+    tmp_path: Path,
+) -> None:
+    """B16: absent file -> [] (dispatch convention)."""
+    from benchmarks.bootstrap_manifest import load_ensemble_lift_rollup
+
+    assert load_ensemble_lift_rollup(tmp_path) == []
+
+
+def test_experiment_spec_bootstrap_ensemble_lift_enabled_defaults_true() -> None:
+    """B16: default-True so CI rollup runs when configured."""
+    from benchmarks.config import ExperimentSpec
+
+    spec = ExperimentSpec(kind="ensemble_lift")
+    assert spec.bootstrap_ensemble_lift_enabled is True
+
+
+def test_experiment_spec_bootstrap_ensemble_lift_enabled_opt_out() -> None:
+    """B16: explicit opt-out."""
+    from benchmarks.config import ExperimentSpec
+
+    spec = ExperimentSpec(kind="ensemble_lift", bootstrap_ensemble_lift_enabled=False)
+    assert spec.bootstrap_ensemble_lift_enabled is False
