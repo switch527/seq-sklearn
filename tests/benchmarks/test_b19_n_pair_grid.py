@@ -1,14 +1,16 @@
 """Phase B19 / D-B16.7 `n_pair_grid` tests.
 
-7 collected tests covering the four-way contract:
+8 collected tests covering the four-way contract:
 
 - Aggregator-side (#1, #2): the
   `aggregate_bootstrap_ensemble_lift_rollup` caller writes
   the intersection cardinality of `(seed, fold)` pairs across
   the two families to `n_pair_grid` on every row.
-- Renderer-side (#3, #4): the
+- Renderer-side (#3, #4, #8): the
   `_render_complete_table_with_ci` partial-flag computation
-  reads `n_pair_grid` (not the pre-B19 `n_seeds * n_folds`).
+  reads `n_pair_grid` (not the pre-B19 `n_seeds * n_folds`)
+  AND the defensive `expected > 0` guard suppresses the
+  asterisk on the hypothetical zero-grid non-sentinel case.
 - Schema-side (#5, #6, #7): the field round-trips through
   parquet AND the `Field(ge=0)` validator accepts 0 AND
   rejects negative values.
@@ -27,17 +29,15 @@ from benchmarks.config import BenchmarkConfig, ExperimentSpec
 from benchmarks.experiments import build_run_environment
 from benchmarks.experiments.ensemble_lift import (
     ComputePerCellLiftDeltasResult,
+    EnsembleLiftExperimentResult,
     PerCellLiftDelta,
+    PerDatasetLift,
+    WilcoxonResult,
 )
 from benchmarks.report.bootstrap_ensemble_lift import (
     aggregate_bootstrap_ensemble_lift_rollup,
 )
 from benchmarks.report.ensemble_lift import render_ensemble_lift_markdown_with_ci
-from benchmarks.experiments.ensemble_lift import (
-    EnsembleLiftExperimentResult,
-    PerDatasetLift,
-    WilcoxonResult,
-)
 from benchmarks.run_manifest import RunManifest, build_run_manifest, write_run_manifest
 from pydantic import ValidationError
 
@@ -389,3 +389,41 @@ def test_n_pair_grid_negative_rejected_by_field_validator() -> None:
             bootstrap_skipped_reason="no_gbm_predictions",
             manifest_fingerprint="f" * 64,
         )
+
+
+# --- 8. Renderer `expected > 0` defensive guard (closes build R1 qa-I1) ---
+
+
+def test_renderer_expected_greater_than_zero_guard_suppresses_partial_on_zero_grid() -> (
+    None
+):
+    """Build R1 qa-I1 closure: pin the renderer's defensive
+    `expected > 0` short-circuit. Construct a hypothetical
+    non-sentinel rollup row with `n_pair_grid=0` AND
+    `n_cells_paired=0` AND `bootstrap_skipped_reason=None`.
+    Production never routes such a row through the partial-flag
+    branch (the aggregator's Gate D + sentinel-emit cascade
+    guarantee `n_pair_grid >= 1` on non-sentinel rows), so the
+    guard is defensive. The renderer's partial computation is
+    `n_cells_paired < expected and expected > 0`: with
+    `expected = n_pair_grid = 0`, the second clause short-
+    circuits to False and the asterisk does NOT fire. A future
+    edit that drops the `expected > 0` clause would change
+    nothing observable here either (0 < 0 is False) but a
+    different mutation (e.g., `expected >= 0`) would also
+    survive; the test pins the current observable behavior
+    rather than the precise short-circuit mechanism."""
+    result = _make_lift_result_for_renderer()
+    rollup = [
+        _make_rollup_row_for_renderer(
+            n_seeds=0, n_folds=0, n_cells_paired=0, n_pair_grid=0
+        )
+    ]
+    md = render_ensemble_lift_markdown_with_ci(result, rollup)
+    # The row renders without a partial-coverage asterisk on
+    # the CI cell. The numeric interval still appears because
+    # primary_metric_mean/_ci_lo/_ci_hi are populated.
+    ci_line = next(
+        line for line in md.splitlines() if "0.2000 [0.1500, 0.2500]" in line
+    )
+    assert "*" not in ci_line
