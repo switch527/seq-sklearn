@@ -10,7 +10,7 @@ from pathlib import Path
 
 import benchmarks.adapters  # type: ignore[reportUnusedImport]  # noqa: F401
 import pandas as pd
-from benchmarks.bootstrap_manifest import RollupRow
+from benchmarks.bootstrap_manifest import RollupRow, aggregator_failed_sentinel_path
 from benchmarks.config import BenchmarkConfig, ExperimentSpec
 from benchmarks.experiments import build_run_environment, run_raw_loss
 from benchmarks.manifest import load_run
@@ -285,7 +285,7 @@ def test_render_from_dir_surfaces_aggregator_failed_sentinel(
     output_root = tmp_path / "out"
     output_root.mkdir(parents=True, exist_ok=True)
     run_raw_loss(config, output_root=output_root, env=env)
-    (output_root / "bootstrap_aggregator_failed.txt").write_text("RawRollupError", encoding="utf-8")
+    aggregator_failed_sentinel_path(output_root).write_text("RawRollupError", encoding="utf-8")
     md = render_from_dir(output_root)
     assert "Bootstrap aggregator failed" in md
     assert "RawRollupError" in md
@@ -335,7 +335,7 @@ def test_render_from_dir_falls_back_silently_when_rollup_file_exists_but_is_empt
     aborted aggregator that left an empty parquet behind), the
     renderer falls back to the std variant. No CI column, no
     crash; the empty-parquet branch is exercised."""
-    from benchmarks.bootstrap_manifest import write_rollup
+    from benchmarks.bootstrap_manifest import rollup_path, write_rollup
     from benchmarks.config import BenchmarkConfig, ExperimentSpec
     from benchmarks.experiments import build_run_environment, run_raw_loss
     from benchmarks.report.raw_loss import render_from_dir
@@ -354,6 +354,11 @@ def test_render_from_dir_falls_back_silently_when_rollup_file_exists_but_is_empt
     run_raw_loss(config, output_root=output_root, env=env)
     # Write a rollup parquet that loads to zero rows.
     write_rollup(output_root, [])
+    # qa-N2 pre-condition: confirm the empty parquet actually
+    # landed on disk so the rollup-exists-but-empty branch in
+    # render_from_dir is the path being exercised (not the
+    # rollup-absent fallthrough).
+    assert rollup_path(output_root).exists()
 
     md = render_from_dir(output_root)
     # Std variant active; CI column absent.

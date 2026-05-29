@@ -15,7 +15,7 @@ from pathlib import Path
 
 import benchmarks.adapters  # type: ignore[reportUnusedImport]  # noqa: F401
 import pytest
-from benchmarks.bootstrap_manifest import rollup_path
+from benchmarks.bootstrap_manifest import aggregator_failed_sentinel_path, rollup_path
 from benchmarks.config import BenchmarkConfig, ExperimentSpec
 from benchmarks.experiments import build_run_environment, run_raw_loss
 from benchmarks.run import _run_bootstrap_rollup
@@ -183,7 +183,7 @@ def test_run_bootstrap_rollup_writes_failure_sentinel_on_raw_rollup_error(
 
     monkeypatch.setattr(_run_module, "aggregate_bootstrap_rollup", _boom)
     _run_bootstrap_rollup(config, env=env, output_root=output_root)
-    sentinel = output_root / "bootstrap_aggregator_failed.txt"
+    sentinel = aggregator_failed_sentinel_path(output_root)
     assert sentinel.exists()
     assert sentinel.read_text(encoding="utf-8").strip() == "RawRollupError"
 
@@ -199,7 +199,7 @@ def test_run_bootstrap_rollup_unlinks_stale_failure_sentinel_on_success(
     output_root = _run_b5_and_manifest(tmp_path, config)
     env = build_run_environment(profile="smoke")
     # Pre-create the stale sentinel.
-    sentinel = output_root / "bootstrap_aggregator_failed.txt"
+    sentinel = aggregator_failed_sentinel_path(output_root)
     sentinel.write_text("RawRollupError", encoding="utf-8")
     assert sentinel.exists()
     _run_bootstrap_rollup(config, env=env, output_root=output_root)

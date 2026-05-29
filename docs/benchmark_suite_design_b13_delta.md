@@ -428,6 +428,11 @@ shard per run, written atomically. Trivial surface:
 - `write_rollup(root: Path, rows: Sequence[RollupRow]) -> None`
 - `load_rollup(root: Path) -> pd.DataFrame`
 - `rollup_path(root: Path) -> Path` (`{root}/bootstrap_rollup.parquet`)
+- `aggregator_failed_sentinel_path(root: Path) -> Path`
+  (`{root}/bootstrap_aggregator_failed.txt`; the cross-module
+  FS contract declared in B13.0, hoisted into this module so
+  both the run.py writer and the raw_loss.py reader share a
+  single source of truth)
 
 The shard is per-run, not per-cell, so no atomic-shard-plus-
 sentinel resumability machinery is needed; a re-run overwrites
@@ -1096,6 +1101,30 @@ IMPROVEMENT, 4 NITPICK. Closures:
 - **qa-N1** (stale-sentinel test post-state-only assertion):
   the stale-sentinel test now asserts the rollup parquet is
   byte-non-empty via `.stat().st_size > 0`.
+
+### R2-conf-2 swarm closure (on commit 62564ca)
+
+R2-conf-2 dual-model swarm: code-reviewer (0C/1I/0N APPROVE),
+architecture-reviewer (0C/1I/0N APPROVE), qa-test-coverage
+(0C/0I/1N APPROVE), style-reviewer (0C/0I/0N APPROVE). Total:
+0 CRITICAL, 2 IMPROVEMENT, 1 NITPICK. Closures:
+
+- **code-I1** (test-side bare literals still used the old
+  sentinel filename string after the arch-I1 hoist):
+  `tests/benchmarks/test_run_bootstrap_rollup_wrapper.py` and
+  `tests/benchmarks/test_raw_loss_report.py` now import and
+  call `aggregator_failed_sentinel_path(output_root)` at the
+  three write/read sites. Single source of truth holds on
+  both sides of the production/test boundary.
+- **arch-I1** (B13.3 "Trivial surface" enumeration lagged
+  `__all__`): B13.3 now lists `aggregator_failed_sentinel_path`
+  alongside `rollup_path` / `write_rollup` / `load_rollup`
+  with a one-line cross-reference to B13.0.
+- **qa-N2** (test pre-condition missing): the empty-rollup
+  test now asserts `rollup_path(output_root).exists()` after
+  `write_rollup(output_root, [])` and before
+  `render_from_dir`, so the test cannot trivially pass via
+  the rollup-absent fallthrough path.
 
 ## Deferred
 
