@@ -181,11 +181,11 @@ def test_aggregate_bootstrap_pairwise_rollup_classification_cells_emit_ci(
         [(1.0 - 0.25) + 0.20, (1.0 - 0.30) + 0.20, (1.0 - 0.35) + 0.20,
          (1.0 - 0.25) + 0.21, (1.0 - 0.30) + 0.21, (1.0 - 0.35) + 0.21]
     )
-    assert row.primary_loss_mean is not None
-    assert row.primary_loss_ci_lo is not None
-    assert row.primary_loss_ci_hi is not None
-    assert abs(row.primary_loss_mean - float(expected_scores.mean())) < 1e-9
-    assert row.primary_loss_ci_lo < row.primary_loss_mean < row.primary_loss_ci_hi
+    assert row.primary_metric_mean is not None
+    assert row.primary_metric_ci_lo is not None
+    assert row.primary_metric_ci_hi is not None
+    assert abs(row.primary_metric_mean - float(expected_scores.mean())) < 1e-9
+    assert row.primary_metric_ci_lo < row.primary_metric_mean < row.primary_metric_ci_hi
 
 
 def test_aggregate_bootstrap_pairwise_rollup_ci_width_nonzero_with_multiple_cells(
@@ -216,9 +216,9 @@ def test_aggregate_bootstrap_pairwise_rollup_ci_width_nonzero_with_multiple_cell
     )
     assert len(rows_out) == 1
     row = rows_out[0]
-    assert row.primary_loss_ci_lo is not None
-    assert row.primary_loss_ci_hi is not None
-    width = row.primary_loss_ci_hi - row.primary_loss_ci_lo
+    assert row.primary_metric_ci_lo is not None
+    assert row.primary_metric_ci_hi is not None
+    width = row.primary_metric_ci_hi - row.primary_metric_ci_lo
     assert width > 0.0
     scores = np.array([(1.0 - p) + 0.15 for p in pearson_values])
     expected_naive_width = float(np.std(scores) * 2.0 * 1.96 / np.sqrt(len(scores)))
@@ -257,9 +257,9 @@ def test_aggregate_bootstrap_pairwise_rollup_regression_cells_emit_sentinel(
     row = rows_out[0]
     assert row.task_type == "regression_point"
     assert row.bootstrap_skipped_reason == "regression_complementarity_undefined"
-    assert row.primary_loss_mean is None
-    assert row.primary_loss_ci_lo is None
-    assert row.primary_loss_ci_hi is None
+    assert row.primary_metric_mean is None
+    assert row.primary_metric_ci_lo is None
+    assert row.primary_metric_ci_hi is None
     assert row.n_cells_evaluated == 0
 
 
@@ -290,9 +290,9 @@ def test_aggregate_bootstrap_pairwise_rollup_mixed_skip_runs_on_ok_subset(
     assert row.n_skipped_cells == 2
     # Single-entity degenerate: mean == ci_lo == ci_hi.
     expected_score = (1.0 - 0.20) + 0.30
-    assert row.primary_loss_mean == pytest.approx(expected_score, abs=1e-9)
-    assert row.primary_loss_ci_lo == pytest.approx(expected_score, abs=1e-9)
-    assert row.primary_loss_ci_hi == pytest.approx(expected_score, abs=1e-9)
+    assert row.primary_metric_mean == pytest.approx(expected_score, abs=1e-9)
+    assert row.primary_metric_ci_lo == pytest.approx(expected_score, abs=1e-9)
+    assert row.primary_metric_ci_hi == pytest.approx(expected_score, abs=1e-9)
 
 
 # --- Malformed cell ---------------------------------------------------------
@@ -395,7 +395,7 @@ def test_aggregate_bootstrap_pairwise_rollup_all_cells_skipped_emits_sentinel(
     assert row.bootstrap_skipped_reason == "all_cells_skipped_in_manifest"
     assert row.n_cells_evaluated == 0
     assert row.n_skipped_cells == 3
-    assert row.primary_loss_mean is None
+    assert row.primary_metric_mean is None
 
 
 # --- Per-spec n_resamples override (Stage-2 qa-I2) -------------------------

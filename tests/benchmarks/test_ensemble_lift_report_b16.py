@@ -82,9 +82,9 @@ def _make_rollup_row(
     n_folds: int = 2,
     n_cells_paired: int = 4,
     n_skipped_cells: int = 0,
-    primary_loss_mean: float | None = 0.20,
-    primary_loss_ci_lo: float | None = 0.15,
-    primary_loss_ci_hi: float | None = 0.25,
+    primary_metric_mean: float | None = 0.20,
+    primary_metric_ci_lo: float | None = 0.15,
+    primary_metric_ci_hi: float | None = 0.25,
     bootstrap_skipped_reason: str | None = None,
     manifest_fingerprint: str = "f" * 64,
 ) -> EnsembleLiftRollupRow:
@@ -97,9 +97,9 @@ def _make_rollup_row(
         n_folds=n_folds,
         n_cells_paired=n_cells_paired,
         n_skipped_cells=n_skipped_cells,
-        primary_loss_mean=primary_loss_mean,
-        primary_loss_ci_lo=primary_loss_ci_lo,
-        primary_loss_ci_hi=primary_loss_ci_hi,
+        primary_metric_mean=primary_metric_mean,
+        primary_metric_ci_lo=primary_metric_ci_lo,
+        primary_metric_ci_hi=primary_metric_ci_hi,
         bootstrap_seed=42,
         bootstrap_n_resamples=10_000,
         bootstrap_numpy_version="2.3.0",
@@ -277,9 +277,9 @@ def test_render_ensemble_lift_with_ci_no_gbm_predictions_routes_to_incomplete_bl
     rollup = [
         _make_rollup_row(
             dataset_name="no_gbm_ds",
-            primary_loss_mean=None,
-            primary_loss_ci_lo=None,
-            primary_loss_ci_hi=None,
+            primary_metric_mean=None,
+            primary_metric_ci_lo=None,
+            primary_metric_ci_hi=None,
             n_cells_paired=0,
             bootstrap_skipped_reason="no_gbm_predictions",
         )
@@ -310,9 +310,9 @@ def test_render_ensemble_lift_with_ci_no_seq_predictions_routes_to_incomplete_bl
     rollup = [
         _make_rollup_row(
             dataset_name="no_seq_ds",
-            primary_loss_mean=None,
-            primary_loss_ci_lo=None,
-            primary_loss_ci_hi=None,
+            primary_metric_mean=None,
+            primary_metric_ci_lo=None,
+            primary_metric_ci_hi=None,
             n_cells_paired=0,
             bootstrap_skipped_reason="no_seq_predictions",
         )
@@ -335,9 +335,9 @@ def test_render_ensemble_lift_with_ci_all_cells_skipped_routes_to_shared_render_
         _make_rollup_row(),  # valid CI row keeps the table populated
         _make_rollup_row(
             dataset_name="all_skipped_ds",
-            primary_loss_mean=None,
-            primary_loss_ci_lo=None,
-            primary_loss_ci_hi=None,
+            primary_metric_mean=None,
+            primary_metric_ci_lo=None,
+            primary_metric_ci_hi=None,
             n_cells_paired=0,
             bootstrap_skipped_reason="all_cells_skipped_in_manifest",
         ),
@@ -536,9 +536,9 @@ def test_render_ensemble_lift_with_ci_renders_no_ci_when_rollup_row_has_skipped_
     result = _make_lift_result((_make_per_dataset_row(),))
     rollup = [
         _make_rollup_row(
-            primary_loss_mean=0.40,
-            primary_loss_ci_lo=0.35,
-            primary_loss_ci_hi=0.45,
+            primary_metric_mean=0.40,
+            primary_metric_ci_lo=0.35,
+            primary_metric_ci_hi=0.45,
             n_cells_paired=4,
             bootstrap_skipped_reason="all_cells_skipped_in_manifest",
         ),

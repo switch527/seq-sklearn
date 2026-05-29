@@ -83,9 +83,9 @@ def _rollup_row(
     dataset_name: str = "fake_binary",
     model_name: str = "fake_constant_binary",
     task_type: str = "binary",
-    primary_loss_mean: float | None = 0.20,
-    primary_loss_ci_lo: float | None = 0.15,
-    primary_loss_ci_hi: float | None = 0.25,
+    primary_metric_mean: float | None = 0.20,
+    primary_metric_ci_lo: float | None = 0.15,
+    primary_metric_ci_hi: float | None = 0.25,
     bootstrap_skipped_reason: str | None = None,
     manifest_fingerprint: str = "feedbeef" * 8,
     n_seeds: int = 2,
@@ -103,9 +103,9 @@ def _rollup_row(
         n_folds=n_folds,
         n_cells_paired=n_cells_paired,
         n_skipped_cells=n_skipped_cells,
-        primary_loss_mean=primary_loss_mean,
-        primary_loss_ci_lo=primary_loss_ci_lo,
-        primary_loss_ci_hi=primary_loss_ci_hi,
+        primary_metric_mean=primary_metric_mean,
+        primary_metric_ci_lo=primary_metric_ci_lo,
+        primary_metric_ci_hi=primary_metric_ci_hi,
         bootstrap_seed=42,
         bootstrap_n_resamples=10_000,
         bootstrap_confidence=0.95,
@@ -264,9 +264,9 @@ def test_render_hpo_uplift_with_ci_surfaces_no_paired_cells_sentinel_in_rollup_s
     "Bootstrap skipped" footnote with the EXACT reason string."""
     manifest = _make_manifest_with_uplift_row()
     sentinel_row = _rollup_row(
-        primary_loss_mean=None,
-        primary_loss_ci_lo=None,
-        primary_loss_ci_hi=None,
+        primary_metric_mean=None,
+        primary_metric_ci_lo=None,
+        primary_metric_ci_hi=None,
         n_cells_paired=0,
         bootstrap_skipped_reason="no_paired_cells",
     )

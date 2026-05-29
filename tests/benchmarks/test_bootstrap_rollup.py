@@ -93,9 +93,9 @@ def test_aggregate_bootstrap_rollup_classification_emits_rollup_row(
     assert row.primary_metric == "log_loss"
     assert row.n_rows > 0
     assert row.n_entities > 0
-    assert row.primary_loss_mean is not None
-    assert row.primary_loss_ci_lo is not None
-    assert row.primary_loss_ci_hi is not None
+    assert row.primary_metric_mean is not None
+    assert row.primary_metric_ci_lo is not None
+    assert row.primary_metric_ci_hi is not None
     assert row.bootstrap_rng_algorithm == "PCG64"
     assert row.bootstrap_skipped_reason is None
 
@@ -125,8 +125,8 @@ def test_aggregate_bootstrap_rollup_regression_emits_rollup_row(
     row = rows[0]
     assert row.task_type == "regression_point"
     assert row.primary_metric == "rmse"
-    assert row.primary_loss_mean is not None
-    assert row.primary_loss_mean >= 0  # RMSE is non-negative
+    assert row.primary_metric_mean is not None
+    assert row.primary_metric_mean >= 0  # RMSE is non-negative
 
 
 # --- all-skipped sentinel --------------------------------------------------
@@ -156,9 +156,9 @@ def test_aggregate_bootstrap_rollup_all_cells_skipped_emits_sentinel(
     row = rows[0]
     assert row.n_cells_evaluated == 0
     assert row.n_skipped_cells > 0
-    assert row.primary_loss_mean is None
-    assert row.primary_loss_ci_lo is None
-    assert row.primary_loss_ci_hi is None
+    assert row.primary_metric_mean is None
+    assert row.primary_metric_ci_lo is None
+    assert row.primary_metric_ci_hi is None
     assert row.bootstrap_skipped_reason is not None
 
 

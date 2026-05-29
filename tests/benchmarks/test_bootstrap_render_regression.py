@@ -46,9 +46,9 @@ def _rollup_row(**overrides: object) -> RollupRow:
         "n_skipped_cells": 1,
         "n_rows": 40,
         "n_entities": 4,
-        "primary_loss_mean": 0.215,
-        "primary_loss_ci_lo": 0.200,
-        "primary_loss_ci_hi": 0.230,
+        "primary_metric_mean": 0.215,
+        "primary_metric_ci_lo": 0.200,
+        "primary_metric_ci_hi": 0.230,
         "bootstrap_seed": 42,
         "bootstrap_n_resamples": 10_000,
         "bootstrap_confidence": 0.95,
@@ -120,9 +120,9 @@ def test_render_rollup_skipped_footnote_renders_b5_header_text() -> None:
     catches any header-text drift introduced by the extraction."""
     row = _rollup_row(
         bootstrap_skipped_reason="loader_failed: FileNotFoundError: panel.parquet",
-        primary_loss_mean=None,
-        primary_loss_ci_lo=None,
-        primary_loss_ci_hi=None,
+        primary_metric_mean=None,
+        primary_metric_ci_lo=None,
+        primary_metric_ci_hi=None,
     )
     footnote = render_rollup_skipped_footnote(
         [row],
@@ -144,9 +144,9 @@ def test_render_rollup_skipped_footnote_truncates_long_reason() -> None:
     long_reason = "x" * 200
     row = _rollup_row(
         bootstrap_skipped_reason=long_reason,
-        primary_loss_mean=None,
-        primary_loss_ci_lo=None,
-        primary_loss_ci_hi=None,
+        primary_metric_mean=None,
+        primary_metric_ci_lo=None,
+        primary_metric_ci_hi=None,
     )
     footnote = render_rollup_skipped_footnote(
         [row],
@@ -248,9 +248,9 @@ def test_render_leaderboard_markdown_with_ci_byte_string_regression_with_rollup_
     rollup = [
         _rollup_row(
             model_name="m_skip",
-            primary_loss_mean=None,
-            primary_loss_ci_lo=None,
-            primary_loss_ci_hi=None,
+            primary_metric_mean=None,
+            primary_metric_ci_lo=None,
+            primary_metric_ci_hi=None,
             bootstrap_skipped_reason="loader_failed: missing panel",
         )
     ]

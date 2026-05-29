@@ -64,7 +64,7 @@ class RollupRow(BaseModel):
     """One per-(dataset, model, task_type) bootstrap CI entry.
 
     Skipped (dataset, model) groups emit a sentinel row with
-    `primary_loss_mean / ci_lo / ci_hi == None` and the
+    `primary_metric_mean / ci_lo / ci_hi == None` and the
     `bootstrap_skipped_reason` populated. Non-skipped rows carry
     finite CI values + a populated `manifest_fingerprint` so the
     renderer's freshness check (B13.4) can compare.
@@ -81,9 +81,9 @@ class RollupRow(BaseModel):
     n_skipped_cells: int = Field(ge=0)
     n_rows: int = Field(ge=0)  # total rows across included cells
     n_entities: int = Field(ge=0)  # unique entities across included cells
-    primary_loss_mean: float | None = None
-    primary_loss_ci_lo: float | None = None
-    primary_loss_ci_hi: float | None = None
+    primary_metric_mean: float | None = None
+    primary_metric_ci_lo: float | None = None
+    primary_metric_ci_hi: float | None = None
     bootstrap_seed: int
     bootstrap_n_resamples: int = Field(ge=0)
     bootstrap_confidence: float = 0.95
@@ -221,7 +221,7 @@ class PairwiseRollupRow(BaseModel):
     shared `format_ci_cell` helper works without a discriminator
     (B14.0). Here they carry the `complementarity_score` (B6's
     rank key). Skipped groups emit a sentinel row with
-    `primary_loss_mean / ci_lo / ci_hi == None` and the
+    `primary_metric_mean / ci_lo / ci_hi == None` and the
     `bootstrap_skipped_reason` populated.
     """
 
@@ -235,9 +235,9 @@ class PairwiseRollupRow(BaseModel):
     n_seeds: int = Field(ge=0)
     n_cells_evaluated: int = Field(ge=0)
     n_skipped_cells: int = Field(ge=0)
-    primary_loss_mean: float | None = None
-    primary_loss_ci_lo: float | None = None
-    primary_loss_ci_hi: float | None = None
+    primary_metric_mean: float | None = None
+    primary_metric_ci_lo: float | None = None
+    primary_metric_ci_hi: float | None = None
     bootstrap_seed: int
     bootstrap_n_resamples: int = Field(ge=0)
     bootstrap_confidence: float = 0.95
@@ -267,9 +267,9 @@ class TrainingTimeRollupRow(BaseModel):
     n_seeds: int = Field(ge=0)
     n_cells_evaluated: int = Field(ge=0)
     n_skipped_cells: int = Field(ge=0)
-    primary_loss_mean: float | None = None
-    primary_loss_ci_lo: float | None = None
-    primary_loss_ci_hi: float | None = None
+    primary_metric_mean: float | None = None
+    primary_metric_ci_lo: float | None = None
+    primary_metric_ci_hi: float | None = None
     bootstrap_seed: int
     bootstrap_n_resamples: int = Field(ge=0)
     bootstrap_confidence: float = 0.95
@@ -392,9 +392,9 @@ class HPOUpliftRollupRow(BaseModel):
     n_folds: int = Field(ge=0)  # folds in the OK B8 manifest for this group
     n_cells_paired: int = Field(ge=0)  # cells where BOTH default + tuned ran
     n_skipped_cells: int = Field(ge=0)  # paired cells dropped from the bootstrap (NaN loss)
-    primary_loss_mean: float | None = None
-    primary_loss_ci_lo: float | None = None
-    primary_loss_ci_hi: float | None = None
+    primary_metric_mean: float | None = None
+    primary_metric_ci_lo: float | None = None
+    primary_metric_ci_hi: float | None = None
     bootstrap_seed: int
     bootstrap_n_resamples: int = Field(ge=0)
     bootstrap_confidence: float = 0.95
@@ -477,9 +477,9 @@ class EnsembleLiftRollupRow(BaseModel):
     n_folds: int = Field(ge=0)  # folds in the OK B11 manifest for this dataset
     n_cells_paired: int = Field(ge=0)  # cells where BOTH GBM + GBM+seq ran
     n_skipped_cells: int = Field(ge=0)  # paired cells dropped from the bootstrap (NaN loss)
-    primary_loss_mean: float | None = None
-    primary_loss_ci_lo: float | None = None
-    primary_loss_ci_hi: float | None = None
+    primary_metric_mean: float | None = None
+    primary_metric_ci_lo: float | None = None
+    primary_metric_ci_hi: float | None = None
     bootstrap_seed: int
     bootstrap_n_resamples: int = Field(ge=0)
     bootstrap_confidence: float = 0.95
