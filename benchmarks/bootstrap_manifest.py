@@ -21,10 +21,14 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
+    "HPOUpliftRollupRow",
     "PairwiseRollupRow",
     "RollupRow",
     "TrainingTimeRollupRow",
     "aggregator_failed_sentinel_path",
+    "hpo_uplift_aggregator_failed_sentinel_path",
+    "hpo_uplift_rollup_path",
+    "load_hpo_uplift_rollup",
     "load_pairwise_rollup",
     "load_rollup",
     "load_training_time_rollup",
@@ -33,6 +37,7 @@ __all__ = [
     "rollup_path",
     "training_time_aggregator_failed_sentinel_path",
     "training_time_rollup_path",
+    "write_hpo_uplift_rollup",
     "write_pairwise_rollup",
     "write_rollup",
     "write_training_time_rollup",
@@ -45,6 +50,10 @@ _PAIRWISE_AGGREGATOR_FAILED_SENTINEL_FILENAME = "bootstrap_pairwise_aggregator_f
 _TRAINING_TIME_ROLLUP_FILENAME = "bootstrap_training_time_rollup.parquet"
 _TRAINING_TIME_AGGREGATOR_FAILED_SENTINEL_FILENAME = (
     "bootstrap_training_time_aggregator_failed.txt"
+)
+_HPO_UPLIFT_ROLLUP_FILENAME = "bootstrap_hpo_uplift_rollup.parquet"
+_HPO_UPLIFT_AGGREGATOR_FAILED_SENTINEL_FILENAME = (
+    "bootstrap_hpo_uplift_aggregator_failed.txt"
 )
 
 
@@ -132,6 +141,22 @@ def training_time_aggregator_failed_sentinel_path(root: Path) -> Path:
     from the B5 + B6 sentinels.
     """
     return root / _TRAINING_TIME_AGGREGATOR_FAILED_SENTINEL_FILENAME
+
+
+def hpo_uplift_rollup_path(root: Path) -> Path:
+    """`{root}/bootstrap_hpo_uplift_rollup.parquet` (B15)."""
+    return root / _HPO_UPLIFT_ROLLUP_FILENAME
+
+
+def hpo_uplift_aggregator_failed_sentinel_path(root: Path) -> Path:
+    """`{root}/bootstrap_hpo_uplift_aggregator_failed.txt` (B15).
+
+    Cross-module FS contract (B15.0): the HPO-uplift CLI
+    wrapper writes this file on `RawRollupError`; the HPO-
+    uplift renderer reads it before rollup dispatch.
+    Independent from the B5 + B6 + B7 sentinels.
+    """
+    return root / _HPO_UPLIFT_AGGREGATOR_FAILED_SENTINEL_FILENAME
 
 
 def write_rollup(root: Path, rows: Sequence[RollupRow]) -> None:
@@ -336,4 +361,77 @@ def load_training_time_rollup(root: Path) -> list[TrainingTimeRollupRow]:
             if value is pd.NA or (isinstance(value, float) and pd.isna(value)):
                 record[key] = None
         rows.append(TrainingTimeRollupRow.model_validate(record))
+    return rows
+
+
+class HPOUpliftRollupRow(BaseModel):
+    """One per-(dataset, model, task_type) HPO-uplift Δ CI entry (B15).
+
+    Δ = `default_mean - tuned_mean` on the primary loss
+    (positive Δ means tuning helped). The bootstrap resamples
+    paired (seed, fold) cells where BOTH default and tuned
+    arms ran; each resample's mean is one Δ statistic.
+
+    Sentinel rows (`primary_loss_*=None`,
+    `bootstrap_skipped_reason` populated) cover four cases:
+    `default_only`, `tuned_only`, `paired_but_no_valid_loss`
+    (inherited from the existing B8 UpliftRow flags) plus
+    `no_paired_cells` (new B15 case when the inner-join
+    yields zero matches).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    dataset_name: str
+    model_name: str
+    task_type: str
+    primary_metric: str  # always "delta" at v1
+    primary_loss_column: str  # the underlying loss column for audit (e.g. "log_loss")
+    n_seeds: int = Field(ge=0)  # seeds in the OK B8 manifest for this group
+    n_folds: int = Field(ge=0)  # folds in the OK B8 manifest for this group
+    n_cells_paired: int = Field(ge=0)  # cells where BOTH default + tuned ran
+    n_skipped_cells: int = Field(ge=0)  # paired cells dropped from the bootstrap (NaN loss)
+    primary_loss_mean: float | None = None
+    primary_loss_ci_lo: float | None = None
+    primary_loss_ci_hi: float | None = None
+    bootstrap_seed: int
+    bootstrap_n_resamples: int = Field(ge=0)
+    bootstrap_confidence: float = 0.95
+    bootstrap_rng_algorithm: str = "PCG64"
+    bootstrap_numpy_version: str
+    bootstrap_skipped_reason: str | None = None
+    manifest_fingerprint: str
+
+
+def write_hpo_uplift_rollup(root: Path, rows: Sequence[HPOUpliftRollupRow]) -> None:
+    """Persist the HPO-uplift rollup rows as a single parquet shard.
+
+    Atomic-rename semantics matching `write_rollup` (B15).
+    """
+    _write_rows_atomic(
+        hpo_uplift_rollup_path(root),
+        rows,
+        column_names=list(HPOUpliftRollupRow.model_fields.keys()),
+    )
+
+
+def load_hpo_uplift_rollup(root: Path) -> list[HPOUpliftRollupRow]:
+    """Load the HPO-uplift rollup shard from
+    `{root}/bootstrap_hpo_uplift_rollup.parquet`.
+
+    Returns `[]` when the shard is absent.
+    """
+    dest = hpo_uplift_rollup_path(root)
+    if not dest.exists():
+        return []
+    df = pd.read_parquet(dest)
+    if df.empty:
+        return []
+    rows: list[HPOUpliftRollupRow] = []
+    records: list[dict[str, Any]] = df.to_dict(orient="records")
+    for record in records:
+        for key, value in list(record.items()):
+            if value is pd.NA or (isinstance(value, float) and pd.isna(value)):
+                record[key] = None
+        rows.append(HPOUpliftRollupRow.model_validate(record))
     return rows

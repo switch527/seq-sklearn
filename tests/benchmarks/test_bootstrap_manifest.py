@@ -388,3 +388,145 @@ def test_experiment_spec_bootstrap_training_time_enabled_opt_out() -> None:
 
     spec = ExperimentSpec(kind="training_time", bootstrap_training_time_enabled=False)
     assert spec.bootstrap_training_time_enabled is False
+
+
+# --- Phase B15: HPOUpliftRollupRow + ExperimentSpec extension --------------
+
+from benchmarks.bootstrap_manifest import HPOUpliftRollupRow as _HPOUpliftRollupRow  # noqa: E402
+
+
+def _make_hpo_uplift_row(**overrides: object) -> _HPOUpliftRollupRow:
+    defaults: dict[str, object] = {
+        "dataset_name": "fake_binary",
+        "model_name": "fake_constant_binary",
+        "task_type": "binary",
+        "primary_metric": "delta",
+        "primary_loss_column": "log_loss",
+        "n_seeds": 3,
+        "n_folds": 2,
+        "n_cells_paired": 6,
+        "n_skipped_cells": 0,
+        "primary_loss_mean": 0.20,
+        "primary_loss_ci_lo": 0.15,
+        "primary_loss_ci_hi": 0.25,
+        "bootstrap_seed": 42,
+        "bootstrap_n_resamples": 10_000,
+        "bootstrap_confidence": 0.95,
+        "bootstrap_rng_algorithm": "PCG64",
+        "bootstrap_numpy_version": "2.3.0",
+        "bootstrap_skipped_reason": None,
+        "manifest_fingerprint": "feedbeef" * 8,
+    }
+    defaults.update(overrides)
+    return _HPOUpliftRollupRow(**defaults)  # type: ignore[arg-type]
+
+
+def test_hpo_uplift_rollup_path_format(tmp_path: Path) -> None:
+    """B15: `hpo_uplift_rollup_path(root)` returns
+    `{root}/bootstrap_hpo_uplift_rollup.parquet`."""
+    from benchmarks.bootstrap_manifest import hpo_uplift_rollup_path
+
+    assert (
+        hpo_uplift_rollup_path(tmp_path)
+        == tmp_path / "bootstrap_hpo_uplift_rollup.parquet"
+    )
+
+
+def test_hpo_uplift_aggregator_failed_sentinel_path_format(tmp_path: Path) -> None:
+    """B15: sentinel filename is
+    `bootstrap_hpo_uplift_aggregator_failed.txt`."""
+    from benchmarks.bootstrap_manifest import (
+        hpo_uplift_aggregator_failed_sentinel_path,
+    )
+
+    assert (
+        hpo_uplift_aggregator_failed_sentinel_path(tmp_path)
+        == tmp_path / "bootstrap_hpo_uplift_aggregator_failed.txt"
+    )
+
+
+def test_write_hpo_uplift_rollup_then_load_round_trips_all_fields(
+    tmp_path: Path,
+) -> None:
+    """B15: write + load the HPOUpliftRollupRow shard; every field
+    round-trips. Pins `primary_loss_column`, `n_seeds`, `n_folds`,
+    `n_cells_paired`, and the sentinel-reason branch."""
+    from benchmarks.bootstrap_manifest import (
+        load_hpo_uplift_rollup,
+        write_hpo_uplift_rollup,
+    )
+
+    rows = [
+        _make_hpo_uplift_row(),
+        _make_hpo_uplift_row(
+            task_type="regression_point",
+            primary_loss_column="rmse",
+            primary_loss_mean=-0.05,
+            primary_loss_ci_lo=-0.10,
+            primary_loss_ci_hi=0.00,
+        ),
+        _make_hpo_uplift_row(
+            model_name="bad_model",
+            n_cells_paired=0,
+            n_skipped_cells=0,
+            primary_loss_mean=None,
+            primary_loss_ci_lo=None,
+            primary_loss_ci_hi=None,
+            bootstrap_skipped_reason="no_paired_cells",
+        ),
+    ]
+    write_hpo_uplift_rollup(tmp_path, rows)
+    loaded = load_hpo_uplift_rollup(tmp_path)
+    assert len(loaded) == len(rows)
+    for orig, got in zip(rows, loaded, strict=True):
+        assert got.model_dump() == orig.model_dump()
+        assert got.primary_loss_column == orig.primary_loss_column
+        assert got.n_seeds == orig.n_seeds
+        assert got.n_folds == orig.n_folds
+        assert got.n_cells_paired == orig.n_cells_paired
+
+
+def test_hpo_uplift_rollup_row_extra_forbid_rejects_unknown_field() -> None:
+    """B15: extra="forbid" -> unknown field raises ValidationError."""
+    with pytest.raises(Exception, match="extra"):
+        _HPOUpliftRollupRow.model_validate(
+            {**_make_hpo_uplift_row().model_dump(), "ghost": 1}
+        )
+
+
+def test_write_hpo_uplift_rollup_empty_rows_writes_empty_shard(
+    tmp_path: Path,
+) -> None:
+    """B15: empty rows -> empty shard; load returns []."""
+    from benchmarks.bootstrap_manifest import (
+        load_hpo_uplift_rollup,
+        write_hpo_uplift_rollup,
+    )
+
+    write_hpo_uplift_rollup(tmp_path, [])
+    assert load_hpo_uplift_rollup(tmp_path) == []
+
+
+def test_load_hpo_uplift_rollup_returns_empty_when_file_absent(
+    tmp_path: Path,
+) -> None:
+    """B15: absent file -> [] (dispatch convention)."""
+    from benchmarks.bootstrap_manifest import load_hpo_uplift_rollup
+
+    assert load_hpo_uplift_rollup(tmp_path) == []
+
+
+def test_experiment_spec_bootstrap_hpo_uplift_enabled_defaults_true() -> None:
+    """B15: default-True so CI rollup runs when configured."""
+    from benchmarks.config import ExperimentSpec
+
+    spec = ExperimentSpec(kind="hpo_uplift")
+    assert spec.bootstrap_hpo_uplift_enabled is True
+
+
+def test_experiment_spec_bootstrap_hpo_uplift_enabled_opt_out() -> None:
+    """B15: explicit opt-out."""
+    from benchmarks.config import ExperimentSpec
+
+    spec = ExperimentSpec(kind="hpo_uplift", bootstrap_hpo_uplift_enabled=False)
+    assert spec.bootstrap_hpo_uplift_enabled is False
