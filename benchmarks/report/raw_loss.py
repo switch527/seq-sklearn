@@ -315,11 +315,222 @@ def render_leaderboard_markdown(manifest: pd.DataFrame) -> str:
     return "\n".join(parts)
 
 
+def render_leaderboard_markdown_with_ci(
+    manifest: pd.DataFrame,
+    rollup: list[Any],
+    *,
+    expected_manifest_fingerprint: str | None = None,
+    aggregator_error_class: str | None = None,
+) -> str:
+    """Render the leaderboard with B13 bootstrap CIs.
+
+    The CI variant joins the manifest with the rollup table on
+    `(dataset_name, model_name, task_type)` and replaces the
+    primary-loss `mean ± std` column with `mean [ci_lo, ci_hi]`.
+
+    Freshness check (Gemini-C3): when `expected_manifest_fingerprint`
+    is given AND any rollup row's `manifest_fingerprint` does not
+    match, the renderer falls back to the std variant and emits a
+    "rollup fingerprint mismatch" footnote.
+
+    Aggregator-error footnote (Gemini-C1/C2 wrapper): when the CLI
+    wrapper caught a `RawRollupError`, the rollup list is empty and
+    `aggregator_error_class` carries the exception type name. The
+    renderer falls back to the std variant + emits a "Bootstrap
+    aggregator failed: <class>" footnote.
+
+    Args:
+        manifest: the B5 manifest DataFrame (from `load_run`).
+        rollup: the B13 rollup rows (from `load_rollup`).
+        expected_manifest_fingerprint: the live run manifest's
+            fingerprint; the renderer asserts every rollup row
+            matches before joining.
+        aggregator_error_class: when set, the renderer falls back
+            to the std variant + emits the failure footnote.
+    """
+    if aggregator_error_class is not None:
+        std_body = render_leaderboard_markdown(manifest)
+        footnote = (
+            "\n### Bootstrap aggregator failed\n\n"
+            f"_The B13 bootstrap-rollup aggregator raised "
+            f"`{aggregator_error_class}`; the leaderboard above is "
+            "rendered in the legacy `mean ± std` shape. See the "
+            "run logs for the underlying cause._\n"
+        )
+        return std_body + footnote
+
+    if not rollup:
+        # No rollup ran (opt-out via ExperimentSpec, or smoke-tier
+        # config that disabled it). Fall back silently.
+        return render_leaderboard_markdown(manifest)
+
+    if expected_manifest_fingerprint is not None and any(
+        row.manifest_fingerprint != expected_manifest_fingerprint for row in rollup
+    ):
+        std_body = render_leaderboard_markdown(manifest)
+        footnote = (
+            "\n### Bootstrap rollup is stale\n\n"
+            "_The B13 bootstrap-rollup file's manifest_fingerprint "
+            "does not match the current manifest's; the CI variant "
+            "was suppressed for safety. Re-run with "
+            "`--experiment=raw_loss` to refresh the rollup._\n"
+        )
+        return std_body + footnote
+
+    return _render_with_ci(manifest, rollup)
+
+
+def _format_ci_cell(
+    mean: float | None,
+    ci_lo: float | None,
+    ci_hi: float | None,
+    *,
+    partial: bool,
+) -> str:
+    """`mean [ci_lo, ci_hi]` with 4 decimal places; appends `*` when
+    `partial=True` (rollup ran on fewer cells than `n_seeds *
+    n_folds`)."""
+    if mean is None or ci_lo is None or ci_hi is None:
+        return "(no CI)"
+    star = "*" if partial else ""
+    return f"{mean:.4f} [{ci_lo:.4f}, {ci_hi:.4f}]{star}"
+
+
+def _render_with_ci(manifest: pd.DataFrame, rollup: list[Any]) -> str:
+    # Index the rollup by (dataset, model, task_type) for the join.
+    rollup_index: dict[tuple[str, str, str], Any] = {}
+    for row in rollup:
+        key = (row.dataset_name, row.model_name, row.task_type)
+        rollup_index[key] = row
+
+    # n_folds per (dataset, model) = the number of distinct
+    # fold_index values in the manifest's OK rows for that group.
+    # Used for the partial-fold `*` flag (Gemini-I3).
+    ok = manifest.loc[manifest["skipped_reason"].isna()]
+    folds_per_group: dict[tuple[str, str], int] = {}
+    if not ok.empty:
+        for (ds, mdl), block in ok.groupby(["dataset_name", "model_name"]):
+            key = (str(ds), str(mdl))
+            folds_per_group[key] = int(block["fold_index"].nunique())
+
+    entries = rank_by_primary_loss(manifest)
+    by_dataset: dict[str, list[LeaderboardEntry]] = {}
+    for entry in entries:
+        by_dataset.setdefault(entry.dataset_name, []).append(entry)
+
+    parts = ["# Raw-loss leaderboard", ""]
+    rollup_skipped: list[Any] = []
+    for dataset_name in sorted(by_dataset):
+        block = _render_dataset_block_with_ci(
+            dataset_name,
+            by_dataset[dataset_name],
+            manifest,
+            rollup_index,
+            folds_per_group,
+        )
+        parts.append(block)
+
+    rollup_skipped = [row for row in rollup if row.bootstrap_skipped_reason is not None]
+    cell_footnote = _render_skipped_footnote(manifest)
+    if cell_footnote:
+        parts.append(cell_footnote)
+    if rollup_skipped:
+        parts.append(_render_rollup_skipped_footnote(rollup_skipped))
+    return "\n".join(parts)
+
+
+def _render_dataset_block_with_ci(
+    dataset_name: str,
+    entries: list[LeaderboardEntry],
+    manifest: pd.DataFrame,
+    rollup_index: dict[tuple[str, str, str], Any],
+    folds_per_group: dict[tuple[str, str], int],
+) -> str:
+    if not entries:
+        return ""
+    task_type = entries[0].task_type
+    primary_metric = entries[0].primary_metric
+    secondary_cols = _secondary_columns_for(task_type)
+    header_cells = [
+        "Rank",
+        "Model",
+        f"{primary_metric} [95% CI]",
+        "n_cells",
+        *secondary_cols,
+        *_RESOURCE_COLUMNS,
+    ]
+    sep_cells = ["---"] * len(header_cells)
+    lines = [
+        f"### {dataset_name} ({task_type}, ranked by {primary_metric})",
+        "",
+        "| " + " | ".join(header_cells) + " |",
+        "| " + " | ".join(sep_cells) + " |",
+    ]
+    for rank, entry in enumerate(entries, start=1):
+        key = (entry.dataset_name, entry.model_name, entry.task_type)
+        rollup_row = rollup_index.get(key)
+        if rollup_row is None or rollup_row.bootstrap_skipped_reason is not None:
+            ci_cell = "(no CI)"
+        else:
+            n_folds = folds_per_group.get((entry.dataset_name, entry.model_name), 0)
+            expected = entry.n_seeds * n_folds
+            partial = rollup_row.n_cells_evaluated < expected and expected > 0
+            ci_cell = _format_ci_cell(
+                rollup_row.primary_loss_mean,
+                rollup_row.primary_loss_ci_lo,
+                rollup_row.primary_loss_ci_hi,
+                partial=partial,
+            )
+        ok_block = manifest.loc[
+            (manifest["dataset_name"] == dataset_name)
+            & (manifest["model_name"] == entry.model_name)
+            & manifest["skipped_reason"].isna()
+        ]
+        row_cells = [str(rank), entry.model_name, ci_cell, str(entry.n_cells_evaluated)]
+        for col in secondary_cols:
+            if col not in ok_block.columns:
+                row_cells.append("")
+                continue
+            if col == "mape_skip_reason":
+                vals = ok_block[col].dropna()
+                row_cells.append(str(vals.iloc[0]) if not vals.empty else "")
+                continue
+            row_cells.append(_format_metric(ok_block[col].astype(float).mean()))
+        for col in _RESOURCE_COLUMNS:
+            if col not in ok_block.columns:
+                row_cells.append("")
+                continue
+            row_cells.append(_format_metric(ok_block[col].astype(float).mean()))
+        lines.append("| " + " | ".join(row_cells) + " |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_rollup_skipped_footnote(rollup_skipped: list[Any]) -> str:
+    lines = ["### Bootstrap skipped", ""]
+    lines.append("| Dataset | Model | Reason |")
+    lines.append("| --- | --- | --- |")
+    for row in rollup_skipped:
+        reason = str(row.bootstrap_skipped_reason or "")
+        if len(reason) > 120:
+            reason = reason[:117] + "..."
+        lines.append(f"| {row.dataset_name} | {row.model_name} | {reason} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_from_dir(output_root: Path) -> str:
     """Convenience: load the manifest under `output_root` and render.
 
     The CLI calls this after `run_raw_loss` finishes so the
     leaderboard markdown is written next to the manifest shards.
+    The CI variant kicks in when a rollup file is present.
     """
     manifest = load_run(output_root)
+    from benchmarks.bootstrap_manifest import load_rollup, rollup_path
+
+    if rollup_path(output_root).exists():
+        rollup = load_rollup(output_root)
+        if rollup:
+            return render_leaderboard_markdown_with_ci(manifest, rollup)
     return render_leaderboard_markdown(manifest)

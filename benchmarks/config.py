@@ -165,6 +165,13 @@ class ExperimentSpec(BaseModel):
     driver derives the budget from the profile tier (smoke=0 trials,
     standard=25 trials, full=100 trials per design B7.1+B7.4).
     Setting either field on a non-HPO kind is ignored.
+
+    `bootstrap_rollup_enabled` and `bootstrap_n_resamples` are B13
+    bootstrap-CI controls used only by `kind="raw_loss"`. When
+    enabled (default), the rollup step runs after the raw_loss
+    cells complete and writes `bootstrap_rollup.parquet`; the B5
+    leaderboard renderer then ships the CI variant. Setting either
+    field on a non-raw_loss kind is ignored.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -173,6 +180,8 @@ class ExperimentSpec(BaseModel):
     seeds: tuple[int, ...] = Field(default=(0, 1, 2), min_length=1)
     n_trials: int | None = Field(default=None, ge=0)
     timeout_seconds: float | None = Field(default=None, gt=0.0)
+    bootstrap_rollup_enabled: bool = True
+    bootstrap_n_resamples: int | None = Field(default=None, ge=1)
 
 
 _ALL_SENTINEL = "all"

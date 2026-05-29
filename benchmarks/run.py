@@ -31,6 +31,7 @@ from pydantic import ValidationError
 # test.
 import benchmarks.adapters  # pyright: ignore[reportUnusedImport]
 import benchmarks.datasets  # noqa: F401  # pyright: ignore[reportUnusedImport]
+from benchmarks.bootstrap_manifest import rollup_path
 from benchmarks.config import BenchmarkConfig
 from benchmarks.experiments import (
     RunEnvironment,
@@ -43,6 +44,11 @@ from benchmarks.experiments import (
 )
 from benchmarks.manifest import atomic_write_bytes
 from benchmarks.registry import list_datasets, list_models
+from benchmarks.report.bootstrap_rollup import (
+    RawRollupError,
+    aggregate_bootstrap_rollup,
+    is_rollup_enabled,
+)
 from benchmarks.report.ensemble import render_from_dir as render_pairwise_from_dir
 from benchmarks.report.ensemble_lift import render_ensemble_lift_markdown
 from benchmarks.report.hpo_uplift import render_from_dir as render_hpo_uplift_from_dir
@@ -151,6 +157,7 @@ def _dispatch_kinds(
                 result.cells_already_complete,
                 result.run_id,
             )
+            _run_bootstrap_rollup(config, env=env, output_root=output_root)
             leaderboard_md = render_leaderboard_from_dir(output_root)
             leaderboard_path = output_root / "leaderboard.md"
             leaderboard_path.write_text(leaderboard_md, encoding="utf-8")
@@ -232,6 +239,65 @@ def _dispatch_kinds(
             )
             return 2
     return 0
+
+
+def _run_bootstrap_rollup(
+    config: BenchmarkConfig,
+    *,
+    env: RunEnvironment,
+    output_root: Path,
+) -> None:
+    """B13 bootstrap-CI rollup step. Runs AFTER raw_loss completes.
+
+    Per B13.5 + the R5 CLI-wrapper design:
+    - Skips when `is_rollup_enabled(config)` is False (the
+      `ExperimentSpec(kind="raw_loss", bootstrap_rollup_enabled=False)`
+      opt-out path).
+    - Catches `RawRollupError` and deletes any half-written
+      `bootstrap_rollup.parquet` so the renderer doesn't pick up a
+      partial file; the run continues with exit code 0 and the
+      leaderboard falls back to the std variant with a "Bootstrap
+      aggregator failed" footnote.
+    """
+    if not is_rollup_enabled(config):
+        logger.info(
+            "bootstrap_rollup: skipped (no raw_loss ExperimentSpec has "
+            "`bootstrap_rollup_enabled=True`)"
+        )
+        return
+    if not run_manifest_path(output_root).exists():
+        logger.warning(
+            "bootstrap_rollup: skipped (run_manifest.json absent at %s)",
+            output_root,
+        )
+        return
+    try:
+        manifest = load_run_manifest(output_root)
+    except Exception as exc:
+        logger.warning(
+            "bootstrap_rollup: skipped (failed to load run_manifest.json: %s: %s)",
+            type(exc).__name__,
+            exc,
+        )
+        return
+    try:
+        rows = aggregate_bootstrap_rollup(
+            config, output_root=output_root, env=env, manifest=manifest
+        )
+        logger.info(
+            "bootstrap_rollup: %d rollup rows written to %s",
+            len(rows),
+            rollup_path(output_root),
+        )
+    except RawRollupError as exc:
+        logger.warning(
+            "bootstrap_rollup: aggregator failed (%s); deleting any partial "
+            "rollup shard. The leaderboard will fall back to the std variant.",
+            exc,
+        )
+        path = rollup_path(output_root)
+        if path.exists():
+            path.unlink(missing_ok=True)
 
 
 def _load_config(path: Path) -> BenchmarkConfig:

@@ -19,6 +19,7 @@ ResultRow records what came out of a cell; a RunManifest records
 what went in to the whole run.
 """
 
+import hashlib
 import json
 import logging
 import platform
@@ -140,6 +141,32 @@ class RunManifest(BaseModel):
     # Output layout.
     output_root: str  # absolute or relative path; round-trips as str
     results_relpath: str = "results"  # always under `results/`
+
+    def fingerprint(self) -> str:
+        """SHA-256 hex digest of the reproducibility-relevant fields.
+
+        Computed from a canonical JSON serialization of every field
+        EXCEPT `completed_at_utc` (which is rewritten at run-end and
+        would otherwise make the fingerprint volatile across the
+        same run). The B13 bootstrap rollup records this value on
+        every `RollupRow.manifest_fingerprint` so the leaderboard
+        renderer can detect a stale rollup file from a prior run
+        (different `library_git_sha`, different `dataset_sha256`,
+        different environment, etc.).
+
+        The canonical JSON uses `sort_keys=True` and
+        `separators=(",", ":")` so the digest is byte-stable across
+        Python versions and insertion-order quirks. The
+        `RunManifest` schema bumps (e.g., a future pydantic field
+        addition) also bump the digest by design; the CHANGELOG
+        records every such bump.
+        """
+        # Use pydantic's `model_dump(mode="json")` to produce
+        # JSON-safe primitive types, then drop the volatile field.
+        dump = self.model_dump(mode="json")
+        dump.pop("completed_at_utc", None)
+        canonical = json.dumps(dump, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _safe_pkg_version(name: str) -> str | None:
