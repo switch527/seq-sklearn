@@ -95,7 +95,7 @@ def _stub_load_run(monkeypatch: pytest.MonkeyPatch, rows: list[dict[str, object]
     import benchmarks.report.bootstrap_hpo_uplift as _module
 
     df = pd.DataFrame(rows)
-    monkeypatch.setattr(_module, "load_run", lambda _root: df)
+    monkeypatch.setattr(_module, "load_run", lambda _root: df)  # type: ignore[misc]
 
 
 def _happy_rows() -> list[dict[str, object]]:

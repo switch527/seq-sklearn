@@ -105,7 +105,7 @@ def _stub_load_run(monkeypatch: pytest.MonkeyPatch, rows: list[dict[str, object]
     import benchmarks.report.bootstrap_hpo_uplift as _module
 
     df = pd.DataFrame(rows)
-    monkeypatch.setattr(_module, "load_run", lambda _root: df)
+    monkeypatch.setattr(_module, "load_run", lambda _root: df)  # type: ignore[misc]
 
 
 # --- 1. Paired cells emit CI ------------------------------------------------
@@ -134,6 +134,7 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_paired_cells_emit_ci(
     row = rollup[0]
     assert row.primary_loss_mean == pytest.approx(0.20, abs=1e-9)
     assert row.n_cells_paired == 4
+    assert row.primary_loss_mean is not None
     assert row.primary_loss_ci_lo is not None
     assert row.primary_loss_ci_hi is not None
     assert row.primary_loss_ci_lo <= row.primary_loss_mean <= row.primary_loss_ci_hi
@@ -408,6 +409,80 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_records_primary_loss_column(
     assert rollup[0].primary_loss_column == "log_loss"
     loaded = load_hpo_uplift_rollup(output_root)
     assert loaded[0].primary_loss_column == "log_loss"
+
+
+def test_aggregate_bootstrap_hpo_uplift_rollup_records_primary_loss_column_for_regression_point(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Final-round code-I3 closure: `primary_loss_column == "rmse"`
+    on regression_point cells. The aggregator's per-task-type
+    dispatch was untested for the regression branch."""
+    config, output_root, manifest = _setup(tmp_path)
+    # The aggregator reads `<primary_loss_column>_default` /
+    # `<primary_loss_column>_tuned` from the merged frame, so the
+    # row needs an `rmse` column (not `log_loss`) for the
+    # regression_point task.
+    def _rmse_row(**overrides: object) -> dict[str, object]:
+        base = _manifest_row(task_type="regression_point", log_loss=None)
+        base["rmse"] = overrides.pop("rmse", 0.30)
+        base.update(overrides)
+        return base
+
+    rows = [
+        _rmse_row(seed=0, fold_index=0, variant="default", rmse=0.50),
+        _rmse_row(seed=0, fold_index=0, variant="tuned", rmse=0.30),
+    ]
+    _stub_load_run(monkeypatch, rows)
+
+    env = build_run_environment(profile="smoke")
+    rollup = aggregate_bootstrap_hpo_uplift_rollup(
+        config, output_root=output_root, env=env, manifest=manifest
+    )
+    assert rollup[0].primary_loss_column == "rmse"
+    assert rollup[0].task_type == "regression_point"
+
+
+def test_aggregate_bootstrap_hpo_uplift_rollup_all_cells_skipped_emits_sentinel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Final-round qa-I1 closure: a group where EVERY row has a
+    non-None skipped_reason (so both default_block and tuned_block
+    are empty after the OK filter) emits a sentinel with
+    `bootstrap_skipped_reason == "all_cells_skipped_in_manifest"`.
+    Distinct from the empty-manifest case (returns []) and the
+    Gate D case (also returns [])."""
+    config, output_root, manifest = _setup(tmp_path)
+    # The aggregator's Gate D requires AT LEAST one variant=tuned
+    # row in the WHOLE manifest. Put a clean tuned row on a
+    # DIFFERENT (model) group so this group can have all-skipped
+    # rows without short-circuiting Gate D.
+    rows = [
+        # Group under test: every row skipped.
+        _manifest_row(seed=0, fold_index=0, model_name="m_all_skipped",
+                      variant="default", log_loss=None,
+                      skipped_reason="adapter_error"),
+        _manifest_row(seed=0, fold_index=0, model_name="m_all_skipped",
+                      variant="tuned", log_loss=None,
+                      skipped_reason="adapter_error"),
+        # Different group with a valid tuned row to bypass Gate D.
+        _manifest_row(seed=0, fold_index=0, model_name="m_other",
+                      variant="default", log_loss=0.50),
+        _manifest_row(seed=0, fold_index=0, model_name="m_other",
+                      variant="tuned", log_loss=0.30),
+    ]
+    _stub_load_run(monkeypatch, rows)
+
+    env = build_run_environment(profile="smoke")
+    rollup = aggregate_bootstrap_hpo_uplift_rollup(
+        config, output_root=output_root, env=env, manifest=manifest
+    )
+    by_model = {r.model_name: r for r in rollup}
+    assert (
+        by_model["m_all_skipped"].bootstrap_skipped_reason
+        == "all_cells_skipped_in_manifest"
+    )
 
 
 # --- 13. Malformed paired cell raises (group not flagged) ------------------

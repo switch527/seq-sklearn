@@ -317,7 +317,7 @@ def _setup_b8(
     import benchmarks.report.hpo_uplift as _module
 
     fake_manifest = _make_manifest_with_uplift_row()
-    monkeypatch.setattr(_module, "load_run", lambda _root: fake_manifest)
+    monkeypatch.setattr(_module, "load_run", lambda _root: fake_manifest)  # type: ignore[misc]
     return output_root
 
 

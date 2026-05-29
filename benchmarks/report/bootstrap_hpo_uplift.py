@@ -337,9 +337,8 @@ def aggregate_bootstrap_hpo_uplift_rollup(
     if "variant" not in df.columns or not (df["variant"] == _TUNED_VARIANT).any():
         return []
 
-    profile = env.profile if hasattr(env, "profile") else "standard"
     n_resamples = resolve_n_resamples(
-        config.experiments, str(profile), kind="hpo_uplift"
+        config.experiments, env.profile, kind="hpo_uplift"
     )
     manifest_fingerprint = manifest.fingerprint()
 
