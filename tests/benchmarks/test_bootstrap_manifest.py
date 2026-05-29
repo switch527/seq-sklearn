@@ -538,6 +538,11 @@ def _make_ensemble_lift_row(**overrides: object) -> _EnsembleLiftRollupRow:
         "n_seeds": 3,
         "n_folds": 2,
         "n_cells_paired": 6,
+        # B19 / D-B16.7: factory default mirrors `n_cells_paired` so the
+        # symmetric-roster happy-path default matches pre-B19 behavior
+        # (renderer's partial-flag computation evaluates to False when
+        # n_cells_paired == n_pair_grid).
+        "n_pair_grid": 6,
         "n_skipped_cells": 0,
         "primary_metric_mean": 0.20,
         "primary_metric_ci_lo": 0.15,

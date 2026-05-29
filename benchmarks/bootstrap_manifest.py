@@ -476,6 +476,18 @@ class EnsembleLiftRollupRow(BaseModel):
     n_seeds: int = Field(ge=0)  # seeds in the OK B11 manifest for this dataset
     n_folds: int = Field(ge=0)  # folds in the OK B11 manifest for this dataset
     n_cells_paired: int = Field(ge=0)  # cells where BOTH GBM + GBM+seq ran
+    # B19 / D-B16.7: intersection cardinality of (seed, fold) pairs across
+    # the two families. The renderer uses this as the partial-coverage
+    # expected count instead of `n_seeds * n_folds` (which is the UNION
+    # across the two families and over-fires the asterisk on asymmetric
+    # rosters). Sentinel-row semantics: `no_gbm_predictions` and
+    # `no_seq_predictions` rows carry n_pair_grid=0 because at least one
+    # family's per-dataset slice is empty (the intersection is therefore
+    # empty); `all_cells_skipped_in_manifest` rows carry the actual
+    # intersection count from the caller's gbm_pairs & seq_pairs
+    # computation, which may be non-zero (both family rosters had cells
+    # but compute_per_cell_lift_deltas dropped all of them).
+    n_pair_grid: int = Field(ge=0)
     n_skipped_cells: int = Field(ge=0)  # paired cells dropped from the bootstrap (NaN loss)
     primary_metric_mean: float | None = None
     primary_metric_ci_lo: float | None = None

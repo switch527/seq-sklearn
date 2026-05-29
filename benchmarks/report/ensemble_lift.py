@@ -148,7 +148,15 @@ def _render_complete_table_with_ci(
         if rollup_row is None or rollup_row.bootstrap_skipped_reason is not None:
             ci_cell = "(no CI)"
         else:
-            expected = rollup_row.n_seeds * rollup_row.n_folds
+            # B19 / D-B16.7: use the intersection cardinality
+            # (`n_pair_grid`) as the expected paired-cell count.
+            # The pre-B19 `n_seeds * n_folds` was the UNION view
+            # across the two families and over-fired the
+            # asterisk on asymmetric rosters. The `expected > 0`
+            # guard is defensive: non-sentinel rows always have
+            # `n_pair_grid >= 1` by construction (Gate D +
+            # sentinel-emit short-circuit the zero-grid cases).
+            expected = rollup_row.n_pair_grid
             partial = rollup_row.n_cells_paired < expected and expected > 0
             ci_cell = format_ci_cell(
                 rollup_row.primary_metric_mean,

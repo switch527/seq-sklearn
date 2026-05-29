@@ -133,6 +133,7 @@ def _emit_sentinel_row(
     bootstrap_skipped_reason: str,
     n_resamples: int,
     manifest_fingerprint: str,
+    n_pair_grid: int,
 ) -> EnsembleLiftRollupRow:
     return EnsembleLiftRollupRow(
         dataset_name=dataset_name,
@@ -142,6 +143,7 @@ def _emit_sentinel_row(
         n_seeds=n_seeds,
         n_folds=n_folds,
         n_cells_paired=n_cells_paired,
+        n_pair_grid=n_pair_grid,
         n_skipped_cells=n_skipped_cells,
         primary_metric_mean=None,
         primary_metric_ci_lo=None,
@@ -166,6 +168,7 @@ def _build_dataset_rollup(
     output_root: Path,
     n_resamples: int,
     manifest_fingerprint: str,
+    n_pair_grid: int,
 ) -> EnsembleLiftRollupRow:
     """One ensemble-lift rollup row per dataset.
 
@@ -216,6 +219,7 @@ def _build_dataset_rollup(
             n_seeds=n_seeds,
             n_folds=n_folds,
             n_cells_paired=0,
+            n_pair_grid=n_pair_grid,
             n_skipped_cells=0,
             bootstrap_skipped_reason=reason,
             n_resamples=n_resamples,
@@ -260,6 +264,7 @@ def _build_dataset_rollup(
         n_seeds=n_seeds,
         n_folds=n_folds,
         n_cells_paired=n_cells,
+        n_pair_grid=n_pair_grid,
         n_skipped_cells=0,
         primary_metric_mean=mean,
         primary_metric_ci_lo=ci_lo,
@@ -333,6 +338,26 @@ def aggregate_bootstrap_ensemble_lift_rollup(
         )
         gbm_ds = gbm_cells_all.loc[gbm_cells_all["dataset_name"] == dataset_name]
         seq_ds = seq_cells_all.loc[seq_cells_all["dataset_name"] == dataset_name]
+        # B19 / D-B16.7: intersection cardinality of (seed, fold) pairs
+        # across the two families. The renderer uses this as the
+        # partial-coverage expected count instead of the union view
+        # `n_seeds * n_folds`. Computed ONCE per dataset at the caller
+        # (single source of truth); passed to `_build_dataset_rollup`.
+        gbm_pairs = set(
+            zip(
+                gbm_ds["seed"].astype(int),
+                gbm_ds["fold_index"].astype(int),
+                strict=True,
+            )
+        )
+        seq_pairs = set(
+            zip(
+                seq_ds["seed"].astype(int),
+                seq_ds["fold_index"].astype(int),
+                strict=True,
+            )
+        )
+        n_pair_grid = len(gbm_pairs & seq_pairs)
         rows.append(
             _build_dataset_rollup(
                 dataset_name=dataset_name,
@@ -343,6 +368,7 @@ def aggregate_bootstrap_ensemble_lift_rollup(
                 output_root=output_root,
                 n_resamples=n_resamples,
                 manifest_fingerprint=manifest_fingerprint,
+                n_pair_grid=n_pair_grid,
             )
         )
 

@@ -81,6 +81,7 @@ def _make_rollup_row(
     n_seeds: int = 2,
     n_folds: int = 2,
     n_cells_paired: int = 4,
+    n_pair_grid: int | None = None,
     n_skipped_cells: int = 0,
     primary_metric_mean: float | None = 0.20,
     primary_metric_ci_lo: float | None = 0.15,
@@ -88,6 +89,11 @@ def _make_rollup_row(
     bootstrap_skipped_reason: str | None = None,
     manifest_fingerprint: str = "f" * 64,
 ) -> EnsembleLiftRollupRow:
+    # B19 / D-B16.7: when n_pair_grid is not supplied, default to
+    # n_cells_paired so the renderer's partial-flag computation
+    # matches the pre-B19 symmetric-roster happy-path semantics.
+    if n_pair_grid is None:
+        n_pair_grid = n_cells_paired
     return EnsembleLiftRollupRow(
         dataset_name=dataset_name,
         task_type=task_type,
@@ -96,6 +102,7 @@ def _make_rollup_row(
         n_seeds=n_seeds,
         n_folds=n_folds,
         n_cells_paired=n_cells_paired,
+        n_pair_grid=n_pair_grid,
         n_skipped_cells=n_skipped_cells,
         primary_metric_mean=primary_metric_mean,
         primary_metric_ci_lo=primary_metric_ci_lo,
@@ -237,11 +244,13 @@ def test_render_ensemble_lift_with_ci_surfaces_both_freshness_and_skipped_cells_
 
 
 def test_render_ensemble_lift_with_ci_marks_partial_fold_cell_with_asterisk() -> None:
-    """When n_cells_paired < n_seeds * n_folds, the CI cell
+    """When `n_cells_paired < n_pair_grid`, the CI cell
     receives a trailing asterisk per the shared `format_ci_cell`
-    contract."""
+    contract. B19 / D-B16.7 closure: the expected count is now
+    `n_pair_grid` (intersection cardinality), not
+    `n_seeds * n_folds` (union)."""
     result = _make_lift_result((_make_per_dataset_row(),))
-    rollup = [_make_rollup_row(n_cells_paired=3, n_seeds=2, n_folds=2)]
+    rollup = [_make_rollup_row(n_cells_paired=3, n_pair_grid=4, n_seeds=2, n_folds=2)]
     md = render_ensemble_lift_markdown_with_ci(result, rollup)
     ci_line = next(line for line in md.splitlines() if "0.2000 [0.1500, 0.2500]" in line)
     assert "*" in ci_line
