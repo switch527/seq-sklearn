@@ -192,6 +192,15 @@ class ExperimentSpec(BaseModel):
     and writes `bootstrap_hpo_uplift_rollup.parquet`. Ignored
     on other kinds.
 
+    `bootstrap_ensemble_lift_enabled` is the B16 D-B13.4 CI
+    control used only by `kind="ensemble_lift"`. Default
+    True; the ensemble-lift CI rollup runs after
+    `run_ensemble_lift` succeeds and writes
+    `bootstrap_ensemble_lift_rollup.parquet`. This is the
+    first field B11 consumes on its ExperimentSpec; prior
+    B11 work used only the inherited seed tuple. Ignored on
+    other kinds.
+
     `bootstrap_n_resamples` is per-ExperimentSpec, NOT shared
     across kinds; an unset value falls through to the profile-
     based default in `BOOTSTRAP_N_RESAMPLES_BY_PROFILE`.
@@ -208,6 +217,7 @@ class ExperimentSpec(BaseModel):
     bootstrap_pairwise_enabled: bool = True
     bootstrap_training_time_enabled: bool = True
     bootstrap_hpo_uplift_enabled: bool = True
+    bootstrap_ensemble_lift_enabled: bool = True
 
 
 _ALL_SENTINEL = "all"

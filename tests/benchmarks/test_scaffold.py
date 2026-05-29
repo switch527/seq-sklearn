@@ -505,14 +505,16 @@ def test_benchmark_config_rejects_duplicate_experiment_kinds(tmp_path: Path) -> 
 
 @pytest.mark.parametrize(
     "kind",
-    ["raw_loss", "ensemble", "training_time", "hpo_uplift"],
+    ["raw_loss", "ensemble", "training_time", "hpo_uplift", "ensemble_lift"],
 )
 def test_benchmark_config_rejects_duplicates_for_every_kind(kind: str) -> None:
-    """qa-N2: parametrize over every `ExperimentKind` so the
-    validator's regression catch covers all four kinds, not just
-    raw_loss. The B8 arch-I2 motivating case was an
-    `hpo_uplift` duplicate with budget overrides; pin that
-    explicitly."""
+    """qa-N2 + B16-R1-qa-I1: parametrize over every
+    `ExperimentKind` so the validator's regression catch
+    covers all five kinds, not just raw_loss. The B8 arch-I2
+    motivating case was an `hpo_uplift` duplicate with budget
+    overrides; pin that explicitly. B16 R1 qa-I1 added
+    `ensemble_lift` so a future kind-specific carve-out
+    cannot silently exempt B11."""
     with pytest.raises(ValueError, match="at most one"):
         BenchmarkConfig(
             datasets=("a",),
