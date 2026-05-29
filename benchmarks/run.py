@@ -33,6 +33,8 @@ import benchmarks.adapters  # pyright: ignore[reportUnusedImport]
 import benchmarks.datasets  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from benchmarks.bootstrap_manifest import (
     aggregator_failed_sentinel_path,
+    ensemble_lift_aggregator_failed_sentinel_path,
+    ensemble_lift_rollup_path,
     hpo_uplift_aggregator_failed_sentinel_path,
     hpo_uplift_rollup_path,
     pairwise_aggregator_failed_sentinel_path,
@@ -53,6 +55,10 @@ from benchmarks.experiments import (
 )
 from benchmarks.manifest import atomic_write_bytes
 from benchmarks.registry import list_datasets, list_models
+from benchmarks.report.bootstrap_ensemble_lift import (
+    aggregate_bootstrap_ensemble_lift_rollup,
+    is_ensemble_lift_rollup_enabled,
+)
 from benchmarks.report.bootstrap_hpo_uplift import (
     aggregate_bootstrap_hpo_uplift_rollup,
     is_hpo_uplift_rollup_enabled,
@@ -258,6 +264,7 @@ def _dispatch_kinds(
             lift_path = output_root / "ensemble_lift.md"
             atomic_write_bytes(lift_md.encode("utf-8"), lift_path)
             logger.info("ensemble_lift report written to %s", lift_path)
+            _run_bootstrap_ensemble_lift_rollup(config, env=env, output_root=output_root)
         else:
             logger.error(
                 "experiment driver for kind=%s not yet implemented; "
@@ -374,8 +381,7 @@ def _run_bootstrap_pairwise_rollup(
         manifest = load_run_manifest(output_root)
     except (FileNotFoundError, ValueError, ValidationError) as exc:
         logger.warning(
-            "bootstrap_pairwise_rollup: skipped (failed to load "
-            "run_manifest.json: %s: %s)",
+            "bootstrap_pairwise_rollup: skipped (failed to load run_manifest.json: %s: %s)",
             type(exc).__name__,
             exc,
         )
@@ -442,8 +448,7 @@ def _run_bootstrap_training_time_rollup(
         manifest = load_run_manifest(output_root)
     except (FileNotFoundError, ValueError, ValidationError) as exc:
         logger.warning(
-            "bootstrap_training_time_rollup: skipped (failed to load "
-            "run_manifest.json: %s: %s)",
+            "bootstrap_training_time_rollup: skipped (failed to load run_manifest.json: %s: %s)",
             type(exc).__name__,
             exc,
         )
@@ -510,8 +515,7 @@ def _run_bootstrap_hpo_uplift_rollup(
         manifest = load_run_manifest(output_root)
     except (FileNotFoundError, ValueError, ValidationError) as exc:
         logger.warning(
-            "bootstrap_hpo_uplift_rollup: skipped (failed to load "
-            "run_manifest.json: %s: %s)",
+            "bootstrap_hpo_uplift_rollup: skipped (failed to load run_manifest.json: %s: %s)",
             type(exc).__name__,
             exc,
         )
@@ -539,6 +543,74 @@ def _run_bootstrap_hpo_uplift_rollup(
         if path.exists():
             path.unlink(missing_ok=True)
         sentinel = hpo_uplift_aggregator_failed_sentinel_path(output_root)
+        sentinel.write_text(type(exc).__name__, encoding="utf-8")
+
+
+def _run_bootstrap_ensemble_lift_rollup(
+    config: BenchmarkConfig,
+    *,
+    env: RunEnvironment,
+    output_root: Path,
+) -> None:
+    """B16 D-B13.4 ensemble-lift CI rollup step. Runs after run_ensemble_lift.
+
+    Per B16.5 the wrapper has four gates:
+    - Gate A: opt-out (is_ensemble_lift_rollup_enabled).
+    - Gate B: run_manifest presence.
+    - Gate C: load_run_manifest with narrow except tuple.
+    - Gate D: aggregator returns [] when the manifest has no
+      OK rows mapping to either the seq family OR the baseline
+      family. The wrapper treats this as a no-op skip (no
+      failure sentinel written).
+
+    Catches RawRollupError, deletes any partial
+    bootstrap_ensemble_lift_rollup.parquet, drops a B11-specific
+    sentinel file. INDEPENDENT from B5 + B6 + B7 + B8 sentinels.
+    """
+    if not is_ensemble_lift_rollup_enabled(config):
+        logger.info(
+            "bootstrap_ensemble_lift_rollup: skipped (no ensemble_lift "
+            "ExperimentSpec has `bootstrap_ensemble_lift_enabled=True`)"
+        )
+        return
+    if not run_manifest_path(output_root).exists():
+        logger.warning(
+            "bootstrap_ensemble_lift_rollup: skipped (run_manifest.json absent at %s)",
+            output_root,
+        )
+        return
+    try:
+        manifest = load_run_manifest(output_root)
+    except (FileNotFoundError, ValueError, ValidationError) as exc:
+        logger.warning(
+            "bootstrap_ensemble_lift_rollup: skipped (failed to load run_manifest.json: %s: %s)",
+            type(exc).__name__,
+            exc,
+        )
+        return
+    try:
+        rows = aggregate_bootstrap_ensemble_lift_rollup(
+            config, output_root=output_root, env=env, manifest=manifest
+        )
+        stale = ensemble_lift_aggregator_failed_sentinel_path(output_root)
+        if stale.exists():
+            stale.unlink(missing_ok=True)
+        logger.info(
+            "bootstrap_ensemble_lift_rollup: %d rollup rows written to %s",
+            len(rows),
+            ensemble_lift_rollup_path(output_root),
+        )
+    except RawRollupError as exc:
+        logger.warning(
+            "bootstrap_ensemble_lift_rollup: aggregator failed (%s); deleting "
+            "any partial rollup shard. The ensemble-lift report will fall back "
+            "to the std variant.",
+            exc,
+        )
+        path = ensemble_lift_rollup_path(output_root)
+        if path.exists():
+            path.unlink(missing_ok=True)
+        sentinel = ensemble_lift_aggregator_failed_sentinel_path(output_root)
         sentinel.write_text(type(exc).__name__, encoding="utf-8")
 
 

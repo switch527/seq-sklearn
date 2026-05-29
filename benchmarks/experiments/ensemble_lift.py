@@ -79,8 +79,10 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "EnsembleLiftExperimentResult",
+    "PerCellLiftDelta",
     "PerDatasetLift",
     "WilcoxonResult",
+    "compute_per_cell_lift_deltas",
     "run_ensemble_lift",
 ]
 
@@ -448,7 +450,47 @@ def _build_cells_table(
     ]
 
 
-def _per_dataset_lift(
+class PerCellLiftDelta(BaseModel):
+    """One paired-cell record from
+    `compute_per_cell_lift_deltas` (B16 refactor extraction).
+
+    `loss_gbm` and `loss_gbm_plus_seq` are the per-cell primary
+    losses; `delta_loss = loss_gbm - loss_gbm_plus_seq`.
+    `oracle_loss` is None when the per-sample oracle could not be
+    computed (e.g., one of the ensembles produced no usable
+    rows). The bootstrap aggregator consumes the `delta_loss`
+    array; B11's `_per_dataset_lift` aggregates the same records
+    by mean + std.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    seed: int
+    fold_index: int
+    loss_gbm: float
+    loss_gbm_plus_seq: float
+    delta_loss: float
+    oracle_loss: float | None = None
+
+
+class _ComputePerCellResult(BaseModel):
+    """Internal return shape for `compute_per_cell_lift_deltas`.
+
+    `cells` is the paired-cell records; `seen_no_gbm` /
+    `seen_no_seq` mirror B11's incomplete-block flags so both
+    `_per_dataset_lift` (B11) and the B16 aggregator can surface
+    the existing sentinel states without recomputing them.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
+
+    cells: tuple[PerCellLiftDelta, ...]
+    seen_no_gbm: bool = False
+    seen_no_seq: bool = False
+    selector: str
+
+
+def compute_per_cell_lift_deltas(
     *,
     dataset_name: str,
     task_type: str,
@@ -456,25 +498,26 @@ def _per_dataset_lift(
     gbm_cells: pd.DataFrame,
     seq_cells: pd.DataFrame,
     output_root: Path,
-) -> PerDatasetLift:
-    """Per-dataset Δloss aggregation.
+) -> _ComputePerCellResult:
+    """Per-(seed, fold) paired-cell delta computation.
 
-    For each (seed, fold) pair: build the GBM-only and GBM+seq
-    ensembles, compute per-cell losses, and the oracle. Aggregate
-    by mean across (seed, fold).
+    Iterates `seed_fold_pairs` and at each pair: builds the
+    GBM-only and GBM+seq ensembles via the existing
+    `_join_predictions` helper, computes the per-cell primary
+    loss for each, and emits one `PerCellLiftDelta` if both
+    losses are finite. Returns the records list plus the same
+    `seen_no_gbm` / `seen_no_seq` flags that B11's
+    `_per_dataset_lift` previously tracked inline.
+
+    B11's `_per_dataset_lift` is a thin aggregation over this
+    helper's output; the B16 bootstrap aggregator consumes the
+    same records to bootstrap the per-cell `delta_loss` array.
     """
     selector = _PRIMARY_LOSS_BY_TASK.get(task_type)
     if selector is None:
-        return PerDatasetLift(
-            dataset_name=dataset_name,
-            task_type=task_type,
-            primary_loss_column="unknown",
-            n_cells_paired=0,
-        )
+        return _ComputePerCellResult(cells=(), selector="unknown")
 
-    losses_gbm: list[float] = []
-    losses_gbm_seq: list[float] = []
-    losses_oracle: list[float] = []
+    records: list[PerCellLiftDelta] = []
     seen_no_gbm = False
     seen_no_seq = False
 
@@ -510,8 +553,9 @@ def _per_dataset_lift(
         y_true_common = y_true_b[pos_b]
         if not np.array_equal(y_true_a[pos_a], y_true_common):
             logger.warning(
-                "_per_dataset_lift: y_true disagrees on the gbm/gbm+seq "
-                "intersection for dataset=%s seed=%d fold=%d; skipping pair",
+                "compute_per_cell_lift_deltas: y_true disagrees on the "
+                "gbm/gbm+seq intersection for dataset=%s seed=%d fold=%d; "
+                "skipping pair",
                 dataset_name,
                 seed,
                 fold,
@@ -548,20 +592,64 @@ def _per_dataset_lift(
             pred_a=pred_a,
             pred_b=pred_b,
         )
-        losses_gbm.append(loss_a)
-        losses_gbm_seq.append(loss_b)
-        if oracle is not None:
-            losses_oracle.append(oracle)
+        records.append(
+            PerCellLiftDelta(
+                seed=int(seed),
+                fold_index=int(fold),
+                loss_gbm=loss_a,
+                loss_gbm_plus_seq=loss_b,
+                delta_loss=loss_a - loss_b,
+                oracle_loss=oracle,
+            )
+        )
 
-    if not losses_gbm or not losses_gbm_seq:
+    return _ComputePerCellResult(
+        cells=tuple(records),
+        seen_no_gbm=seen_no_gbm,
+        seen_no_seq=seen_no_seq,
+        selector=selector,
+    )
+
+
+def _per_dataset_lift(
+    *,
+    dataset_name: str,
+    task_type: str,
+    seed_fold_pairs: list[tuple[int, int]],
+    gbm_cells: pd.DataFrame,
+    seq_cells: pd.DataFrame,
+    output_root: Path,
+) -> PerDatasetLift:
+    """Per-dataset Δloss aggregation.
+
+    Thin aggregation over `compute_per_cell_lift_deltas`: takes
+    the per-(seed, fold) records, drops the partial-loss cells
+    (the helper already returns only finite-loss records), and
+    computes the per-dataset mean Δloss + std + oracle bounds.
+    """
+    computed = compute_per_cell_lift_deltas(
+        dataset_name=dataset_name,
+        task_type=task_type,
+        seed_fold_pairs=seed_fold_pairs,
+        gbm_cells=gbm_cells,
+        seq_cells=seq_cells,
+        output_root=output_root,
+    )
+    selector = computed.selector
+
+    if not computed.cells:
         return PerDatasetLift(
             dataset_name=dataset_name,
             task_type=task_type,
             primary_loss_column=selector,
             n_cells_paired=0,
-            no_gbm_predictions=seen_no_gbm,
-            no_seq_predictions=seen_no_seq,
+            no_gbm_predictions=computed.seen_no_gbm,
+            no_seq_predictions=computed.seen_no_seq,
         )
+
+    losses_gbm = [c.loss_gbm for c in computed.cells]
+    losses_gbm_seq = [c.loss_gbm_plus_seq for c in computed.cells]
+    losses_oracle = [c.oracle_loss for c in computed.cells if c.oracle_loss is not None]
 
     delta = np.array(losses_gbm) - np.array(losses_gbm_seq)
     delta_std: float | None = float(delta.std(ddof=1)) if delta.size > 1 else None
