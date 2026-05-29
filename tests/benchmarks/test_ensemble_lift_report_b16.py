@@ -477,3 +477,69 @@ def test_render_from_dir_failure_sentinel_takes_precedence_over_rollup_file(
     assert "Bootstrap aggregator failed" in md
     assert "RawRollupError" in md
     assert "Δloss [95% CI]" not in md
+
+
+# --- Stage 3 R1 closures ---------------------------------------------------
+
+
+def test_render_from_dir_renders_ci_without_freshness_footnote_when_manifest_absent(
+    tmp_path: Path,
+) -> None:
+    """Closes Stage 3 R1 CRITICAL: rollup file present and
+    non-empty BUT `run_manifest.json` absent -> CI variant
+    renders with NO freshness-skipped footnote AND NO stale
+    footnote (expected_manifest_fingerprint stays None,
+    manifest_unreadable stays False)."""
+    write_ensemble_lift_rollup(tmp_path, [_make_rollup_row()])
+    # Do NOT write run_manifest.json into tmp_path.
+
+    result = _make_lift_result((_make_per_dataset_row(),))
+    md = render_from_dir(tmp_path, lift_result=result)
+    assert "Δloss [95% CI]" in md
+    assert "freshness check skipped" not in md
+    assert "Bootstrap rollup is stale" not in md
+
+
+def test_render_from_dir_falls_back_silently_when_rollup_file_empty(
+    tmp_path: Path,
+) -> None:
+    """Closes Stage 3 R1 qa-I2: an EMPTY rollup file present on
+    disk (zero-row parquet) routes to the std fallback path
+    silently, matching the absent-file behavior. Pins the
+    `if rollup:` false arm at the dispatch site."""
+    write_ensemble_lift_rollup(tmp_path, [])
+
+    result = _make_lift_result((_make_per_dataset_row(),))
+    md = render_from_dir(tmp_path, lift_result=result)
+    assert "Δloss [95% CI]" not in md
+    assert "Δstd" in md
+    assert "freshness check skipped" not in md
+
+
+def test_render_ensemble_lift_with_ci_renders_no_ci_when_rollup_row_has_skipped_reason_with_complete_delta_loss() -> (
+    None
+):
+    """Closes Stage 3 R1 code-I1 / qa-I1 dead-predicate gap: a
+    complete `PerDatasetLift` row (`delta_loss_mean` is not None)
+    paired with a rollup row that DOES carry a non-None
+    `bootstrap_skipped_reason` renders `(no CI)` in the CI cell
+    via the second predicate of the OR guard. Pins the branch
+    so a future edit that drops the predicate would surface
+    here."""
+    result = _make_lift_result((_make_per_dataset_row(),))
+    rollup = [
+        _make_rollup_row(
+            primary_loss_mean=None,
+            primary_loss_ci_lo=None,
+            primary_loss_ci_hi=None,
+            n_cells_paired=0,
+            bootstrap_skipped_reason="all_cells_skipped_in_manifest",
+        ),
+    ]
+    md = render_ensemble_lift_markdown_with_ci(result, rollup)
+    # The PerDatasetLift's ds_one is in the table but its CI cell
+    # is "(no CI)" because the rollup row sentinel suppresses it.
+    assert "ds_one" in md
+    assert "(no CI)" in md
+    # The full numeric interval must NOT render.
+    assert "0.2000 [0.1500, 0.2500]" not in md

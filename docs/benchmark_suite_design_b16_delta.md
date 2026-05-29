@@ -576,6 +576,14 @@ B11 refactor adds a regression pin.
 - D-B16.6: shared CLI-wrapper factory across the now-FIVE
   `_run_bootstrap_*_rollup` wrappers (inherited from
   D-B14.3).
+- D-B16.7: `n_pair_grid` field on `EnsembleLiftRollupRow`
+  recording `len(seed_fold_pairs)` so the renderer's
+  partial-coverage asterisk uses the intersection-based
+  expected count instead of `n_seeds * n_folds` (which is
+  the UNION across the two families and can inflate
+  `expected` when the two rosters are asymmetric).
+  Deferred because it requires a schema change that
+  coordinates with D-B16.5 (the `primary_loss_*` rename).
 
 ## Addressed
 
@@ -865,3 +873,76 @@ NITPICK. Closure:
   at the "arch-R1-I3" + "code-R1-N1" + "arch-R1-N1" lines
   still quote the original `_`-prefixed finding labels
   (those are quoted-history, not spec prose).
+
+### Stage 3 R1 swarm closure
+
+Stage 3 confirming swarm (impl `04b6c1a`): code-reviewer
+(1C/1I/0N REQUEST_CHANGES), architecture-reviewer
+(0C/2I/2N APPROVE), qa-test-coverage (0C/3I/3N APPROVE),
+style-reviewer (0C/0I/2N APPROVE). Deduplicated total: 1
+CRITICAL, 4 IMPROVEMENT, 5 NITPICK. The CRITICAL and two
+IMPROVEMENTs were flagged by multiple reviewers as the
+same gap. Closures:
+
+- **code-R1-C1 / arch-R1-I1 / qa-R1-I3** (missing
+  `test_render_from_dir_renders_ci_without_freshness_footnote_when_manifest_absent`):
+  added the test. Pins the dispatch branch where the
+  rollup file is present but `run_manifest.json` is
+  absent; asserts the CI variant renders with NEITHER the
+  freshness-skipped NOR the stale footnote.
+- **code-R1-I1 / qa-R1-I1** (dead second predicate of the
+  `(no CI)` OR guard at
+  `_render_complete_table_with_ci`): added
+  `_renders_no_ci_when_rollup_row_has_skipped_reason_with_complete_delta_loss`
+  with a complete `PerDatasetLift` row paired against a
+  rollup row carrying a non-None `bootstrap_skipped_reason`.
+  Pins the `(no CI)` cell via the second predicate.
+- **qa-R1-I2** (empty rollup file untested): added
+  `test_render_from_dir_falls_back_silently_when_rollup_file_empty`
+  writing a zero-row parquet via
+  `write_ensemble_lift_rollup(tmp_path, [])` and asserting
+  the std fallback.
+- **arch-R1-I2** (union semantics on `n_seeds` /
+  `n_folds` may inflate `expected` for asymmetric family
+  rosters, producing a false partial-coverage asterisk):
+  DEFERRED under new D-B16.7. Requires a schema change
+  (`n_pair_grid: int` recording `len(seed_fold_pairs)`)
+  that coordinates with D-B16.5; landing it inside this
+  branch would also force a B14/B15 audit. No silent-
+  failure risk on the merge path: the worst-case display
+  artifact is a trailing `*` on a CI cell where the
+  intersection-based expectation was actually met. The
+  numeric mean and interval are unaffected.
+
+NITPICKs:
+
+- **arch-R1-N1** (Stage 3 closure section): this section
+  closes it (the very block you are reading).
+- **arch-R1-N2** (doc-vs-impl test-name drift): the design
+  enumerates `test_render_from_dir_freshness_check_skipped_when_manifest_corrupt`
+  + `test_render_from_dir_renders_ci_without_freshness_footnote_when_manifest_absent`
+  while the implementation ships
+  `test_render_from_dir_renders_ci_with_freshness_skipped_when_run_manifest_unreadable`
+  +
+  `test_render_from_dir_failure_sentinel_takes_precedence_over_rollup_file`
+  +
+  `test_render_from_dir_renders_ci_without_freshness_footnote_when_manifest_absent`
+  (the third added in this R1 closure). NOT renamed; the
+  impl names are more precise about the failure mode
+  (`run_manifest_unreadable` vs. the design's looser
+  `manifest_corrupt`) and the additional precedence + the
+  manifest-absent tests round out the dispatch coverage.
+- **qa-R1-N1..N3** (peripheral branch coverage on
+  `_render_incomplete_block` double-true / fourth-else
+  arms, `expected > 0` zero-guard, and an isolated
+  fingerprint-matches unit test): NOT addressed. The
+  double-true / fourth-else arms are simple string
+  selection with no calculation risk; the `expected > 0`
+  guard prevents a comparison error in an
+  unreachable-by-construction zero-seed-zero-fold rollup;
+  the fingerprint-matches unit is exercised end-to-end
+  via `test_render_from_dir_renders_ci_when_rollup_present_and_fingerprint_matches`.
+- **style-R1-N1..N2** (a private function with a brief
+  docstring; two `_FakeManifest` single-method classes
+  inside test functions): NOT changed; the patterns
+  follow the established test idiom.
