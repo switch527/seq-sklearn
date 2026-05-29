@@ -31,6 +31,10 @@ from pydantic import ValidationError
 # test.
 import benchmarks.adapters  # pyright: ignore[reportUnusedImport]
 import benchmarks.datasets  # noqa: F401  # pyright: ignore[reportUnusedImport]
+from benchmarks._bootstrap_wrapper import (
+    BootstrapWrapperSpec,
+    run_bootstrap_rollup_via_factory,
+)
 from benchmarks.bootstrap_manifest import (
     aggregator_failed_sentinel_path,
     ensemble_lift_aggregator_failed_sentinel_path,
@@ -68,7 +72,6 @@ from benchmarks.report.bootstrap_pairwise import (
     is_pairwise_rollup_enabled,
 )
 from benchmarks.report.bootstrap_rollup import (
-    RawRollupError,
     aggregate_bootstrap_rollup,
     is_rollup_enabled,
 )
@@ -281,74 +284,69 @@ def _dispatch_kinds(
     return 0
 
 
+# --- B18 / D-B16.6: shared bootstrap-CI wrapper factory --------------------
+# The five families (B5/B6/B7/B15/B16) each had a ~65-line wrapper with the
+# same four-gate cascade. B18 collapses the duplication onto
+# `run_bootstrap_rollup_via_factory` in `benchmarks._bootstrap_wrapper`. Each
+# wrapper now passes its static spec + its aggregator (per-call kwarg so the
+# existing wrapper tests' `monkeypatch.setattr(_run_module,
+# "aggregate_bootstrap_*_rollup", _boom)` interceptions still resolve).
+#
+# NOTE for future maintainers: a 6th bootstrap-rollup family should add a
+# `_BX_SPEC` constant below and a thin wrapper that calls
+# `run_bootstrap_rollup_via_factory`. Do NOT re-implement the four-gate
+# cascade inline.
+
+_B5_SPEC = BootstrapWrapperSpec(
+    label="bootstrap_rollup",
+    is_enabled=is_rollup_enabled,
+    rollup_path=rollup_path,
+    sentinel_path=aggregator_failed_sentinel_path,
+)
+
+_B6_SPEC = BootstrapWrapperSpec(
+    label="bootstrap_pairwise_rollup",
+    is_enabled=is_pairwise_rollup_enabled,
+    rollup_path=pairwise_rollup_path,
+    sentinel_path=pairwise_aggregator_failed_sentinel_path,
+)
+
+_B7_SPEC = BootstrapWrapperSpec(
+    label="bootstrap_training_time_rollup",
+    is_enabled=is_training_time_rollup_enabled,
+    rollup_path=training_time_rollup_path,
+    sentinel_path=training_time_aggregator_failed_sentinel_path,
+)
+
+_B15_SPEC = BootstrapWrapperSpec(
+    label="bootstrap_hpo_uplift_rollup",
+    is_enabled=is_hpo_uplift_rollup_enabled,
+    rollup_path=hpo_uplift_rollup_path,
+    sentinel_path=hpo_uplift_aggregator_failed_sentinel_path,
+)
+
+_B16_SPEC = BootstrapWrapperSpec(
+    label="bootstrap_ensemble_lift_rollup",
+    is_enabled=is_ensemble_lift_rollup_enabled,
+    rollup_path=ensemble_lift_rollup_path,
+    sentinel_path=ensemble_lift_aggregator_failed_sentinel_path,
+)
+
+
 def _run_bootstrap_rollup(
     config: BenchmarkConfig,
     *,
     env: RunEnvironment,
     output_root: Path,
 ) -> None:
-    """B13 bootstrap-CI rollup step. Runs AFTER raw_loss completes.
-
-    Per B13.5 + the R5 CLI-wrapper design:
-    - Skips when `is_rollup_enabled(config)` is False (the
-      `ExperimentSpec(kind="raw_loss", bootstrap_rollup_enabled=False)`
-      opt-out path).
-    - Catches `RawRollupError` and deletes any half-written
-      `bootstrap_rollup.parquet` so the renderer doesn't pick up a
-      partial file; the run continues with exit code 0 and the
-      leaderboard falls back to the std variant with a "Bootstrap
-      aggregator failed" footnote.
-    """
-    if not is_rollup_enabled(config):
-        logger.info(
-            "bootstrap_rollup: skipped (no raw_loss ExperimentSpec has "
-            "`bootstrap_rollup_enabled=True`)"
-        )
-        return
-    if not run_manifest_path(output_root).exists():
-        logger.warning(
-            "bootstrap_rollup: skipped (run_manifest.json absent at %s)",
-            output_root,
-        )
-        return
-    try:
-        manifest = load_run_manifest(output_root)
-    except (FileNotFoundError, ValueError, ValidationError) as exc:
-        logger.warning(
-            "bootstrap_rollup: skipped (failed to load run_manifest.json: %s: %s)",
-            type(exc).__name__,
-            exc,
-        )
-        return
-    try:
-        rows = aggregate_bootstrap_rollup(
-            config, output_root=output_root, env=env, manifest=manifest
-        )
-        # Successful aggregate: unlink any stale failure sentinel
-        # from a prior run so the renderer surfaces the CI variant
-        # rather than the std + footnote (B13.0 R2 arch-C1 close).
-        stale = aggregator_failed_sentinel_path(output_root)
-        if stale.exists():
-            stale.unlink(missing_ok=True)
-        logger.info(
-            "bootstrap_rollup: %d rollup rows written to %s",
-            len(rows),
-            rollup_path(output_root),
-        )
-    except RawRollupError as exc:
-        logger.warning(
-            "bootstrap_rollup: aggregator failed (%s); deleting any partial "
-            "rollup shard. The leaderboard will fall back to the std variant.",
-            exc,
-        )
-        path = rollup_path(output_root)
-        if path.exists():
-            path.unlink(missing_ok=True)
-        # Drop a sentinel file so the renderer surfaces the
-        # "Bootstrap aggregator failed: <class>" footnote
-        # (Gemini-C2 wrapper case + R1 code-I1 wire-up).
-        sentinel = aggregator_failed_sentinel_path(output_root)
-        sentinel.write_text(type(exc).__name__, encoding="utf-8")
+    """B13 bootstrap-CI rollup step. Runs AFTER raw_loss completes."""
+    run_bootstrap_rollup_via_factory(
+        config,
+        env=env,
+        output_root=output_root,
+        spec=_B5_SPEC,
+        aggregator=aggregate_bootstrap_rollup,
+    )
 
 
 def _run_bootstrap_pairwise_rollup(
@@ -357,64 +355,14 @@ def _run_bootstrap_pairwise_rollup(
     env: RunEnvironment,
     output_root: Path,
 ) -> None:
-    """B14 D-B13.1 pairwise CI rollup step. Runs AFTER run_ensemble.
-
-    Mirrors `_run_bootstrap_rollup`'s shape against the B6
-    pairwise manifest:
-    - Skips when `is_pairwise_rollup_enabled(config)` is False
-      (no ensemble spec or opt-out flag).
-    - Catches `RawRollupError`, deletes any partial
-      `bootstrap_pairwise_rollup.parquet`, and drops a B6-
-      specific sentinel file so the renderer surfaces the
-      "Bootstrap aggregator failed" footnote in the std
-      fallback. The B5 + B7 sentinels are NOT touched
-      (B14.0 cross-report independence).
-    """
-    if not is_pairwise_rollup_enabled(config):
-        logger.info(
-            "bootstrap_pairwise_rollup: skipped (no ensemble ExperimentSpec has "
-            "`bootstrap_pairwise_enabled=True`)"
-        )
-        return
-    if not run_manifest_path(output_root).exists():
-        logger.warning(
-            "bootstrap_pairwise_rollup: skipped (run_manifest.json absent at %s)",
-            output_root,
-        )
-        return
-    try:
-        manifest = load_run_manifest(output_root)
-    except (FileNotFoundError, ValueError, ValidationError) as exc:
-        logger.warning(
-            "bootstrap_pairwise_rollup: skipped (failed to load run_manifest.json: %s: %s)",
-            type(exc).__name__,
-            exc,
-        )
-        return
-    try:
-        rows = aggregate_bootstrap_pairwise_rollup(
-            config, output_root=output_root, env=env, manifest=manifest
-        )
-        stale = pairwise_aggregator_failed_sentinel_path(output_root)
-        if stale.exists():
-            stale.unlink(missing_ok=True)
-        logger.info(
-            "bootstrap_pairwise_rollup: %d rollup rows written to %s",
-            len(rows),
-            pairwise_rollup_path(output_root),
-        )
-    except RawRollupError as exc:
-        logger.warning(
-            "bootstrap_pairwise_rollup: aggregator failed (%s); deleting any "
-            "partial rollup shard. The pairwise report will fall back to the "
-            "std variant.",
-            exc,
-        )
-        path = pairwise_rollup_path(output_root)
-        if path.exists():
-            path.unlink(missing_ok=True)
-        sentinel = pairwise_aggregator_failed_sentinel_path(output_root)
-        sentinel.write_text(type(exc).__name__, encoding="utf-8")
+    """B14 D-B13.1 pairwise CI rollup step. Runs after run_raw_loss."""
+    run_bootstrap_rollup_via_factory(
+        config,
+        env=env,
+        output_root=output_root,
+        spec=_B6_SPEC,
+        aggregator=aggregate_bootstrap_pairwise_rollup,
+    )
 
 
 def _run_bootstrap_training_time_rollup(
@@ -423,65 +371,14 @@ def _run_bootstrap_training_time_rollup(
     env: RunEnvironment,
     output_root: Path,
 ) -> None:
-    """B14 D-B13.2 training-time CI rollup step.
-
-    Runs AFTER `run_raw_loss` (NOT after `run_training_time`):
-    the training-time renderer reads the same B5 manifest, so the
-    CI rollup's data source is the B5 manifest and the wrapper
-    attaches at the same hook point as `_run_bootstrap_rollup`.
-    Gated by an `ExperimentSpec(kind="training_time",
-    bootstrap_training_time_enabled=True)` presence check.
-
-    Catches `RawRollupError`, deletes any partial
-    `bootstrap_training_time_rollup.parquet`, and drops a B7-
-    specific sentinel file. The B5 + B6 sentinels are NOT
-    touched (B14.0 cross-report independence).
-    """
-    if not is_training_time_rollup_enabled(config):
-        logger.info(
-            "bootstrap_training_time_rollup: skipped (no training_time "
-            "ExperimentSpec has `bootstrap_training_time_enabled=True`)"
-        )
-        return
-    if not run_manifest_path(output_root).exists():
-        logger.warning(
-            "bootstrap_training_time_rollup: skipped (run_manifest.json absent at %s)",
-            output_root,
-        )
-        return
-    try:
-        manifest = load_run_manifest(output_root)
-    except (FileNotFoundError, ValueError, ValidationError) as exc:
-        logger.warning(
-            "bootstrap_training_time_rollup: skipped (failed to load run_manifest.json: %s: %s)",
-            type(exc).__name__,
-            exc,
-        )
-        return
-    try:
-        rows = aggregate_bootstrap_training_time_rollup(
-            config, output_root=output_root, env=env, manifest=manifest
-        )
-        stale = training_time_aggregator_failed_sentinel_path(output_root)
-        if stale.exists():
-            stale.unlink(missing_ok=True)
-        logger.info(
-            "bootstrap_training_time_rollup: %d rollup rows written to %s",
-            len(rows),
-            training_time_rollup_path(output_root),
-        )
-    except RawRollupError as exc:
-        logger.warning(
-            "bootstrap_training_time_rollup: aggregator failed (%s); deleting "
-            "any partial rollup shard. The training-time report will fall back "
-            "to the std variant.",
-            exc,
-        )
-        path = training_time_rollup_path(output_root)
-        if path.exists():
-            path.unlink(missing_ok=True)
-        sentinel = training_time_aggregator_failed_sentinel_path(output_root)
-        sentinel.write_text(type(exc).__name__, encoding="utf-8")
+    """B14 D-B13.2 training-time CI rollup step. Runs after run_raw_loss."""
+    run_bootstrap_rollup_via_factory(
+        config,
+        env=env,
+        output_root=output_root,
+        spec=_B7_SPEC,
+        aggregator=aggregate_bootstrap_training_time_rollup,
+    )
 
 
 def _run_bootstrap_hpo_uplift_rollup(
@@ -490,65 +387,14 @@ def _run_bootstrap_hpo_uplift_rollup(
     env: RunEnvironment,
     output_root: Path,
 ) -> None:
-    """B15 D-B13.3 HPO-uplift CI rollup step. Runs after run_hpo_uplift.
-
-    Per B15.4 the wrapper has four gates:
-    - Gate A: opt-out (is_hpo_uplift_rollup_enabled).
-    - Gate B: run_manifest presence.
-    - Gate C: load_run_manifest with narrow except tuple.
-    - Gate D: aggregator returns [] when the manifest has no
-      variant=tuned rows. The wrapper treats this as a no-op
-      skip (no failure sentinel written).
-
-    Catches RawRollupError, deletes any partial
-    bootstrap_hpo_uplift_rollup.parquet, drops a B8-specific
-    sentinel file. INDEPENDENT from B5 + B6 + B7 sentinels.
-    """
-    if not is_hpo_uplift_rollup_enabled(config):
-        logger.info(
-            "bootstrap_hpo_uplift_rollup: skipped (no hpo_uplift ExperimentSpec "
-            "has `bootstrap_hpo_uplift_enabled=True`)"
-        )
-        return
-    if not run_manifest_path(output_root).exists():
-        logger.warning(
-            "bootstrap_hpo_uplift_rollup: skipped (run_manifest.json absent at %s)",
-            output_root,
-        )
-        return
-    try:
-        manifest = load_run_manifest(output_root)
-    except (FileNotFoundError, ValueError, ValidationError) as exc:
-        logger.warning(
-            "bootstrap_hpo_uplift_rollup: skipped (failed to load run_manifest.json: %s: %s)",
-            type(exc).__name__,
-            exc,
-        )
-        return
-    try:
-        rows = aggregate_bootstrap_hpo_uplift_rollup(
-            config, output_root=output_root, env=env, manifest=manifest
-        )
-        stale = hpo_uplift_aggregator_failed_sentinel_path(output_root)
-        if stale.exists():
-            stale.unlink(missing_ok=True)
-        logger.info(
-            "bootstrap_hpo_uplift_rollup: %d rollup rows written to %s",
-            len(rows),
-            hpo_uplift_rollup_path(output_root),
-        )
-    except RawRollupError as exc:
-        logger.warning(
-            "bootstrap_hpo_uplift_rollup: aggregator failed (%s); deleting any "
-            "partial rollup shard. The HPO-uplift report will fall back to the "
-            "std variant.",
-            exc,
-        )
-        path = hpo_uplift_rollup_path(output_root)
-        if path.exists():
-            path.unlink(missing_ok=True)
-        sentinel = hpo_uplift_aggregator_failed_sentinel_path(output_root)
-        sentinel.write_text(type(exc).__name__, encoding="utf-8")
+    """B15 D-B13.3 HPO-uplift CI rollup step. Runs after run_hpo_uplift."""
+    run_bootstrap_rollup_via_factory(
+        config,
+        env=env,
+        output_root=output_root,
+        spec=_B15_SPEC,
+        aggregator=aggregate_bootstrap_hpo_uplift_rollup,
+    )
 
 
 def _run_bootstrap_ensemble_lift_rollup(
@@ -557,66 +403,14 @@ def _run_bootstrap_ensemble_lift_rollup(
     env: RunEnvironment,
     output_root: Path,
 ) -> None:
-    """B16 D-B13.4 ensemble-lift CI rollup step. Runs after run_ensemble_lift.
-
-    Per B16.5 the wrapper has four gates:
-    - Gate A: opt-out (is_ensemble_lift_rollup_enabled).
-    - Gate B: run_manifest presence.
-    - Gate C: load_run_manifest with narrow except tuple.
-    - Gate D: aggregator returns [] when the manifest has no
-      OK rows mapping to either the seq family OR the baseline
-      family. The wrapper treats this as a no-op skip (no
-      failure sentinel written).
-
-    Catches RawRollupError, deletes any partial
-    bootstrap_ensemble_lift_rollup.parquet, drops a B11-specific
-    sentinel file. INDEPENDENT from B5 + B6 + B7 + B8 sentinels.
-    """
-    if not is_ensemble_lift_rollup_enabled(config):
-        logger.info(
-            "bootstrap_ensemble_lift_rollup: skipped (no ensemble_lift "
-            "ExperimentSpec has `bootstrap_ensemble_lift_enabled=True`)"
-        )
-        return
-    if not run_manifest_path(output_root).exists():
-        logger.warning(
-            "bootstrap_ensemble_lift_rollup: skipped (run_manifest.json absent at %s)",
-            output_root,
-        )
-        return
-    try:
-        manifest = load_run_manifest(output_root)
-    except (FileNotFoundError, ValueError, ValidationError) as exc:
-        logger.warning(
-            "bootstrap_ensemble_lift_rollup: skipped (failed to load run_manifest.json: %s: %s)",
-            type(exc).__name__,
-            exc,
-        )
-        return
-    try:
-        rows = aggregate_bootstrap_ensemble_lift_rollup(
-            config, output_root=output_root, env=env, manifest=manifest
-        )
-        stale = ensemble_lift_aggregator_failed_sentinel_path(output_root)
-        if stale.exists():
-            stale.unlink(missing_ok=True)
-        logger.info(
-            "bootstrap_ensemble_lift_rollup: %d rollup rows written to %s",
-            len(rows),
-            ensemble_lift_rollup_path(output_root),
-        )
-    except RawRollupError as exc:
-        logger.warning(
-            "bootstrap_ensemble_lift_rollup: aggregator failed (%s); deleting "
-            "any partial rollup shard. The ensemble-lift report will fall back "
-            "to the std variant.",
-            exc,
-        )
-        path = ensemble_lift_rollup_path(output_root)
-        if path.exists():
-            path.unlink(missing_ok=True)
-        sentinel = ensemble_lift_aggregator_failed_sentinel_path(output_root)
-        sentinel.write_text(type(exc).__name__, encoding="utf-8")
+    """B16 D-B13.4 ensemble-lift CI rollup step. Runs after run_ensemble_lift."""
+    run_bootstrap_rollup_via_factory(
+        config,
+        env=env,
+        output_root=output_root,
+        spec=_B16_SPEC,
+        aggregator=aggregate_bootstrap_ensemble_lift_rollup,
+    )
 
 
 def _load_config(path: Path) -> BenchmarkConfig:
