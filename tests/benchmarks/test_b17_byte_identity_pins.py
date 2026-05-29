@@ -1,8 +1,15 @@
 """Phase B17 / D-B16.5 byte-identity pins + Guard B source-tree grep.
 
-ONE-TIME-SCOPED file for the rename verification. Tests here lock
-the `primary_loss_*` -> `primary_metric_*` rename in place by
-proving:
+This file holds the permanent regression guards for the rename:
+Guard A lives in `test_bootstrap_manifest.py` and pins the
+schema-field invariant; the tests here pin both the renderer-
+side CI cell shape (one byte-identity pin per CI-variant
+renderer family) AND the source-tree absence of any stray
+`primary_loss_*` reference outside the explicit whitelist.
+
+The file was created during the B17 rename rollout but its
+guards remain load-bearing across future phases. Tests here
+prove:
 
 1. The four CI-variant renderers (B6 pairwise, B7 training-time,
    B15 HPO-uplift, B16 ensemble-lift) successfully render against
@@ -49,10 +56,20 @@ from benchmarks.report.ensemble_lift import render_ensemble_lift_markdown_with_c
 from benchmarks.report.hpo_uplift import render_hpo_uplift_markdown_with_ci
 from benchmarks.report.training_time import render_training_time_markdown_with_ci
 
-# Matches the CI cell shape `mean [lo, hi]` with optional trailing
-# asterisk (`*`) for the partial-coverage flag. The four floats
-# are formatted via `format_ci_cell` with `%.4f`.
-_CI_CELL_RE = re.compile(r"-?\d+\.\d{4} \[-?\d+\.\d{4}, -?\d+\.\d{4}\]\*?")
+# Matches the CI cell shape `mean [lo, hi]*` with a MANDATORY
+# trailing asterisk for the partial-coverage flag. Every fixture
+# in this file is configured so the rollup row's
+# `n_cells_paired < n_seeds * n_folds` (or
+# `n_cells_evaluated < n_seeds * n_folds` for the B5-shaped
+# schemas), which means `format_ci_cell` is called with
+# `partial=True` and appends the trailing `*`. Requiring the
+# asterisk closes the qa-R1-I2 mutation-sensitivity gap: a
+# hardwired `partial=False` at any of the four renderer call
+# sites would drop the asterisk and fail this regex, even
+# though the numeric interval would still render correctly.
+# The four floats are formatted via `format_ci_cell` with
+# `%.4f`.
+_CI_CELL_RE = re.compile(r"-?\d+\.\d{4} \[-?\d+\.\d{4}, -?\d+\.\d{4}\]\*")
 
 
 def _make_pairwise_manifest() -> pd.DataFrame:

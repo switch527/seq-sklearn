@@ -217,7 +217,7 @@ def load_rollup(root: Path) -> list[RollupRow]:
 class PairwiseRollupRow(BaseModel):
     """One per-(dataset, model_a, model_b, task_type) pairwise CI entry.
 
-    The `primary_loss_*` field names mirror `RollupRow` so the
+    The `primary_metric_*` field names mirror `RollupRow` so the
     shared `format_ci_cell` helper works without a discriminator
     (B14.0). Here they carry the `complementarity_score` (B6's
     rank key). Skipped groups emit a sentinel row with
@@ -250,7 +250,7 @@ class PairwiseRollupRow(BaseModel):
 class TrainingTimeRollupRow(BaseModel):
     """One per-(dataset, model, hardware_tier, task_type) training-time CI entry.
 
-    The `primary_loss_*` field names mirror `RollupRow` so the
+    The `primary_metric_*` field names mirror `RollupRow` so the
     shared render helpers reuse without a discriminator
     (B14.0). Here they carry the `wall_seconds` aggregate. The
     grouping is by hardware_tier as well so CPU and GPU
@@ -373,7 +373,7 @@ class HPOUpliftRollupRow(BaseModel):
     paired (seed, fold) cells where BOTH default and tuned
     arms ran; each resample's mean is one Δ statistic.
 
-    Sentinel rows (`primary_loss_*=None`,
+    Sentinel rows (`primary_metric_*=None`,
     `bootstrap_skipped_reason` populated) cover four cases:
     `default_only`, `tuned_only`, `paired_but_no_valid_loss`
     (inherited from the existing B8 UpliftRow flags) plus
@@ -447,7 +447,7 @@ class EnsembleLiftRollupRow(BaseModel):
     GBM and the GBM+seq ensemble produced predictions; each
     resample's mean Δ is one statistic.
 
-    Sentinel rows (`primary_loss_*=None`,
+    Sentinel rows (`primary_metric_*=None`,
     `bootstrap_skipped_reason` populated) cover three cases
     matching B11's actual driver flags:
 
