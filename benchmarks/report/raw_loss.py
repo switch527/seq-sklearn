@@ -34,7 +34,11 @@ from typing import Any, cast
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from benchmarks.bootstrap_manifest import load_rollup, rollup_path
+from benchmarks.bootstrap_manifest import (
+    aggregator_failed_sentinel_path,
+    load_rollup,
+    rollup_path,
+)
 from benchmarks.manifest import load_run
 from benchmarks.run_manifest import load_run_manifest, run_manifest_path
 
@@ -331,22 +335,23 @@ def render_leaderboard_markdown_with_ci(
     `(dataset_name, model_name, task_type)` and replaces the
     primary-loss `mean ± std` column with `mean [ci_lo, ci_hi]`.
 
-    Freshness check (Gemini-C3): when `expected_manifest_fingerprint`
-    is given AND any rollup row's `manifest_fingerprint` does not
-    match, the renderer falls back to the std variant and emits a
-    "rollup fingerprint mismatch" footnote.
+    Footnote-source precedence (evaluation order; each is
+    short-circuiting unless noted):
 
-    Aggregator-error footnote (Gemini-C1/C2 wrapper): when the CLI
-    wrapper caught a `RawRollupError`, the rollup list is empty and
-    `aggregator_error_class` carries the exception type name. The
-    renderer falls back to the std variant + emits a "Bootstrap
-    aggregator failed: <class>" footnote.
-
-    Manifest-unreadable footnote (R2 arch-I2): when the rollup is
-    present but the run_manifest.json could not be loaded (corrupt
-    JSON, schema mismatch), the CI variant still renders but
-    appends a "freshness check skipped" footnote so the reader
-    knows the CI was NOT verified against the live manifest.
+    1. `aggregator_error_class is not None` (Gemini-C1/C2 wrapper
+       caught a `RawRollupError`): std variant + "Bootstrap
+       aggregator failed: <class>" footnote. Nothing else
+       evaluated.
+    2. `not rollup` (no rollup ran; opt-out or absent file): std
+       variant; no footnote.
+    3. `expected_manifest_fingerprint` given AND any rollup row's
+       `manifest_fingerprint` mismatches (Gemini-C3 freshness):
+       std variant + "rollup is stale" footnote. Nothing else
+       evaluated.
+    4. CI variant body renders; if `manifest_unreadable=True`
+       (R2 arch-I2), append the "freshness check skipped"
+       footnote to the CI body (NOT short-circuiting, the CI
+       variant is what the reader sees).
 
     Args:
         manifest: the B5 manifest DataFrame (from `load_run`).
@@ -540,9 +545,6 @@ def _render_rollup_skipped_footnote(rollup_skipped: list[Any]) -> str:
     return "\n".join(lines)
 
 
-_BOOTSTRAP_AGGREGATOR_FAILED_SENTINEL = "bootstrap_aggregator_failed.txt"
-
-
 def render_from_dir(output_root: Path) -> str:
     """Convenience: load the manifest under `output_root` and render.
 
@@ -560,7 +562,7 @@ def render_from_dir(output_root: Path) -> str:
     # Gemini-C2 wrapper case: a failed aggregator dropped a sentinel
     # file naming the exception class. Render std + the failure
     # footnote.
-    failure_sentinel = output_root / _BOOTSTRAP_AGGREGATOR_FAILED_SENTINEL
+    failure_sentinel = aggregator_failed_sentinel_path(output_root)
     if failure_sentinel.exists():
         error_class = failure_sentinel.read_text(encoding="utf-8").strip()
         return render_leaderboard_markdown_with_ci(manifest, [], aggregator_error_class=error_class)

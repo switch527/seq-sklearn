@@ -31,7 +31,7 @@ from pydantic import ValidationError
 # test.
 import benchmarks.adapters  # pyright: ignore[reportUnusedImport]
 import benchmarks.datasets  # noqa: F401  # pyright: ignore[reportUnusedImport]
-from benchmarks.bootstrap_manifest import rollup_path
+from benchmarks.bootstrap_manifest import aggregator_failed_sentinel_path, rollup_path
 from benchmarks.config import BenchmarkConfig
 from benchmarks.experiments import (
     RunEnvironment,
@@ -287,7 +287,7 @@ def _run_bootstrap_rollup(
         # Successful aggregate: unlink any stale failure sentinel
         # from a prior run so the renderer surfaces the CI variant
         # rather than the std + footnote (B13.0 R2 arch-C1 close).
-        stale = output_root / "bootstrap_aggregator_failed.txt"
+        stale = aggregator_failed_sentinel_path(output_root)
         if stale.exists():
             stale.unlink(missing_ok=True)
         logger.info(
@@ -307,7 +307,7 @@ def _run_bootstrap_rollup(
         # Drop a sentinel file so the renderer surfaces the
         # "Bootstrap aggregator failed: <class>" footnote
         # (Gemini-C2 wrapper case + R1 code-I1 wire-up).
-        sentinel = output_root / "bootstrap_aggregator_failed.txt"
+        sentinel = aggregator_failed_sentinel_path(output_root)
         sentinel.write_text(type(exc).__name__, encoding="utf-8")
 
 

@@ -325,3 +325,75 @@ def test_render_from_dir_freshness_check_skipped_footnote_on_corrupt_manifest(
     assert "log_loss [95% CI]" in md
     # But footnote names the skipped freshness check.
     assert "Bootstrap freshness check skipped" in md
+
+
+def test_render_from_dir_falls_back_silently_when_rollup_file_exists_but_is_empty(
+    tmp_path: Path,
+) -> None:
+    """R2-confirming qa-I1: when `bootstrap_rollup.parquet` exists
+    on disk but deserializes to zero rows (truncated write,
+    aborted aggregator that left an empty parquet behind), the
+    renderer falls back to the std variant. No CI column, no
+    crash; the empty-parquet branch is exercised."""
+    from benchmarks.bootstrap_manifest import write_rollup
+    from benchmarks.config import BenchmarkConfig, ExperimentSpec
+    from benchmarks.experiments import build_run_environment, run_raw_loss
+    from benchmarks.report.raw_loss import render_from_dir
+
+    register_all_fakes_and_get_panels()
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(ExperimentSpec(kind="raw_loss", seeds=(0,)),),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_raw_loss(config, output_root=output_root, env=env)
+    # Write a rollup parquet that loads to zero rows.
+    write_rollup(output_root, [])
+
+    md = render_from_dir(output_root)
+    # Std variant active; CI column absent.
+    assert "log_loss (mean ± std)" in md
+    assert "log_loss [95% CI]" not in md
+
+
+def test_render_from_dir_renders_ci_without_freshness_footnote_when_manifest_absent(
+    tmp_path: Path,
+) -> None:
+    """R2-confirming qa-I2: when the rollup parquet is present and
+    non-empty but `run_manifest.json` is ABSENT (distinct from
+    corrupt), the CI variant renders without any freshness or
+    stale footnote. Absent-manifest is the silent path: it means
+    the CLI never wrote one and freshness-checking is opt-in."""
+    from benchmarks.bootstrap_manifest import write_rollup
+    from benchmarks.config import BenchmarkConfig, ExperimentSpec
+    from benchmarks.experiments import build_run_environment, run_raw_loss
+    from benchmarks.report.raw_loss import render_from_dir
+    from benchmarks.run_manifest import run_manifest_path
+
+    register_all_fakes_and_get_panels()
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(ExperimentSpec(kind="raw_loss", seeds=(0,)),),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_raw_loss(config, output_root=output_root, env=env)
+    # Deliberately omit write_run_manifest; assert it's absent.
+    assert not run_manifest_path(output_root).exists()
+    write_rollup(output_root, [_rollup_row(manifest_fingerprint="anything")])
+
+    md = render_from_dir(output_root)
+    # CI variant renders (rollup present).
+    assert "log_loss [95% CI]" in md
+    # No freshness footnotes: neither stale-rollup nor manifest-unreadable.
+    assert "Bootstrap rollup is stale" not in md
+    assert "Bootstrap freshness check skipped" not in md

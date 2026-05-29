@@ -279,13 +279,14 @@ either side doesn't silently break the contract.
   emits a `### Bootstrap aggregator failed` footnote naming
   the exception class.
 - **Lifecycle**: the producer writes on every aggregator
-  failure; the consumer never deletes it. A subsequent
-  successful run that produces a valid rollup AND leaves the
-  sentinel in place will surface the std variant + footnote
-  (the sentinel check fires first); the run.py wrapper SHOULD
-  unlink the sentinel on a successful aggregate call to avoid
-  this stickiness. v1 ships without the cleanup; a v1.1
-  followup adds it.
+  failure; the consumer never deletes it. The producer ALSO
+  unlinks the sentinel on every subsequent successful
+  `aggregate_bootstrap_rollup` call (`benchmarks/run.py:_run_bootstrap_rollup`
+  at the success branch, AFTER the rollup parquet is durable)
+  so a recovery run produces the CI variant rather than the
+  std + stale-footnote. Without this cleanup the renderer
+  would surface the failure footnote indefinitely once a
+  single aggregator failure landed.
 
 The two named raise sites:
 - Loader row-count drift (R7 defensive sort).
@@ -499,6 +500,33 @@ footnote naming the exception class that the wrapper logged.
 This distinguishes the absent-due-to-disabled (opt-out flag,
 no footnote) case from the absent-due-to-failure
 (wrapper-caught, footnote present) case.
+
+FOURTH footnote source (R2 arch-I2): when the rollup file is
+PRESENT and non-empty, but `run_manifest.json` exists yet
+fails to load (corrupt JSON, schema mismatch), the renderer
+STILL emits the CI variant (the rollup is the load-bearing
+artifact, not the manifest) but appends a "Bootstrap freshness
+check skipped: `run_manifest.json` is corrupt or
+schema-mismatched" footnote so the reader knows the
+freshness check was bypassed. This is distinct from the
+manifest-ABSENT case (silent fall through with no footnote)
+because absent means "the CLI never wrote one and freshness
+checking is opt-in", whereas corrupt means "an attempt was
+made and silently dropping the failure would mask the bug".
+
+Footnote-source precedence in
+`render_leaderboard_markdown_with_ci` (in evaluation order):
+1. `aggregator_error_class is not None` (wrapper-caught
+   failure): std variant + "aggregator failed" footnote;
+   nothing else evaluated.
+2. `not rollup` (no rollup ran; opt-out or absent file):
+   std variant; no footnote.
+3. `expected_manifest_fingerprint` set AND any rollup row's
+   fingerprint mismatches: std variant + "rollup is stale"
+   footnote; nothing else evaluated.
+4. CI variant renders; if `manifest_unreadable=True` the
+   "freshness check skipped" footnote is appended to the
+   CI body.
 
 ### B13.5 CLI dispatch + B9 assembled report
 
@@ -1032,6 +1060,43 @@ inline. NITs deferred (run.py:427 line citation, exception-
 class name pin in the wrapper test) are tractable doc/test-
 description tightenings.
 
+### R2-confirming swarm closure (post-build, on commit 717669e)
+
+R2-confirming dual-model swarm: code-reviewer (0C/1I/1N),
+architecture-reviewer (1C/3I/2N), qa-test-coverage
+(0C/2I/1N), style-reviewer (0C/0I/1N). Total: 1 CRITICAL, 6
+IMPROVEMENT, 4 NITPICK. Closures:
+
+- **arch-C1** (B13.0 lifecycle bullet contradicted shipped
+  code): the v1.1-followup wording was rewritten to describe
+  the cleanup that R2 actually shipped (`run.py:_run_bootstrap_rollup`
+  unlinks the sentinel on every successful aggregate AFTER
+  the rollup parquet is durable).
+- **arch-I1** (sentinel filename literal duplicated
+  writer/reader): the bare string
+  `"bootstrap_aggregator_failed.txt"` is now defined in
+  `benchmarks/bootstrap_manifest.py:_AGGREGATOR_FAILED_SENTINEL_FILENAME`
+  with a public `aggregator_failed_sentinel_path(root)`
+  helper. Both `benchmarks/run.py` (writer) and
+  `benchmarks/report/raw_loss.py` (reader) call the helper.
+- **arch-I2** (`render_leaderboard_markdown_with_ci`
+  docstring missing precedence): the docstring now lists
+  the four footnote sources in evaluation order with
+  short-circuit semantics named per branch.
+- **arch-I3** (B13.4 enumerates only three footnote
+  sources): added the FOURTH footnote source
+  (manifest-unreadable / R2 arch-I2) plus a precedence-order
+  recap that mirrors the docstring.
+- **qa-I1** (empty-rollup-list branch untested): test
+  `test_render_from_dir_falls_back_silently_when_rollup_file_exists_but_is_empty`
+  added.
+- **qa-I2** (rollup-present + manifest-absent untested):
+  test `test_render_from_dir_renders_ci_without_freshness_footnote_when_manifest_absent`
+  added.
+- **qa-N1** (stale-sentinel test post-state-only assertion):
+  the stale-sentinel test now asserts the rollup parquet is
+  byte-non-empty via `.stat().st_size > 0`.
+
 ## Deferred
 
 Doc-only polish or non-blocking strengthenings from all six
@@ -1051,3 +1116,21 @@ rounds:
   numeric line citation; exception-class-name pin in the
   CLI-wrapper test assertion. Both tightenings are
   implementation-time concerns.
+- **R2-confirming code-I1** (`FileNotFoundError` in the
+  three-way except tuple at `raw_loss.py:579-583`): the
+  guard at line 576 makes this branch unreachable in the
+  no-TOCTOU case; kept for symmetry with the same handler
+  shape in `run.py:_run_bootstrap_rollup` and to fail
+  closed on a delete-between-exists-and-read race. Cosmetic;
+  no production impact.
+- **R2-confirming arch-N1** ("typed surface" naming
+  mismatches the bare-string FS sentinel): naming polish in
+  B13.0; the helper `aggregator_failed_sentinel_path` now
+  IS the typed surface, so the section heading is
+  consistent with the artifact in code.
+- **R2-confirming arch-N2** (strict-ordering assertion in
+  the stale-sentinel test): the post-state assertion +
+  byte-non-empty parquet assertion together pin the
+  ordering invariant; a strict before/after order
+  assertion would require a callable-spy fixture that is
+  out of scope at this stage.

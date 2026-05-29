@@ -22,12 +22,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "RollupRow",
+    "aggregator_failed_sentinel_path",
     "load_rollup",
     "rollup_path",
     "write_rollup",
 ]
 
 _ROLLUP_FILENAME = "bootstrap_rollup.parquet"
+_AGGREGATOR_FAILED_SENTINEL_FILENAME = "bootstrap_aggregator_failed.txt"
 
 
 class RollupRow(BaseModel):
@@ -71,6 +73,17 @@ class RollupRow(BaseModel):
 def rollup_path(root: Path) -> Path:
     """`{root}/bootstrap_rollup.parquet`."""
     return root / _ROLLUP_FILENAME
+
+
+def aggregator_failed_sentinel_path(root: Path) -> Path:
+    """`{root}/bootstrap_aggregator_failed.txt`.
+
+    Cross-module FS contract (B13.0): the CLI wrapper writes
+    this file on `RawRollupError`; the renderer reads it before
+    rollup dispatch. Single source of truth so a future
+    maintainer changing either side cannot drift the filename.
+    """
+    return root / _AGGREGATOR_FAILED_SENTINEL_FILENAME
 
 
 def write_rollup(root: Path, rows: Sequence[RollupRow]) -> None:

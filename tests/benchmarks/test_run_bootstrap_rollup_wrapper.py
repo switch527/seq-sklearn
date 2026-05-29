@@ -203,6 +203,8 @@ def test_run_bootstrap_rollup_unlinks_stale_failure_sentinel_on_success(
     sentinel.write_text("RawRollupError", encoding="utf-8")
     assert sentinel.exists()
     _run_bootstrap_rollup(config, env=env, output_root=output_root)
-    # Sentinel removed; rollup written.
+    # Sentinel removed; rollup written and non-empty (a zero-byte
+    # parquet would be a regression on the write contract).
     assert not sentinel.exists()
     assert rollup_path(output_root).exists()
+    assert rollup_path(output_root).stat().st_size > 0
