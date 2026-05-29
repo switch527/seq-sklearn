@@ -1,8 +1,10 @@
 """Phase B16 D-B13.4 ensemble-lift renderer tests.
 
-21 named tests per the B16.6 design enumeration:
-- 15 footnote-precedence + behavior tests
-- 6 render_from_dir dispatch tests
+24 named tests:
+- 15 footnote-precedence + behavior tests (B16.6 design)
+- 6 render_from_dir dispatch tests (B16.6 design)
+- 3 Stage 3 R1 closure tests (manifest-absent dispatch,
+  empty-rollup fallback, dead-predicate mutation pin)
 """
 
 from pathlib import Path
