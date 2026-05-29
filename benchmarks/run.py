@@ -77,7 +77,9 @@ from benchmarks.report.bootstrap_training_time import (
     is_training_time_rollup_enabled,
 )
 from benchmarks.report.ensemble import render_from_dir as render_pairwise_from_dir
-from benchmarks.report.ensemble_lift import render_ensemble_lift_markdown
+from benchmarks.report.ensemble_lift import (
+    render_from_dir as render_ensemble_lift_from_dir,
+)
 from benchmarks.report.hpo_uplift import render_from_dir as render_hpo_uplift_from_dir
 from benchmarks.report.raw_loss import render_from_dir as render_leaderboard_from_dir
 from benchmarks.report.render import REPORT_FILENAME, render_report_from_dir
@@ -260,11 +262,14 @@ def _dispatch_kinds(
                 lift_result.wilcoxon.family_size,
                 lift_result.run_id,
             )
-            lift_md = render_ensemble_lift_markdown(lift_result)
+            # B16 D-B13.4: the bootstrap-CI rollup runs BEFORE the
+            # markdown render so `render_from_dir` can dispatch to
+            # the CI variant when the shard is present.
+            _run_bootstrap_ensemble_lift_rollup(config, env=env, output_root=output_root)
+            lift_md = render_ensemble_lift_from_dir(output_root, lift_result=lift_result)
             lift_path = output_root / "ensemble_lift.md"
             atomic_write_bytes(lift_md.encode("utf-8"), lift_path)
             logger.info("ensemble_lift report written to %s", lift_path)
-            _run_bootstrap_ensemble_lift_rollup(config, env=env, output_root=output_root)
         else:
             logger.error(
                 "experiment driver for kind=%s not yet implemented; "
