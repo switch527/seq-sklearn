@@ -725,7 +725,7 @@ with rationale):
   was the alternative; option (a) (drop) was chosen.
 - **style-N1**: D-B16.4/5/6 line-wrap preserves clarity.
 
-### Stage 1 R1 swarm closure (commit `5299eeb`)
+### Stage 1 R1 swarm closure (impl `5299eeb`, closure `8674fee`)
 
 Stage 1 confirming swarm: code-reviewer (0C/1I/1N APPROVE),
 architecture-reviewer (0C/0I/0N APPROVE), qa-test-coverage
@@ -748,11 +748,22 @@ Total: 0 CRITICAL, 3 IMPROVEMENT, 2 NITPICK. Closures:
   cannot silently exempt B11.
 - **qa-R1-I2** (no dedicated atomic-replace overwrite test
   for `write_ensemble_lift_rollup`): DEFERRED. The
-  `_write_rows_atomic` helper is shared with B14/B15 and
-  the atomic-replace contract is already pinned end-to-end
-  by `test_write_rollup_atomic_replace_on_overwrite` against
-  the same helper; B16 invokes it with the same arguments
-  shape as B15. No silent-failure risk.
+  `_write_rows_atomic` helper is shared with B14
+  (`write_pairwise_rollup`, `write_training_time_rollup`)
+  and B15 (`write_hpo_uplift_rollup`). B16's
+  `write_ensemble_lift_rollup` invokes it with the same
+  arguments shape. The helper is exercised transitively by
+  the B14/B15 round-trip tests
+  (`test_write_pairwise_rollup_then_load_round_trips_all_fields`,
+  `test_write_training_time_rollup_then_load_round_trips_all_fields`,
+  `test_write_hpo_uplift_rollup_then_load_round_trips_all_fields`)
+  which prove the write/read contract end-to-end. The
+  baseline `test_write_rollup_atomic_replace_on_overwrite`
+  exercises `write_rollup`'s own inline implementation, NOT
+  `_write_rows_atomic`; the helper's `tmp.replace(dest)` is
+  a single OS call with no branching, so the risk of
+  silent failure on overwrite-via-`_write_rows_atomic` is
+  bounded. No silent-failure risk on the B16-specific path.
 - **qa-R1-N1** (`manifest_fingerprint` accepts any string;
   no SHA-256 `pattern=` constraint): DEFERRED under D-B16.5
   (coordinated rename + audit across all five RollupRow
