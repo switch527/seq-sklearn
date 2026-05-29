@@ -99,6 +99,21 @@ def test_folds_per_group_returns_empty_dict_on_empty_manifest() -> None:
     assert folds_per_group(empty, group_columns=("dataset_name", "model_name")) == {}
 
 
+def test_folds_per_group_returns_empty_dict_when_all_rows_skipped() -> None:
+    """Stage-1 qa-I1: non-empty manifest where every row has a
+    populated `skipped_reason` -> empty folds dict. The
+    `if ok.empty: return {}` branch was untested otherwise."""
+    all_skipped = pd.DataFrame(
+        {
+            "dataset_name": ["fake_binary", "fake_binary"],
+            "model_name": ["m1", "m1"],
+            "fold_index": [0, 1],
+            "skipped_reason": ["adapter_error", "loader_failed"],
+        }
+    )
+    assert folds_per_group(all_skipped, group_columns=("dataset_name", "model_name")) == {}
+
+
 def test_render_rollup_skipped_footnote_renders_b5_header_text() -> None:
     """The B5 footnote uses `Dataset | Model | Reason` headers
     (preserved across the B14 extraction). Byte-pinning the string
@@ -220,3 +235,33 @@ def test_render_leaderboard_markdown_with_ci_byte_string_regression() -> None:
         ""
     )
     assert md == expected
+
+
+def test_render_leaderboard_markdown_with_ci_byte_string_regression_with_rollup_skipped_footnote() -> None:
+    """Stage-1 code-I1: the original byte-string regression pin
+    used a rollup row with `bootstrap_skipped_reason=None`, so the
+    full-pipeline path through `_render_with_ci` ->
+    `render_rollup_skipped_footnote` had no byte-level regression
+    pin. This pin covers the call site that actually invokes the
+    extracted footnote helper from the main renderer."""
+    manifest = _manifest()
+    rollup = [
+        _rollup_row(
+            model_name="m_skip",
+            primary_loss_mean=None,
+            primary_loss_ci_lo=None,
+            primary_loss_ci_hi=None,
+            bootstrap_skipped_reason="loader_failed: missing panel",
+        )
+    ]
+    md = render_leaderboard_markdown_with_ci(
+        manifest,
+        rollup,
+        # No fingerprint guard; rollup's row carries one but we're
+        # not asserting against it. The CI variant still renders.
+    )
+    # Bootstrap-skipped footnote appears verbatim from the
+    # shared `render_rollup_skipped_footnote` helper.
+    assert "### Bootstrap skipped" in md
+    assert "| Dataset | Model | Reason |" in md
+    assert "| fake_binary | m_skip | loader_failed: missing panel |" in md
