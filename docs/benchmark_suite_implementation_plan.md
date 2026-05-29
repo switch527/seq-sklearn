@@ -1129,7 +1129,7 @@ contradiction + internal inconsistency in B13.0) + R6 APPROVE.
   regression as squared error), calls the primitive with
   per-task `metric_fn` (`np.nanmean` for classification,
   `sqrt(np.nanmean(.))` for regression so sqrt applies PER
-  RESAMPLE — closes Gemini-C1 Jensen gap), emits `RollupRow`
+  RESAMPLE, closing the Gemini-C1 Jensen gap), emits `RollupRow`
   per (dataset, model, task_type). Row-count ceiling
   `5e10` gates OOM on huge datasets (D-B13.7 names the
   sufficient-statistics optimization for the followup).

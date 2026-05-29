@@ -273,7 +273,7 @@ def _run_bootstrap_rollup(
         return
     try:
         manifest = load_run_manifest(output_root)
-    except Exception as exc:
+    except (FileNotFoundError, ValueError, ValidationError) as exc:
         logger.warning(
             "bootstrap_rollup: skipped (failed to load run_manifest.json: %s: %s)",
             type(exc).__name__,
@@ -298,6 +298,11 @@ def _run_bootstrap_rollup(
         path = rollup_path(output_root)
         if path.exists():
             path.unlink(missing_ok=True)
+        # Drop a sentinel file so the renderer surfaces the
+        # "Bootstrap aggregator failed: <class>" footnote
+        # (Gemini-C2 wrapper case + R1 code-I1 wire-up).
+        sentinel = output_root / "bootstrap_aggregator_failed.txt"
+        sentinel.write_text(type(exc).__name__, encoding="utf-8")
 
 
 def _load_config(path: Path) -> BenchmarkConfig:

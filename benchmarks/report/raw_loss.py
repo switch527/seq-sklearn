@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pandas as pd
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from benchmarks.manifest import load_run
 
@@ -519,18 +519,55 @@ def _render_rollup_skipped_footnote(rollup_skipped: list[Any]) -> str:
     return "\n".join(lines)
 
 
+_BOOTSTRAP_AGGREGATOR_FAILED_SENTINEL = "bootstrap_aggregator_failed.txt"
+
+
 def render_from_dir(output_root: Path) -> str:
     """Convenience: load the manifest under `output_root` and render.
 
     The CLI calls this after `run_raw_loss` finishes so the
     leaderboard markdown is written next to the manifest shards.
-    The CI variant kicks in when a rollup file is present.
+    The CI variant kicks in when a rollup file is present AND the
+    rollup's `manifest_fingerprint` matches the live run manifest's
+    (Gemini-C3 freshness check). When the CLI wrapper caught a
+    `RawRollupError` and wrote `bootstrap_aggregator_failed.txt`,
+    the renderer surfaces the "Bootstrap aggregator failed"
+    footnote in the std fallback (B13.0 + Gemini-C2 wrapper case).
     """
-    manifest = load_run(output_root)
     from benchmarks.bootstrap_manifest import load_rollup, rollup_path
+    from benchmarks.run_manifest import load_run_manifest, run_manifest_path
+
+    manifest = load_run(output_root)
+
+    # Gemini-C2 wrapper case: a failed aggregator dropped a sentinel
+    # file naming the exception class. Render std + the failure
+    # footnote.
+    failure_sentinel = output_root / _BOOTSTRAP_AGGREGATOR_FAILED_SENTINEL
+    if failure_sentinel.exists():
+        error_class = failure_sentinel.read_text(encoding="utf-8").strip()
+        return render_leaderboard_markdown_with_ci(manifest, [], aggregator_error_class=error_class)
 
     if rollup_path(output_root).exists():
         rollup = load_rollup(output_root)
         if rollup:
-            return render_leaderboard_markdown_with_ci(manifest, rollup)
+            # Gemini-C3 freshness check: pass the live manifest's
+            # fingerprint so a stale rollup falls back to the std
+            # variant with a "rollup is stale" footnote. Manifest
+            # load is best-effort; absence means no fingerprint
+            # check (the CI variant renders without verification).
+            expected: str | None = None
+            if run_manifest_path(output_root).exists():
+                try:
+                    run_manifest = load_run_manifest(output_root)
+                except (
+                    FileNotFoundError,
+                    ValueError,
+                    ValidationError,
+                ):
+                    run_manifest = None
+                if run_manifest is not None:
+                    expected = run_manifest.fingerprint()
+            return render_leaderboard_markdown_with_ci(
+                manifest, rollup, expected_manifest_fingerprint=expected
+            )
     return render_leaderboard_markdown(manifest)

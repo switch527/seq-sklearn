@@ -175,3 +175,117 @@ def test_render_leaderboard_markdown_keeps_std_signature(tmp_path: Path) -> None
     manifest = _run_b5(tmp_path)
     md = render_leaderboard_markdown(manifest)
     assert "log_loss (mean ± std)" in md
+
+
+def test_render_from_dir_passes_freshness_fingerprint_at_cli_seam(
+    tmp_path: Path,
+) -> None:
+    """R1 code-I1: `render_from_dir` must pass the live manifest's
+    fingerprint to the CI variant so Gemini-C3 freshness check
+    fires in CLI path, not just unit tests. With a fresh rollup +
+    matching manifest, the CI variant renders."""
+    from benchmarks.bootstrap_manifest import write_rollup
+    from benchmarks.config import BenchmarkConfig, ExperimentSpec
+    from benchmarks.experiments import build_run_environment, run_raw_loss
+    from benchmarks.report.raw_loss import render_from_dir
+    from benchmarks.run_manifest import build_run_manifest, write_run_manifest
+
+    register_all_fakes_and_get_panels()
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(ExperimentSpec(kind="raw_loss", seeds=(0,)),),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_raw_loss(config, output_root=output_root, env=env)
+    manifest = build_run_manifest(
+        config=config,
+        run_id="r1",
+        library_git_sha="0" * 40,
+        profile="smoke",
+        hardware_tier="cpu",
+        output_root=output_root,
+    )
+    write_run_manifest(output_root, manifest)
+    fresh_fp = manifest.fingerprint()
+    write_rollup(output_root, [_rollup_row(manifest_fingerprint=fresh_fp)])
+
+    md = render_from_dir(output_root)
+    assert "log_loss [95% CI]" in md  # CI variant active
+
+
+def test_render_from_dir_falls_back_on_stale_rollup_at_cli_seam(
+    tmp_path: Path,
+) -> None:
+    """R1 code-I1 + Gemini-C3: a rollup with a STALE manifest_
+    fingerprint (e.g., from a prior run with different library
+    SHA) triggers the std fallback + "rollup is stale" footnote
+    when invoked through `render_from_dir`."""
+    from benchmarks.bootstrap_manifest import write_rollup
+    from benchmarks.config import BenchmarkConfig, ExperimentSpec
+    from benchmarks.experiments import build_run_environment, run_raw_loss
+    from benchmarks.report.raw_loss import render_from_dir
+    from benchmarks.run_manifest import build_run_manifest, write_run_manifest
+
+    register_all_fakes_and_get_panels()
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(ExperimentSpec(kind="raw_loss", seeds=(0,)),),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_raw_loss(config, output_root=output_root, env=env)
+    manifest = build_run_manifest(
+        config=config,
+        run_id="r1",
+        library_git_sha="0" * 40,
+        profile="smoke",
+        hardware_tier="cpu",
+        output_root=output_root,
+    )
+    write_run_manifest(output_root, manifest)
+    # Stale rollup carries a fingerprint that does NOT match the
+    # live manifest's.
+    write_rollup(output_root, [_rollup_row(manifest_fingerprint="stale_fp_xxx")])
+
+    md = render_from_dir(output_root)
+    assert "Bootstrap rollup is stale" in md
+    assert "log_loss (mean ± std)" in md  # std fallback active
+
+
+def test_render_from_dir_surfaces_aggregator_failed_sentinel(
+    tmp_path: Path,
+) -> None:
+    """R1 code-I1: when the CLI wrapper dropped a
+    `bootstrap_aggregator_failed.txt` sentinel (Gemini-C2 wrapper
+    case), `render_from_dir` reads the sentinel and surfaces the
+    'Bootstrap aggregator failed: <class>' footnote in the std
+    fallback."""
+    from benchmarks.config import BenchmarkConfig, ExperimentSpec
+    from benchmarks.experiments import build_run_environment, run_raw_loss
+    from benchmarks.report.raw_loss import render_from_dir
+
+    register_all_fakes_and_get_panels()
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(ExperimentSpec(kind="raw_loss", seeds=(0,)),),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_raw_loss(config, output_root=output_root, env=env)
+    (output_root / "bootstrap_aggregator_failed.txt").write_text("RawRollupError", encoding="utf-8")
+    md = render_from_dir(output_root)
+    assert "Bootstrap aggregator failed" in md
+    assert "RawRollupError" in md

@@ -139,3 +139,16 @@ def test_rollup_row_extra_forbid_rejects_unknown_field() -> None:
     drift surfaces at construction time."""
     with pytest.raises(Exception, match="extra"):
         RollupRow.model_validate({**_make_row().model_dump(), "ghost": 1})
+
+
+# --- ExperimentSpec extension validation -----------------------------------
+
+
+def test_experiment_spec_bootstrap_n_resamples_below_one_raises_validation() -> None:
+    """N1: `bootstrap_n_resamples` has `Field(ge=1)`; 0 must
+    raise pydantic `ValidationError` at construction."""
+    from benchmarks.config import ExperimentSpec
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="bootstrap_n_resamples"):
+        ExperimentSpec(kind="raw_loss", bootstrap_n_resamples=0)

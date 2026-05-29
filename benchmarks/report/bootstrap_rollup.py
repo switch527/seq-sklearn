@@ -45,7 +45,10 @@ from benchmarks.bootstrap_manifest import RollupRow, write_rollup
 from benchmarks.config import BenchmarkConfig, ExperimentSpec
 from benchmarks.experiments.raw_loss import RunEnvironment
 from benchmarks.manifest import load_run
-from benchmarks.metrics.bootstrap import entity_block_bootstrap_ci
+from benchmarks.metrics.bootstrap import (
+    BOOTSTRAP_RNG_ALGORITHM,
+    entity_block_bootstrap_ci,
+)
 from benchmarks.metrics.pairwise import classification_nll
 from benchmarks.predictions import (
     has_predictions,
@@ -279,6 +282,7 @@ def _build_group_rollup(
             primary_loss_ci_hi=None,
             bootstrap_seed=_BOOTSTRAP_DEFAULT_SEED,
             bootstrap_n_resamples=n_resamples,
+            bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
             bootstrap_confidence=_BOOTSTRAP_CONFIDENCE,
             bootstrap_numpy_version=_numpy_version(),
             bootstrap_skipped_reason="all_cells_skipped_in_manifest",
@@ -338,6 +342,7 @@ def _build_group_rollup(
             primary_loss_ci_hi=None,
             bootstrap_seed=_BOOTSTRAP_DEFAULT_SEED,
             bootstrap_n_resamples=n_resamples,
+            bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
             bootstrap_confidence=_BOOTSTRAP_CONFIDENCE,
             bootstrap_numpy_version=_numpy_version(),
             bootstrap_skipped_reason="all_predictions_shards_missing_or_unloadable",
@@ -382,6 +387,7 @@ def _build_group_rollup(
         primary_loss_ci_hi=ci_hi,
         bootstrap_seed=_BOOTSTRAP_DEFAULT_SEED,
         bootstrap_n_resamples=n_resamples,
+        bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
         bootstrap_confidence=_BOOTSTRAP_CONFIDENCE,
         bootstrap_numpy_version=_numpy_version(),
         bootstrap_skipped_reason=None,

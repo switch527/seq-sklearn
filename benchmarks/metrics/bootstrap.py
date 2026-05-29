@@ -45,6 +45,10 @@ __all__ = [
 _DEFAULT_N_RESAMPLES: int = 10_000
 _DEFAULT_SEED: int = 0xB13_5EED_B007
 _DEFAULT_CONFIDENCE: float = 0.95
+# RNG-algorithm pin (Gemini-I2 + R-B13-2): explicit so the
+# aggregator can record the actual algorithm name on every
+# RollupRow without re-deriving it from `type(rng).__name__`.
+BOOTSTRAP_RNG_ALGORITHM: str = "PCG64"
 
 
 def _default_metric_fn(x: np.ndarray) -> float:

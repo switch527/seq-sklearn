@@ -139,3 +139,50 @@ def test_run_bootstrap_rollup_skips_silently_when_run_manifest_absent(
     # NO run_manifest.json written.
     _run_bootstrap_rollup(config, env=env, output_root=output_root)
     assert not rollup_path(output_root).exists()
+
+
+def test_run_bootstrap_rollup_skips_silently_when_run_manifest_load_fails(
+    tmp_path: Path,
+) -> None:
+    """qa-I2: when `load_run_manifest` raises (e.g., corrupt JSON),
+    the wrapper logs + returns; no rollup is written and no
+    exception propagates."""
+    register_all_fakes_and_get_panels()
+    config = _build_config(tmp_path=tmp_path)
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_raw_loss(config, output_root=output_root, env=env)
+    # Write a corrupt run_manifest.json so the load step raises.
+    from benchmarks.run_manifest import run_manifest_path
+
+    run_manifest_path(output_root).write_bytes(b"{not valid json")
+    _run_bootstrap_rollup(config, env=env, output_root=output_root)
+    assert not rollup_path(output_root).exists()
+
+
+def test_run_bootstrap_rollup_writes_failure_sentinel_on_raw_rollup_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R1 code-I1: when the aggregator raises RawRollupError, the
+    wrapper drops `bootstrap_aggregator_failed.txt` so
+    `render_from_dir` surfaces the "Bootstrap aggregator failed"
+    footnote in the std fallback (wire-up the renderer's
+    `aggregator_error_class` path that was dead in CLI before)."""
+    config = _build_config(tmp_path=tmp_path)
+    output_root = _run_b5_and_manifest(tmp_path, config)
+    env = build_run_environment(profile="smoke")
+
+    from benchmarks.report.bootstrap_rollup import RawRollupError as _Err
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise _Err("simulated aggregator failure")
+
+    import benchmarks.run as _run_module
+
+    monkeypatch.setattr(_run_module, "aggregate_bootstrap_rollup", _boom)
+    _run_bootstrap_rollup(config, env=env, output_root=output_root)
+    sentinel = output_root / "bootstrap_aggregator_failed.txt"
+    assert sentinel.exists()
+    assert sentinel.read_text(encoding="utf-8").strip() == "RawRollupError"
