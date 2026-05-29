@@ -38,9 +38,20 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from benchmarks.bootstrap_manifest import (
+    HPOUpliftRollupRow,
+    hpo_uplift_aggregator_failed_sentinel_path,
+    hpo_uplift_rollup_path,
+    load_hpo_uplift_rollup,
+)
 from benchmarks.manifest import load_run
+from benchmarks.report._bootstrap_render import (
+    format_ci_cell,
+    render_rollup_skipped_footnote,
+)
+from benchmarks.run_manifest import load_run_manifest, run_manifest_path
 from benchmarks.stats.friedman import FriedmanHolmResult, friedman_holm
 
 logger = logging.getLogger(__name__)
@@ -603,6 +614,236 @@ def render_hpo_uplift_markdown(
     return "\n".join(parts)
 
 
+def render_hpo_uplift_markdown_with_ci(
+    manifest: pd.DataFrame,
+    rollup: list[HPOUpliftRollupRow],
+    *,
+    reference_model: str = _DEFAULT_REFERENCE_MODEL,
+    expected_manifest_fingerprint: str | None = None,
+    aggregator_error_class: str | None = None,
+    manifest_unreadable: bool = False,
+) -> str:
+    """Render the HPO-uplift report with B15 paired Δ CIs.
+
+    Joins the manifest's UpliftRow data with the rollup table on
+    (dataset_name, model_name, task_type) and replaces the bare
+    `delta` column with `Δ [95% CI]`.
+
+    Footnote-source precedence (B15.4):
+
+    1. `aggregator_error_class is not None`: std variant +
+       "Bootstrap aggregator failed: <class>" footnote.
+    2. `not rollup`: std variant silently.
+    3. `expected_manifest_fingerprint` set AND any row mismatch:
+       std variant + "rollup is stale" footnote.
+    4. CI variant body renders; if `manifest_unreadable=True`,
+       append "freshness check skipped" footnote.
+    5. CI body iteration: if ANY rollup row has
+       `n_skipped_cells > 0`, append a "Partial coverage"
+       footnote. Independent from sources 1-4.
+    """
+    if aggregator_error_class is not None:
+        std_body = render_hpo_uplift_markdown(manifest, reference_model=reference_model)
+        footnote = (
+            "\n### Bootstrap aggregator failed\n\n"
+            f"_The B15 HPO-uplift bootstrap-rollup aggregator raised "
+            f"`{aggregator_error_class}`; the report above is rendered "
+            "in the legacy mean-only shape. See the run logs._\n"
+        )
+        return std_body + footnote
+
+    if not rollup:
+        return render_hpo_uplift_markdown(manifest, reference_model=reference_model)
+
+    if expected_manifest_fingerprint is not None and any(
+        row.manifest_fingerprint != expected_manifest_fingerprint for row in rollup
+    ):
+        std_body = render_hpo_uplift_markdown(manifest, reference_model=reference_model)
+        footnote = (
+            "\n### Bootstrap rollup is stale\n\n"
+            "_The B15 HPO-uplift bootstrap-rollup file's "
+            "manifest_fingerprint does not match the current manifest's; "
+            "the CI variant was suppressed for safety._\n"
+        )
+        return std_body + footnote
+
+    body = _render_with_ci_hpo_uplift(
+        manifest, rollup, reference_model=reference_model
+    )
+    if manifest_unreadable:
+        body += (
+            "\n### Bootstrap freshness check skipped\n\n"
+            "_The B15 HPO-uplift freshness check could not run because "
+            "`run_manifest.json` is corrupt or schema-mismatched._\n"
+        )
+    return body
+
+
+def _render_with_ci_hpo_uplift(
+    manifest: pd.DataFrame,
+    rollup: list[HPOUpliftRollupRow],
+    *,
+    reference_model: str,
+) -> str:
+    """Joins the manifest's UpliftRow data with the rollup; emits
+    the per-dataset table with the CI column replacing the bare
+    Δ; preserves the Friedman/Holm block unchanged."""
+    report = build_hpo_uplift_report(manifest, reference_model=reference_model)
+    rollup_index: dict[tuple[str, str, str], HPOUpliftRollupRow] = {}
+    for row in rollup:
+        rollup_index[(row.dataset_name, row.model_name, row.task_type)] = row
+
+    rows = list(report.rows)
+    by_dataset: dict[str, list[UpliftRow]] = {}
+    for row in rows:
+        if row.delta is None:
+            continue
+        by_dataset.setdefault(row.dataset_name, []).append(row)
+
+    parts = [
+        "# HPO-uplift report",
+        "",
+        (
+            "_Δ = default_mean - tuned_mean on the primary loss "
+            "(positive Δ means tuning helped). search_space_size is "
+            "the registered dimensionality from `benchmarks.hpo.<family>`; "
+            "v1 does not normalize across families per design B6.4.0._"
+        ),
+        "",
+    ]
+    for dataset_name in sorted(by_dataset):
+        parts.append(
+            _render_dataset_block_with_ci(
+                dataset_name, by_dataset[dataset_name], rollup_index
+            )
+        )
+
+    if report.friedman is None:
+        matrix = _build_loss_matrix(rows)
+        if matrix.empty:
+            parts.append("_Friedman omnibus skipped: empty loss matrix._\n")
+        else:
+            parts.append(
+                f"_Friedman omnibus skipped: reference_model={reference_model!r} "
+                f"absent from matrix (have {sorted(matrix.index)})._\n"
+            )
+    else:
+        parts.append(_render_friedman_block(report.friedman))
+
+    footnote = _render_footnote(rows)
+    if footnote:
+        parts.append(footnote)
+
+    # Source 5: partial-coverage footnote (loss-dropout disclosure).
+    partial_coverage = _render_partial_coverage_footnote(rollup)
+    if partial_coverage:
+        parts.append(partial_coverage)
+
+    # New no_paired_cells sentinel rows route via the shared
+    # render_rollup_skipped_footnote helper. The three existing
+    # B8 sentinels (default_only, tuned_only,
+    # paired_but_no_valid_loss) flow through _render_footnote
+    # above on the UpliftRow side; we surface ONLY the
+    # no_paired_cells sentinel here.
+    no_paired = [r for r in rollup if r.bootstrap_skipped_reason == "no_paired_cells"]
+    if no_paired:
+        parts.append(
+            render_rollup_skipped_footnote(
+                no_paired,
+                group_columns=("dataset_name", "model_name"),
+                header_labels=("Dataset", "Model"),
+            )
+        )
+
+    return "\n".join(parts)
+
+
+def _render_dataset_block_with_ci(
+    dataset_name: str,
+    summaries: list[UpliftRow],
+    rollup_index: dict[tuple[str, str, str], HPOUpliftRollupRow],
+) -> str:
+    """CI variant of the per-dataset block. Replaces the bare
+    `delta` column with `Δ [95% CI]`. Keeps default_mean +
+    tuned_mean + secondary columns as-is."""
+    if not summaries:
+        return ""
+    task_type = summaries[0].task_type
+    primary_loss_column = summaries[0].primary_loss_column
+    header_cells = [
+        "model",
+        "n_cells",
+        "default_mean",
+        "tuned_mean",
+        "Δ [95% CI]",
+        "search_space_size",
+        "hpo_tier",
+        "n_trials_mean",
+        "time_to_best_s_mean",
+    ]
+    sep_cells = ["---"] * len(header_cells)
+    lines = [
+        f"### {dataset_name} ({task_type}, primary={primary_loss_column}, ranked by Δ DESC)",
+        "",
+        "| " + " | ".join(header_cells) + " |",
+        "| " + " | ".join(sep_cells) + " |",
+    ]
+    for summary in summaries:
+        if summary.delta is None:
+            continue
+        key = (summary.dataset_name, summary.model_name, summary.task_type)
+        rollup_row = rollup_index.get(key)
+        if rollup_row is None or rollup_row.bootstrap_skipped_reason is not None:
+            ci_cell = "(no CI)"
+        else:
+            expected = rollup_row.n_seeds * rollup_row.n_folds
+            partial = rollup_row.n_cells_paired < expected and expected > 0
+            ci_cell = format_ci_cell(
+                rollup_row.primary_loss_mean,
+                rollup_row.primary_loss_ci_lo,
+                rollup_row.primary_loss_ci_hi,
+                partial=partial,
+            )
+        row_cells = [
+            summary.model_name,
+            str(summary.n_cells_paired),
+            _format_value(summary.default_mean),
+            _format_value(summary.tuned_mean),
+            ci_cell,
+            _format_int(summary.hpo_search_space_size),
+            summary.hpo_tier or "",
+            _format_value(summary.hpo_n_trials_completed_mean, decimals=1),
+            _format_value(summary.hpo_time_to_best_seconds_mean, decimals=2),
+        ]
+        lines.append("| " + " | ".join(row_cells) + " |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_partial_coverage_footnote(rollup: list[HPOUpliftRollupRow]) -> str:
+    """Source 5: when ANY non-sentinel rollup row has
+    n_skipped_cells > 0, surface a "Partial coverage" footnote
+    listing per-(dataset, model) the n_skipped_cells /
+    n_cells_paired ratio."""
+    partial = [
+        r
+        for r in rollup
+        if r.bootstrap_skipped_reason is None and r.n_skipped_cells > 0
+    ]
+    if not partial:
+        return ""
+    lines = ["### Partial coverage", ""]
+    lines.append("| Dataset | Model | n_skipped_cells / n_cells_paired |")
+    lines.append("| --- | --- | --- |")
+    for r in partial:
+        lines.append(
+            f"| {r.dataset_name} | {r.model_name} | "
+            f"{r.n_skipped_cells} / {r.n_cells_paired} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_from_dir(
     output_root: Path,
     *,
@@ -610,8 +851,39 @@ def render_from_dir(
 ) -> str:
     """Convenience: load the manifest under `output_root` and render.
 
-    The CLI calls this after `run_hpo_uplift` returns; the driver
-    itself is filesystem-free and returns counters only.
+    The CI variant kicks in when a rollup file is present AND the
+    rollup's `manifest_fingerprint` matches the live run manifest's
+    (B15.4 freshness check). When the CLI wrapper caught a
+    `RawRollupError` and wrote the failure sentinel, the renderer
+    surfaces the std + footnote.
     """
     manifest = load_run(output_root)
+
+    failure_sentinel = hpo_uplift_aggregator_failed_sentinel_path(output_root)
+    if failure_sentinel.exists():
+        error_class = failure_sentinel.read_text(encoding="utf-8").strip()
+        return render_hpo_uplift_markdown_with_ci(
+            manifest, [], reference_model=reference_model, aggregator_error_class=error_class
+        )
+
+    if hpo_uplift_rollup_path(output_root).exists():
+        rollup = load_hpo_uplift_rollup(output_root)
+        if rollup:
+            expected: str | None = None
+            manifest_unreadable = False
+            if run_manifest_path(output_root).exists():
+                try:
+                    run_manifest = load_run_manifest(output_root)
+                except (FileNotFoundError, ValueError, ValidationError):
+                    run_manifest = None
+                    manifest_unreadable = True
+                if run_manifest is not None:
+                    expected = run_manifest.fingerprint()
+            return render_hpo_uplift_markdown_with_ci(
+                manifest,
+                rollup,
+                reference_model=reference_model,
+                expected_manifest_fingerprint=expected,
+                manifest_unreadable=manifest_unreadable,
+            )
     return render_hpo_uplift_markdown(manifest, reference_model=reference_model)

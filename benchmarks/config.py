@@ -186,6 +186,12 @@ class ExperimentSpec(BaseModel):
     `bootstrap_training_time_rollup.parquet`. Ignored on other
     kinds.
 
+    `bootstrap_hpo_uplift_enabled` is the B15 D-B13.3 CI control
+    used only by `kind="hpo_uplift"`. Default True; the
+    HPO-uplift CI rollup runs after `run_hpo_uplift` succeeds
+    and writes `bootstrap_hpo_uplift_rollup.parquet`. Ignored
+    on other kinds.
+
     `bootstrap_n_resamples` is per-ExperimentSpec, NOT shared
     across kinds; an unset value falls through to the profile-
     based default in `BOOTSTRAP_N_RESAMPLES_BY_PROFILE`.
@@ -201,6 +207,7 @@ class ExperimentSpec(BaseModel):
     bootstrap_n_resamples: int | None = Field(default=None, ge=1)
     bootstrap_pairwise_enabled: bool = True
     bootstrap_training_time_enabled: bool = True
+    bootstrap_hpo_uplift_enabled: bool = True
 
 
 _ALL_SENTINEL = "all"
