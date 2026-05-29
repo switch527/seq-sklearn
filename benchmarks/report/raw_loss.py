@@ -34,7 +34,9 @@ from typing import Any, cast
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from benchmarks.bootstrap_manifest import load_rollup, rollup_path
 from benchmarks.manifest import load_run
+from benchmarks.run_manifest import load_run_manifest, run_manifest_path
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +323,7 @@ def render_leaderboard_markdown_with_ci(
     *,
     expected_manifest_fingerprint: str | None = None,
     aggregator_error_class: str | None = None,
+    manifest_unreadable: bool = False,
 ) -> str:
     """Render the leaderboard with B13 bootstrap CIs.
 
@@ -339,6 +342,12 @@ def render_leaderboard_markdown_with_ci(
     renderer falls back to the std variant + emits a "Bootstrap
     aggregator failed: <class>" footnote.
 
+    Manifest-unreadable footnote (R2 arch-I2): when the rollup is
+    present but the run_manifest.json could not be loaded (corrupt
+    JSON, schema mismatch), the CI variant still renders but
+    appends a "freshness check skipped" footnote so the reader
+    knows the CI was NOT verified against the live manifest.
+
     Args:
         manifest: the B5 manifest DataFrame (from `load_run`).
         rollup: the B13 rollup rows (from `load_rollup`).
@@ -347,6 +356,8 @@ def render_leaderboard_markdown_with_ci(
             matches before joining.
         aggregator_error_class: when set, the renderer falls back
             to the std variant + emits the failure footnote.
+        manifest_unreadable: when True, the renderer appends a
+            "freshness check skipped: manifest unreadable" footnote.
     """
     if aggregator_error_class is not None:
         std_body = render_leaderboard_markdown(manifest)
@@ -377,7 +388,17 @@ def render_leaderboard_markdown_with_ci(
         )
         return std_body + footnote
 
-    return _render_with_ci(manifest, rollup)
+    body = _render_with_ci(manifest, rollup)
+    if manifest_unreadable:
+        body += (
+            "\n### Bootstrap freshness check skipped\n\n"
+            "_The B13 freshness check could not run because "
+            "`run_manifest.json` is corrupt or schema-mismatched; the "
+            "CI variant above was NOT verified against the live "
+            "manifest's fingerprint. Re-run `--experiment=raw_loss` "
+            "to refresh both the manifest and the rollup._\n"
+        )
+    return body
 
 
 def _format_ci_cell(
@@ -534,9 +555,6 @@ def render_from_dir(output_root: Path) -> str:
     the renderer surfaces the "Bootstrap aggregator failed"
     footnote in the std fallback (B13.0 + Gemini-C2 wrapper case).
     """
-    from benchmarks.bootstrap_manifest import load_rollup, rollup_path
-    from benchmarks.run_manifest import load_run_manifest, run_manifest_path
-
     manifest = load_run(output_root)
 
     # Gemini-C2 wrapper case: a failed aggregator dropped a sentinel
@@ -552,10 +570,9 @@ def render_from_dir(output_root: Path) -> str:
         if rollup:
             # Gemini-C3 freshness check: pass the live manifest's
             # fingerprint so a stale rollup falls back to the std
-            # variant with a "rollup is stale" footnote. Manifest
-            # load is best-effort; absence means no fingerprint
-            # check (the CI variant renders without verification).
+            # variant with a "rollup is stale" footnote.
             expected: str | None = None
+            manifest_unreadable = False
             if run_manifest_path(output_root).exists():
                 try:
                     run_manifest = load_run_manifest(output_root)
@@ -564,10 +581,18 @@ def render_from_dir(output_root: Path) -> str:
                     ValueError,
                     ValidationError,
                 ):
+                    # R2 arch-I2: the manifest file exists but is
+                    # corrupt or schema-mismatched. Surface a
+                    # "freshness check skipped" footnote rather
+                    # than silently rendering an unverified CI.
                     run_manifest = None
+                    manifest_unreadable = True
                 if run_manifest is not None:
                     expected = run_manifest.fingerprint()
             return render_leaderboard_markdown_with_ci(
-                manifest, rollup, expected_manifest_fingerprint=expected
+                manifest,
+                rollup,
+                expected_manifest_fingerprint=expected,
+                manifest_unreadable=manifest_unreadable,
             )
     return render_leaderboard_markdown(manifest)

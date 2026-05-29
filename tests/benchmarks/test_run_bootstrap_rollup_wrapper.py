@@ -186,3 +186,23 @@ def test_run_bootstrap_rollup_writes_failure_sentinel_on_raw_rollup_error(
     sentinel = output_root / "bootstrap_aggregator_failed.txt"
     assert sentinel.exists()
     assert sentinel.read_text(encoding="utf-8").strip() == "RawRollupError"
+
+
+def test_run_bootstrap_rollup_unlinks_stale_failure_sentinel_on_success(
+    tmp_path: Path,
+) -> None:
+    """R2 arch-C1 close: a stale `bootstrap_aggregator_failed.txt`
+    from a prior failed run is unlinked when the next aggregate
+    call succeeds; otherwise the renderer would surface the std +
+    failure footnote indefinitely."""
+    config = _build_config(tmp_path=tmp_path)
+    output_root = _run_b5_and_manifest(tmp_path, config)
+    env = build_run_environment(profile="smoke")
+    # Pre-create the stale sentinel.
+    sentinel = output_root / "bootstrap_aggregator_failed.txt"
+    sentinel.write_text("RawRollupError", encoding="utf-8")
+    assert sentinel.exists()
+    _run_bootstrap_rollup(config, env=env, output_root=output_root)
+    # Sentinel removed; rollup written.
+    assert not sentinel.exists()
+    assert rollup_path(output_root).exists()

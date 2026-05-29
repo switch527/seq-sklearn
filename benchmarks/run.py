@@ -284,6 +284,12 @@ def _run_bootstrap_rollup(
         rows = aggregate_bootstrap_rollup(
             config, output_root=output_root, env=env, manifest=manifest
         )
+        # Successful aggregate: unlink any stale failure sentinel
+        # from a prior run so the renderer surfaces the CI variant
+        # rather than the std + footnote (B13.0 R2 arch-C1 close).
+        stale = output_root / "bootstrap_aggregator_failed.txt"
+        if stale.exists():
+            stale.unlink(missing_ok=True)
         logger.info(
             "bootstrap_rollup: %d rollup rows written to %s",
             len(rows),

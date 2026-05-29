@@ -226,9 +226,10 @@ aggregation rule).
 
 ### B13.0 New typed surface declarations
 
-Two new symbols are introduced by the Gemini-C2 + Gemini-C3
-fixes; both are declared here so the rest of B13 can reference
-them unambiguously.
+Three new surfaces are introduced by the Gemini-C2 + Gemini-C3
+fixes and the R1 code-review wire-up: two pydantic symbols and
+one filesystem-sentinel filename. All three are declared here
+so the rest of B13 can reference them unambiguously.
 
 `benchmarks/report/bootstrap_rollup.py:RawRollupError(RuntimeError)`:
 typed aggregator failure. Mirrors the existing
@@ -256,6 +257,35 @@ two reasons:
   with the exception class name. Without this wrapper, the
   CLI would crash with an uncaught `RuntimeError` and the std
   fallback would be unreachable.
+
+`benchmarks/run.py + benchmarks/report/raw_loss.py:
+<output_root>/bootstrap_aggregator_failed.txt`: a one-line
+filesystem sentinel that decouples the CLI wrapper from the
+renderer. Cross-module FS contract (R2 arch-C1 close): the
+filename is declared here so a future maintainer changing
+either side doesn't silently break the contract.
+
+- **Producer**: `benchmarks/run.py:_run_bootstrap_rollup`, in
+  the `except RawRollupError as exc` block, writes the file
+  AFTER unlinking any partial `bootstrap_rollup.parquet`.
+- **Content**: `type(exc).__name__` (the exception class as a
+  Python identifier), stripped, UTF-8. No surrounding JSON or
+  YAML; one line of bare text. The renderer trusts the
+  content but embeds it in backtick-quoted Markdown so any
+  arbitrary text fails closed at the display layer.
+- **Consumer**: `benchmarks/report/raw_loss.py:render_from_dir`,
+  checked BEFORE the rollup-presence dispatch. When the
+  sentinel exists, the renderer routes to the std variant +
+  emits a `### Bootstrap aggregator failed` footnote naming
+  the exception class.
+- **Lifecycle**: the producer writes on every aggregator
+  failure; the consumer never deletes it. A subsequent
+  successful run that produces a valid rollup AND leaves the
+  sentinel in place will surface the std variant + footnote
+  (the sentinel check fires first); the run.py wrapper SHOULD
+  unlink the sentinel on a successful aggregate call to avoid
+  this stickiness. v1 ships without the cleanup; a v1.1
+  followup adds it.
 
 The two named raise sites:
 - Loader row-count drift (R7 defensive sort).

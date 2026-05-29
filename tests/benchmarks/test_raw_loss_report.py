@@ -289,3 +289,39 @@ def test_render_from_dir_surfaces_aggregator_failed_sentinel(
     md = render_from_dir(output_root)
     assert "Bootstrap aggregator failed" in md
     assert "RawRollupError" in md
+
+
+def test_render_from_dir_freshness_check_skipped_footnote_on_corrupt_manifest(
+    tmp_path: Path,
+) -> None:
+    """R2 arch-I2: when run_manifest.json exists but is
+    corrupt/unreadable, the CI variant still renders but appends
+    a "freshness check skipped" footnote so the reader knows the
+    rollup was NOT verified."""
+    from benchmarks.bootstrap_manifest import write_rollup
+    from benchmarks.config import BenchmarkConfig, ExperimentSpec
+    from benchmarks.experiments import build_run_environment, run_raw_loss
+    from benchmarks.report.raw_loss import render_from_dir
+    from benchmarks.run_manifest import run_manifest_path
+
+    register_all_fakes_and_get_panels()
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(ExperimentSpec(kind="raw_loss", seeds=(0,)),),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_raw_loss(config, output_root=output_root, env=env)
+    # Write a corrupt run_manifest.json so load_run_manifest raises.
+    run_manifest_path(output_root).write_bytes(b"{not valid json")
+    write_rollup(output_root, [_rollup_row(manifest_fingerprint="anything")])
+
+    md = render_from_dir(output_root)
+    # CI variant still renders (rollup present, no fingerprint to compare).
+    assert "log_loss [95% CI]" in md
+    # But footnote names the skipped freshness check.
+    assert "Bootstrap freshness check skipped" in md

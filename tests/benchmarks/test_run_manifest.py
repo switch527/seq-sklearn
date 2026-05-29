@@ -411,8 +411,9 @@ def _build_simple_manifest(
     )
 
 
+@pytest.mark.usefixtures("_registered_fakes")
 def test_run_manifest_fingerprint_same_content_is_stable(
-    _registered_fakes: None, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """qa-I1: two manifests built with identical inputs produce
     identical SHA-256 hex digests."""
@@ -422,8 +423,9 @@ def test_run_manifest_fingerprint_same_content_is_stable(
     assert len(m1.fingerprint()) == 64  # SHA-256 hex digest length
 
 
+@pytest.mark.usefixtures("_registered_fakes")
 def test_run_manifest_fingerprint_differs_on_library_git_sha_change(
-    _registered_fakes: None, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """qa-I1: changing `library_git_sha` changes the digest. The
     Gemini-C3 stale-rollup detection depends on this."""
@@ -432,8 +434,9 @@ def test_run_manifest_fingerprint_differs_on_library_git_sha_change(
     assert m1.fingerprint() != m2.fingerprint()
 
 
+@pytest.mark.usefixtures("_registered_fakes")
 def test_run_manifest_fingerprint_invariant_under_completed_at_utc_change(
-    _registered_fakes: None, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """qa-I1: the volatile `completed_at_utc` field is excluded
     from the digest by design (a run with `completed_at_utc=None`
