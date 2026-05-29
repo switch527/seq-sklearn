@@ -463,3 +463,67 @@ def test_factory_gate_1_log_message_includes_spec_label(
         )
 
     assert any("stub_label" in record.getMessage() for record in caplog.records)
+
+
+# --- 12. Gate-2 log-content sanity (closes build R1 qa-I1) -----------------
+
+
+def test_factory_gate_2_log_message_includes_label_and_output_root(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Gate 2's warning MUST include `spec.label` AND the
+    `output_root` path so the operator can grep the log for
+    the missing run_manifest. The pre-B18 wrappers each carried
+    this content; the factory must preserve it."""
+    config = _make_config(tmp_path)
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    spec = _make_spec()
+    env = build_run_environment(profile="smoke")
+
+    with caplog.at_level(logging.WARNING, logger="benchmarks._bootstrap_wrapper"):
+        run_bootstrap_rollup_via_factory(
+            config,
+            env=env,
+            output_root=output_root,
+            spec=spec,
+            aggregator=_ok_aggregator,
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("stub_label" in m for m in messages)
+    assert any(str(output_root) in m for m in messages)
+
+
+# --- 13. Gate-4a happy-path row-count log (closes build R1 qa-I2) ---------
+
+
+def test_factory_gate_4a_happy_path_log_records_row_count_and_rollup_path(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Gate 4a's info log MUST include `len(rows)` and the
+    rollup path so the operator can confirm the step succeeded
+    AND know how many rows were aggregated. A future
+    refactor that swaps `rows` for a scalar would pass
+    test_factory_happy_path_with_no_stale_sentinel_does_not_raise
+    silently; this caplog assertion catches that mutation."""
+    config = _make_config(tmp_path)
+    output_root = tmp_path / "out"
+    _make_run_manifest(config, output_root)
+    spec = _make_spec()
+    env = build_run_environment(profile="smoke")
+
+    with caplog.at_level(logging.INFO, logger="benchmarks._bootstrap_wrapper"):
+        run_bootstrap_rollup_via_factory(
+            config,
+            env=env,
+            output_root=output_root,
+            spec=spec,
+            aggregator=_ok_aggregator,
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    # `_ok_aggregator` returns a 2-row list; the rollup-path
+    # stub returns `tmp_path/out/stub_rollup.parquet`.
+    assert any("2 rollup rows" in m for m in messages)
+    assert any(str(_rollup_path(output_root)) in m for m in messages)

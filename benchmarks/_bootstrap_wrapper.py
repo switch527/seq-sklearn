@@ -38,6 +38,7 @@ from benchmarks.run_manifest import RunManifest, load_run_manifest, run_manifest
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "Aggregator",
     "BootstrapWrapperSpec",
     "run_bootstrap_rollup_via_factory",
 ]
@@ -78,7 +79,7 @@ class BootstrapWrapperSpec:
     sentinel_path: Callable[[Path], Path]
 
 
-class _Aggregator(Protocol):
+class Aggregator(Protocol):
     """Aggregator-callable signature shared by all 5 families.
 
     Verified consistent at:
@@ -105,7 +106,7 @@ def run_bootstrap_rollup_via_factory(
     env: RunEnvironment,
     output_root: Path,
     spec: BootstrapWrapperSpec,
-    aggregator: _Aggregator,
+    aggregator: Aggregator,
 ) -> None:
     """Shared four-gate cascade for bootstrap-CI wrappers.
 

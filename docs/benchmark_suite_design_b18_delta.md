@@ -238,7 +238,7 @@ from benchmarks.run_manifest import RunManifest, load_run_manifest, run_manifest
 logger = logging.getLogger(__name__)
 
 
-class _Aggregator(Protocol):
+class Aggregator(Protocol):
     """Aggregator-callable signature shared by all 5 families.
 
     Verified consistent across the 5 aggregators at
@@ -255,7 +255,7 @@ class _Aggregator(Protocol):
         output_root: Path,
         env: RunEnvironment,
         manifest: RunManifest,
-    ) -> list[object]: ...
+    ) -> list[Any]: ...
 
 
 def run_bootstrap_rollup_via_factory(
@@ -264,7 +264,7 @@ def run_bootstrap_rollup_via_factory(
     env: RunEnvironment,
     output_root: Path,
     spec: BootstrapWrapperSpec,
-    aggregator: _Aggregator,
+    aggregator: Aggregator,
 ) -> None:
     """Shared four-gate cascade for bootstrap-CI wrappers.
 
@@ -465,10 +465,10 @@ Expected test delta after the refactor:
 
 | ID | Risk | Severity | Mitigation |
 |---|---|---|---|
-| R-B18-Risk-1 | A family's aggregator does not actually accept the four-arg signature `(config, *, output_root, env, manifest)`. | High | Pre-refactor verification: signatures at `bootstrap_rollup.py:374-380`, `bootstrap_pairwise.py:233-239`, `bootstrap_training_time.py:211-217`, `bootstrap_hpo_uplift.py:316-322`, `bootstrap_ensemble_lift.py:277-283` all match exactly. The `_Aggregator` Protocol locks this contract at the type-checker level. |
+| R-B18-Risk-1 | A family's aggregator does not actually accept the four-arg signature `(config, *, output_root, env, manifest)`. | High | Pre-refactor verification: signatures at `bootstrap_rollup.py:374-380`, `bootstrap_pairwise.py:233-239`, `bootstrap_training_time.py:211-217`, `bootstrap_hpo_uplift.py:316-322`, `bootstrap_ensemble_lift.py:277-283` all match exactly. The `Aggregator` Protocol locks this contract at the type-checker level. |
 | R-B18-Risk-2 | A test asserts on the per-family Gate-1 log suffix and breaks under normalization. | Low | `grep -nE "no .* ExperimentSpec has\|skipped \(no " tests/benchmarks/` returns zero hits. The 49 wrapper tests do not use `caplog` or any other log-content fixture. R-B18-2 holds. |
 | R-B18-Risk-3 | A module-load-time `BootstrapWrapperSpec` constant fails to import because a spec callable is not yet bound. | Low | The 4 `is_*_enabled` predicates + 4 path helpers + 1 string passed to each spec are all imported at `run.py:34-83`, well before the spec-construction block. The aggregator callables are NOT bound on the spec (B18.1); they are looked up at wrapper-call time. No circular-import risk introduced. |
-| R-B18-Risk-4 | The factory's `_Aggregator` Protocol is too loose and a future aggregator that drops a kwarg passes type-check yet crashes at runtime. | Low | The Protocol's `__call__` signature pins the exact kwargs (`output_root`, `env`, `manifest`); pyright will reject a callable that drops one. Runtime tests (9 gate tests + 49 existing wrapper tests) catch any mismatch. |
+| R-B18-Risk-4 | The factory's `Aggregator` Protocol is too loose and a future aggregator that drops a kwarg passes type-check yet crashes at runtime. | Low | The Protocol's `__call__` signature pins the exact kwargs (`output_root`, `env`, `manifest`); pyright will reject a callable that drops one. Runtime tests (9 gate tests + 49 existing wrapper tests) catch any mismatch. |
 | R-B18-Risk-5 | A future B19 phase adds a 6th wrapper but bypasses the factory by writing inline duplication. | Low | The wire-up test (`test_all_five_wrappers_route_through_factory`) only covers the 5 existing wrappers. The factory + spec dataclass live in their own module (`_bootstrap_wrapper.py`) so a future wrapper that re-implements the cascade is visible in the run.py diff. Document the pattern at the top of the bootstrap-wrappers section in run.py with a `NOTE: future bootstrap-rollup wrappers should call `run_bootstrap_rollup_via_factory`...` line. |
 | R-B18-Risk-6 | The monkeypatch seam break described in B18.1 ships accidentally because the aggregator is captured on the spec. | Critical | The factory tests' wire-up parametrize asserts each wrapper calls the factory with its aggregator AS A PER-CALL ARGUMENT, not via the spec. The B18.5 spec constants do NOT carry the aggregator field; the dataclass at B18.2 does not declare it. The existing 49 wrapper tests' monkeypatch interception is the integration-level guarantee. |
 
@@ -476,7 +476,7 @@ Expected test delta after the refactor:
 
 1. **New module**: create `benchmarks/_bootstrap_wrapper.py`
    with the `BootstrapWrapperSpec` dataclass, the
-   `_Aggregator` Protocol, and the
+   `Aggregator` Protocol, and the
    `run_bootstrap_rollup_via_factory` function. Verify ruff
    + pyright pass on the new file in isolation.
 2. **Wire run.py**: add 5 `_BX_SPEC` constants to `run.py`
@@ -533,7 +533,7 @@ Deduplicated total: 3 CRITICAL, 5 IMPROVEMENT, 3 NITPICK
   the choice inline.
 - **arch-R1-I2** (`Callable[..., list[Any]]` discards the
   keyword-only-arg shape): replaced with the explicit
-  `_Aggregator` Protocol at B18.3 pinning the exact kwargs.
+  `Aggregator` Protocol at B18.3 pinning the exact kwargs.
 - **arch-R1-I3** (placement decision deferred without a
   threshold): pre-empted by arch-R1-I4 closure. The factory
   + dataclass + Protocol live in their own module

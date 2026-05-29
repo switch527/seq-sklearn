@@ -292,10 +292,9 @@ def _dispatch_kinds(
 # existing wrapper tests' `monkeypatch.setattr(_run_module,
 # "aggregate_bootstrap_*_rollup", _boom)` interceptions still resolve).
 #
-# NOTE for future maintainers: a 6th bootstrap-rollup family should add a
-# `_BX_SPEC` constant below and a thin wrapper that calls
-# `run_bootstrap_rollup_via_factory`. Do NOT re-implement the four-gate
-# cascade inline.
+# A 6th bootstrap-rollup family should add a `_BX_SPEC` constant below and a
+# thin wrapper that calls `run_bootstrap_rollup_via_factory`. Do NOT
+# re-implement the four-gate cascade inline.
 
 _B5_SPEC = BootstrapWrapperSpec(
     label="bootstrap_rollup",
