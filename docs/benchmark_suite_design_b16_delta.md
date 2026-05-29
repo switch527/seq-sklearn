@@ -157,7 +157,7 @@ class EnsembleLiftRollupRow(BaseModel):
     primary_loss_column: str  # "log_loss" | "rmse"
     # seq_family + baseline_family are NOT on the schema (arch-I2
     # closure): they are constants per `run_ensemble_lift`
-    # (`_DEFAULT_SEQ_FAMILY` / `_DEFAULT_BASELINE_FAMILY`) and
+    # (`DEFAULT_SEQ_FAMILY` / `DEFAULT_BASELINE_FAMILY`) and
     # the renderer always has them via `EnsembleLiftExperimentResult.
     # seq_family` / `.baseline_family`. Storing them N times on
     # every row is redundant. A future multi-pair driver would add
@@ -218,11 +218,11 @@ implementation at
 ## B16.2 New aggregator: `benchmarks/report/bootstrap_ensemble_lift.py`
 
 Reads the B5 manifest + predictions shards via the existing
-B11 helpers (`_build_cells_table`, the inner-join machinery).
+B11 helpers (`build_cells_table`, the inner-join machinery).
 For each dataset:
 
 1. Get the GBM and seq cells via the existing
-   `benchmarks.experiments.ensemble_lift._build_cells_table`.
+   `benchmarks.experiments.ensemble_lift.build_cells_table`.
 2. Sentinel-route per the three enumerated cases above.
 3. For dataset groups that pass the sentinel checks, call the
    NEW shared helper
@@ -251,7 +251,7 @@ def aggregate_bootstrap_ensemble_lift_rollup(
     if df.empty:
         return []
     # ... per-dataset group iteration:
-    # _build_cells_table -> gbm_cells, seq_cells per dataset
+    # build_cells_table -> gbm_cells, seq_cells per dataset
     # sentinel-route empty cases
     # compute_per_cell_lift_deltas -> per-cell deltas
     # bootstrap + emit row
@@ -342,7 +342,7 @@ std fallback).
   4. Gate D (arch-I3 closure): aggregator returns `[]` when
      the manifest has zero OK rows mapping to either the
      seq family OR the baseline family. Specifically: the
-     aggregator computes `_model_families(manifest)` then
+     aggregator computes `model_families(manifest)` then
      checks "is there at least one OK manifest row whose
      model_name maps to baseline_family AND at least one
      mapping to seq_family". When both checks pass it
@@ -848,3 +848,20 @@ NITPICKs:
   it next to the other B16 aggregator tests keeps the
   Stage-2 refactor pin co-located with the other B16
   coverage rather than fragmenting it across two files.
+
+### Stage 2 R2 swarm closure
+
+Stage 2 R2 confirming swarm: code-reviewer (0C/0I/0N
+APPROVE), architecture-reviewer (0C/1I/0N REQUEST_CHANGES),
+qa-test-coverage (0C/0I/0N APPROVE), style-reviewer
+(0C/0I/0N APPROVE). Total: 0 CRITICAL, 1 IMPROVEMENT, 0
+NITPICK. Closure:
+
+- **arch-R2-I1** (R1-N1 design-doc symbol-rename sweep was
+  incomplete: 5 stale references to `_DEFAULT_SEQ_FAMILY`,
+  `_DEFAULT_BASELINE_FAMILY`, `_build_cells_table`,
+  `_model_families` remained in the B16.0, B16.2, B16.5
+  spec prose): swept globally. The R1 closure-log entries
+  at the "arch-R1-I3" + "code-R1-N1" + "arch-R1-N1" lines
+  still quote the original `_`-prefixed finding labels
+  (those are quoted-history, not spec prose).
