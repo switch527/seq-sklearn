@@ -10,8 +10,11 @@ Package-internal (`_` prefix): consumed only by the three
 `bootstrap_*.py` aggregators under `benchmarks/report/`.
 """
 
+from collections.abc import Iterable
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
+
+from benchmarks.config import ExperimentSpec
 
 BOOTSTRAP_N_RESAMPLES_BY_PROFILE: dict[str, int] = {
     "smoke": 5_000,
@@ -40,10 +43,34 @@ def numpy_version() -> str:
         return "unknown"
 
 
+def resolve_n_resamples(
+    experiments: Iterable[ExperimentSpec],
+    profile: str,
+    *,
+    kind: str,
+) -> int:
+    """Priority: per-spec override > profile default.
+
+    Reads any `ExperimentSpec` whose `kind` matches and returns
+    that spec's `bootstrap_n_resamples` if non-None. Otherwise
+    falls back to the profile default (defensive `"standard"`
+    fallback if the profile is unknown).
+
+    Stage-3 code-I1 closure: a single helper for the three
+    rollup aggregators (B5, B6, B7) so the per-kind override
+    logic lives in one place.
+    """
+    for spec in experiments:
+        if spec.kind == kind and spec.bootstrap_n_resamples is not None:
+            return spec.bootstrap_n_resamples
+    return BOOTSTRAP_N_RESAMPLES_BY_PROFILE.get(profile, 10_000)
+
+
 __all__ = [
     "BOOTSTRAP_CONFIDENCE",
     "BOOTSTRAP_DEFAULT_SEED",
     "BOOTSTRAP_N_RESAMPLES_BY_PROFILE",
     "BOOTSTRAP_ROW_COUNT_CEILING",
     "numpy_version",
+    "resolve_n_resamples",
 ]

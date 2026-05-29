@@ -38,7 +38,7 @@ import numpy as np
 import pandas as pd
 
 from benchmarks.bootstrap_manifest import PairwiseRollupRow, write_pairwise_rollup
-from benchmarks.config import BenchmarkConfig, ExperimentSpec
+from benchmarks.config import BenchmarkConfig
 from benchmarks.experiments.ensemble import load_pairwise
 from benchmarks.experiments.raw_loss import RunEnvironment
 from benchmarks.metrics.bootstrap import (
@@ -48,9 +48,9 @@ from benchmarks.metrics.bootstrap import (
 from benchmarks.report._bootstrap_aggregate import (
     BOOTSTRAP_CONFIDENCE,
     BOOTSTRAP_DEFAULT_SEED,
-    BOOTSTRAP_N_RESAMPLES_BY_PROFILE,
     BOOTSTRAP_ROW_COUNT_CEILING,
     numpy_version,
+    resolve_n_resamples,
 )
 from benchmarks.report.bootstrap_rollup import RawRollupError
 from benchmarks.run_manifest import RunManifest
@@ -81,14 +81,6 @@ def is_pairwise_rollup_enabled(config: BenchmarkConfig) -> bool:
 def pairwise_rollup_output_path() -> str:
     """Stable filename token for log messages."""
     return "bootstrap_pairwise_rollup.parquet"
-
-
-def _resolve_n_resamples(experiments: list[ExperimentSpec], profile: str) -> int:
-    """Priority: per-ensemble-spec override > profile default."""
-    for spec in experiments:
-        if spec.kind == "ensemble" and spec.bootstrap_n_resamples is not None:
-            return spec.bootstrap_n_resamples
-    return BOOTSTRAP_N_RESAMPLES_BY_PROFILE.get(profile, 10_000)
 
 
 def _emit_sentinel_row(
@@ -271,7 +263,9 @@ def aggregate_bootstrap_pairwise_rollup(
         return []
 
     profile = env.profile if hasattr(env, "profile") else "standard"
-    n_resamples = _resolve_n_resamples(list(config.experiments), str(profile))
+    n_resamples = resolve_n_resamples(
+        config.experiments, str(profile), kind="ensemble"
+    )
     manifest_fingerprint = manifest.fingerprint()
 
     rows: list[PairwiseRollupRow] = []

@@ -57,9 +57,9 @@ from benchmarks.registry import get_dataset, get_loader
 from benchmarks.report._bootstrap_aggregate import (
     BOOTSTRAP_CONFIDENCE,
     BOOTSTRAP_DEFAULT_SEED,
-    BOOTSTRAP_N_RESAMPLES_BY_PROFILE,
     BOOTSTRAP_ROW_COUNT_CEILING,
     numpy_version,
+    resolve_n_resamples,
 )
 from benchmarks.run_manifest import RunManifest
 
@@ -95,19 +95,6 @@ _PRIMARY_LOSS_BY_TASK: dict[str, str] = {
     "multiclass": "log_loss",
     "regression_point": "rmse",
 }
-
-
-def _resolve_n_resamples(experiments: list[ExperimentSpec], profile: str) -> int:
-    """Resolve the bootstrap n_resamples.
-
-    Priority: per-experiment override > profile default. The
-    profile default falls back to `"standard"` if the env's
-    profile is unknown (defensive).
-    """
-    for spec in experiments:
-        if spec.kind == "raw_loss" and spec.bootstrap_n_resamples is not None:
-            return spec.bootstrap_n_resamples
-    return BOOTSTRAP_N_RESAMPLES_BY_PROFILE.get(profile, 10_000)
 
 
 def _is_rollup_enabled(experiments: list[ExperimentSpec]) -> bool:
@@ -406,7 +393,9 @@ def aggregate_bootstrap_rollup(
             f"empty; run --experiment=raw_loss first"
         )
 
-    n_resamples = _resolve_n_resamples(list(config.experiments), env.profile)
+    n_resamples = resolve_n_resamples(
+        config.experiments, env.profile, kind="raw_loss"
+    )
     cache_dir = config.cache_dir
     manifest_fingerprint = manifest.fingerprint()
     out: list[RollupRow] = []

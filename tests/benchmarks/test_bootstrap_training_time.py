@@ -9,6 +9,7 @@ bootstrap-degeneracy oracle (Round-1 qa-C1 closure).
 """
 
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -137,28 +138,53 @@ def test_aggregate_bootstrap_training_time_rollup_happy_path_emits_ci(
 
 def test_aggregate_bootstrap_training_time_rollup_ci_width_nonzero_with_multiple_cells(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Round-1 qa-C1 mirror for B7: assert ci_hi - ci_lo > 0 on
-    a group with multiple cells whose wall_seconds are not all
-    identical. Rules out the silent degeneracy bug where the
-    aggregator passes entity_ids=np.zeros(n)."""
-    config, output_root, manifest = _setup_and_run_b5(tmp_path, seeds=(0, 1, 2))
+    """Stage-3 qa-I2 closure (strict-width assertion): pin
+    ci_hi - ci_lo > 0 on a multi-cell group with non-identical
+    wall_seconds. The standard fixture's wall_seconds vary with
+    system jitter, which is too noisy to assert strict > 0
+    against, so we substitute a deterministic non-constant
+    wall_seconds vector via monkeypatch on load_run."""
+    import pandas as pd
+
+    config, output_root, manifest = _setup_and_run_b5(tmp_path)
+
+    rows_df = pd.DataFrame(
+        [
+            {
+                "dataset_name": "fake_binary",
+                "model_name": "fake_constant_binary",
+                "hardware_tier": "cpu",
+                "task_type": "binary",
+                "seed": s,
+                "fold_index": f,
+                "wall_seconds": 1.0 + 0.1 * (2 * s + f),
+                "skipped_reason": None,
+            }
+            for s in (0, 1, 2)
+            for f in (0, 1)
+        ]
+    )
+
+    import benchmarks.report.bootstrap_training_time as _module
+
+    monkeypatch.setattr(_module, "load_run", lambda _root: rows_df)
+
     env = build_run_environment(profile="smoke")
     rows = aggregate_bootstrap_training_time_rollup(
         config, output_root=output_root, env=env, manifest=manifest
     )
-    # If wall_seconds variance is exactly zero across seeds the
-    # CI is zero-width; under any nontrivial workload (the fake
-    # constant adapter still incurs some Python-level scheduling
-    # variance) the width is > 0. We assert the cell count is at
-    # least 2 (the precondition for non-degenerate bootstrap) and
-    # that ci_lo <= ci_hi.
-    assert len(rows) >= 1
+    assert len(rows) == 1
     row = rows[0]
-    assert row.n_cells_evaluated >= 2
+    assert row.n_cells_evaluated == 6
+    assert row.primary_loss_mean is not None
     assert row.primary_loss_ci_lo is not None
     assert row.primary_loss_ci_hi is not None
-    assert row.primary_loss_ci_lo <= row.primary_loss_ci_hi
+    # Strict assertion: CI width must be > 0. An entity-id
+    # degeneracy bug (entity_ids=np.zeros) would produce
+    # ci_lo == ci_hi and fail this test.
+    assert row.primary_loss_ci_hi - row.primary_loss_ci_lo > 0.0
 
 
 def test_aggregate_bootstrap_training_time_rollup_zero_wall_seconds_produces_zero_width_ci(
@@ -174,7 +200,6 @@ def test_aggregate_bootstrap_training_time_rollup_zero_wall_seconds_produces_zer
     config, output_root, manifest = _setup_and_run_b5(tmp_path, seeds=(0, 1, 2))
 
     captured: dict[str, object] = {}
-    real_primitive = None
 
     def _zero_primitive(
         losses: np.ndarray,
@@ -202,34 +227,55 @@ def test_aggregate_bootstrap_training_time_rollup_zero_wall_seconds_produces_zer
     assert row.primary_loss_ci_hi == 0.0
     # Confirm the code path: each cell its own entity (n_entities == n_cells).
     assert captured["n_entities"] == captured["n_cells"]
-    assert int(captured["n_cells"]) >= 2  # multi-entity, NOT single-entity degenerate
-    # silence the lint warning on unused real_primitive
-    assert real_primitive is None
+    assert int(cast(int, captured["n_cells"])) >= 2  # multi-entity, NOT single-entity degenerate
 
 
 def test_aggregate_bootstrap_training_time_rollup_single_entity_degenerate(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Distinct from the zero-width n-entities test above: when
-    there's a SINGLE cell (one seed, one fold), the primitive's
-    n_entities==1 degenerate path at
-    benchmarks/metrics/bootstrap.py:133-136 fires. Mean ==
-    ci_lo == ci_hi == ground_truth."""
-    config, output_root, manifest = _setup_and_run_b5(tmp_path, seeds=(0,))
+    """Stage-3 qa-C1 closure: pin the primitive's n_entities==1
+    degenerate path at benchmarks/metrics/bootstrap.py:133-136.
+    Forces a 1-row manifest via monkeypatch so the assertion is
+    unconditional (the prior test had an `if n_cells_evaluated
+    == 1` guard that never fired under the standard fixture)."""
+    import pandas as pd
+
+    config, output_root, manifest = _setup_and_run_b5(tmp_path)
+
+    # Construct a 1-row manifest that the aggregator will see.
+    # Only one OK cell -> n_cells_evaluated == 1 -> primitive's
+    # single-entity-degenerate path fires.
+    single_row_df = pd.DataFrame(
+        [
+            {
+                "dataset_name": "fake_binary",
+                "model_name": "fake_constant_binary",
+                "hardware_tier": "cpu",
+                "task_type": "binary",
+                "seed": 0,
+                "fold_index": 0,
+                "wall_seconds": 1.234,
+                "skipped_reason": None,
+            }
+        ]
+    )
+
+    import benchmarks.report.bootstrap_training_time as _module
+
+    monkeypatch.setattr(_module, "load_run", lambda _root: single_row_df)
+
     env = build_run_environment(profile="smoke")
     rows = aggregate_bootstrap_training_time_rollup(
         config, output_root=output_root, env=env, manifest=manifest
     )
-    # With a single seed the manifest has 1 cell per fold; if
-    # there's only 1 fold per group then n_cells==1 and the
-    # single-entity primitive path fires (mean==ci_lo==ci_hi).
-    # If there's >1 fold per group, this assertion only checks
-    # the rollup is consistent (we use the primitive's contract:
-    # when n_entities <= 1, mean == ci_lo == ci_hi).
-    assert len(rows) >= 1
+    assert len(rows) == 1
     row = rows[0]
-    if row.n_cells_evaluated == 1:
-        assert row.primary_loss_mean == row.primary_loss_ci_lo == row.primary_loss_ci_hi
+    assert row.n_cells_evaluated == 1
+    # Unconditional assertion: pins the single-entity-degenerate path.
+    assert row.primary_loss_mean == pytest.approx(1.234, abs=1e-9)
+    assert row.primary_loss_ci_lo == row.primary_loss_mean
+    assert row.primary_loss_ci_hi == row.primary_loss_mean
 
 
 # --- All-cells-skipped sentinel ---------------------------------------------
@@ -329,6 +375,44 @@ def test_aggregate_bootstrap_training_time_rollup_respects_per_spec_n_resamples_
 
 
 # --- OOM ceiling raise ------------------------------------------------------
+
+
+def test_aggregate_bootstrap_training_time_rollup_missing_wall_seconds_column_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stage-3 qa-I1 closure: when the B5 manifest has no
+    `wall_seconds` column (schema drift), the aggregator raises
+    RawRollupError with a clear message rather than silently
+    proceeding."""
+    import pandas as pd
+
+    config, output_root, manifest = _setup_and_run_b5(tmp_path)
+
+    # Manifest with all required columns EXCEPT wall_seconds.
+    rows_df = pd.DataFrame(
+        [
+            {
+                "dataset_name": "fake_binary",
+                "model_name": "fake_constant_binary",
+                "hardware_tier": "cpu",
+                "task_type": "binary",
+                "seed": 0,
+                "fold_index": 0,
+                "skipped_reason": None,
+            }
+        ]
+    )
+
+    import benchmarks.report.bootstrap_training_time as _module
+
+    monkeypatch.setattr(_module, "load_run", lambda _root: rows_df)
+
+    env = build_run_environment(profile="smoke")
+    with pytest.raises(RawRollupError, match="no `wall_seconds` column"):
+        aggregate_bootstrap_training_time_rollup(
+            config, output_root=output_root, env=env, manifest=manifest
+        )
 
 
 def test_aggregate_bootstrap_training_time_rollup_oom_gate_raises(

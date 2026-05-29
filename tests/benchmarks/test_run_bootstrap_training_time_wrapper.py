@@ -270,12 +270,24 @@ def test_run_bootstrap_training_time_rollup_failure_does_not_touch_b5_or_b6_sent
 
     import benchmarks.run as _run_module
 
+    # Stage-3 qa-I3 closure: pre-plant B5 and B6 sentinels so the
+    # test exercises the stronger contract that pre-existing B5/B6
+    # sentinels are LEFT UNTOUCHED on a B7 failure (not just that
+    # they aren't created).
+    b5_sentinel = aggregator_failed_sentinel_path(output_root)
+    b6_sentinel = pairwise_aggregator_failed_sentinel_path(output_root)
+    b5_sentinel.write_text("PrevB5Failure", encoding="utf-8")
+    b6_sentinel.write_text("PrevB6Failure", encoding="utf-8")
+
     monkeypatch.setattr(_run_module, "aggregate_bootstrap_training_time_rollup", _boom)
     _run_bootstrap_training_time_rollup(
         config, env=build_run_environment(profile="smoke"), output_root=output_root
     )
     # B7 sentinel exists.
     assert training_time_aggregator_failed_sentinel_path(output_root).exists()
-    # B5 and B6 sentinels do NOT exist.
-    assert not aggregator_failed_sentinel_path(output_root).exists()
-    assert not pairwise_aggregator_failed_sentinel_path(output_root).exists()
+    # B5 and B6 sentinels still carry their PRE-EXISTING content;
+    # the B7 wrapper did not touch them.
+    assert b5_sentinel.exists()
+    assert b5_sentinel.read_text(encoding="utf-8").strip() == "PrevB5Failure"
+    assert b6_sentinel.exists()
+    assert b6_sentinel.read_text(encoding="utf-8").strip() == "PrevB6Failure"
