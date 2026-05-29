@@ -39,9 +39,9 @@ def _make_row(**overrides: object) -> RollupRow:
         "n_skipped_cells": 0,
         "n_rows": 240,
         "n_entities": 12,
-        "primary_loss_mean": 0.234,
-        "primary_loss_ci_lo": 0.221,
-        "primary_loss_ci_hi": 0.247,
+        "primary_metric_mean": 0.234,
+        "primary_metric_ci_lo": 0.221,
+        "primary_metric_ci_hi": 0.247,
         "bootstrap_seed": 42,
         "bootstrap_n_resamples": 10_000,
         "bootstrap_confidence": 0.95,
@@ -75,9 +75,9 @@ def test_write_rollup_then_load_rollup_round_trips_all_fields(
             model_name="lightgbm_regressor",
             task_type="regression_point",
             primary_metric="rmse",
-            primary_loss_mean=1.23,
-            primary_loss_ci_lo=1.1,
-            primary_loss_ci_hi=1.35,
+            primary_metric_mean=1.23,
+            primary_metric_ci_lo=1.1,
+            primary_metric_ci_hi=1.35,
         ),
         _make_row(
             model_name="bad_model",
@@ -85,9 +85,9 @@ def test_write_rollup_then_load_rollup_round_trips_all_fields(
             n_skipped_cells=9,
             n_rows=0,
             n_entities=0,
-            primary_loss_mean=None,
-            primary_loss_ci_lo=None,
-            primary_loss_ci_hi=None,
+            primary_metric_mean=None,
+            primary_metric_ci_lo=None,
+            primary_metric_ci_hi=None,
             bootstrap_skipped_reason="all_cells_skipped_in_manifest",
         ),
     ]
@@ -104,9 +104,9 @@ def test_write_rollup_then_load_rollup_round_trips_all_fields(
         assert got.n_skipped_cells == orig.n_skipped_cells
         assert got.n_rows == orig.n_rows
         assert got.n_entities == orig.n_entities
-        assert got.primary_loss_mean == orig.primary_loss_mean
-        assert got.primary_loss_ci_lo == orig.primary_loss_ci_lo
-        assert got.primary_loss_ci_hi == orig.primary_loss_ci_hi
+        assert got.primary_metric_mean == orig.primary_metric_mean
+        assert got.primary_metric_ci_lo == orig.primary_metric_ci_lo
+        assert got.primary_metric_ci_hi == orig.primary_metric_ci_hi
         assert got.bootstrap_seed == orig.bootstrap_seed
         assert got.bootstrap_n_resamples == orig.bootstrap_n_resamples
         assert got.bootstrap_confidence == orig.bootstrap_confidence
@@ -177,9 +177,9 @@ def _make_pairwise_row(**overrides: object) -> PairwiseRollupRow:
         "n_seeds": 3,
         "n_cells_evaluated": 9,
         "n_skipped_cells": 0,
-        "primary_loss_mean": 0.612,
-        "primary_loss_ci_lo": 0.581,
-        "primary_loss_ci_hi": 0.643,
+        "primary_metric_mean": 0.612,
+        "primary_metric_ci_lo": 0.581,
+        "primary_metric_ci_hi": 0.643,
         "bootstrap_seed": 42,
         "bootstrap_n_resamples": 10_000,
         "bootstrap_confidence": 0.95,
@@ -202,9 +202,9 @@ def _make_training_time_row(**overrides: object) -> TrainingTimeRollupRow:
         "n_seeds": 3,
         "n_cells_evaluated": 9,
         "n_skipped_cells": 0,
-        "primary_loss_mean": 1.234,
-        "primary_loss_ci_lo": 1.10,
-        "primary_loss_ci_hi": 1.35,
+        "primary_metric_mean": 1.234,
+        "primary_metric_ci_lo": 1.10,
+        "primary_metric_ci_hi": 1.35,
         "bootstrap_seed": 42,
         "bootstrap_n_resamples": 10_000,
         "bootstrap_confidence": 0.95,
@@ -261,9 +261,9 @@ def test_write_pairwise_rollup_then_load_round_trips_all_fields(
         _make_pairwise_row(
             task_type="regression_point",
             primary_metric="complementarity_score",
-            primary_loss_mean=None,
-            primary_loss_ci_lo=None,
-            primary_loss_ci_hi=None,
+            primary_metric_mean=None,
+            primary_metric_ci_lo=None,
+            primary_metric_ci_hi=None,
             bootstrap_skipped_reason="regression_complementarity_undefined",
         ),
     ]
@@ -283,16 +283,16 @@ def test_write_training_time_rollup_then_load_round_trips_all_fields(
         _make_training_time_row(),
         _make_training_time_row(
             hardware_tier="gpu_single",
-            primary_loss_mean=0.876,
-            primary_loss_ci_lo=0.82,
-            primary_loss_ci_hi=0.93,
+            primary_metric_mean=0.876,
+            primary_metric_ci_lo=0.82,
+            primary_metric_ci_hi=0.93,
         ),
         _make_training_time_row(
             n_cells_evaluated=0,
             n_skipped_cells=9,
-            primary_loss_mean=None,
-            primary_loss_ci_lo=None,
-            primary_loss_ci_hi=None,
+            primary_metric_mean=None,
+            primary_metric_ci_lo=None,
+            primary_metric_ci_hi=None,
             bootstrap_skipped_reason="all_cells_skipped_in_manifest",
         ),
     ]
@@ -401,9 +401,9 @@ def _make_hpo_uplift_row(**overrides: object) -> _HPOUpliftRollupRow:
         "n_folds": 2,
         "n_cells_paired": 6,
         "n_skipped_cells": 0,
-        "primary_loss_mean": 0.20,
-        "primary_loss_ci_lo": 0.15,
-        "primary_loss_ci_hi": 0.25,
+        "primary_metric_mean": 0.20,
+        "primary_metric_ci_lo": 0.15,
+        "primary_metric_ci_hi": 0.25,
         "bootstrap_seed": 42,
         "bootstrap_n_resamples": 10_000,
         "bootstrap_confidence": 0.95,
@@ -453,17 +453,17 @@ def test_write_hpo_uplift_rollup_then_load_round_trips_all_fields(
         _make_hpo_uplift_row(
             task_type="regression_point",
             primary_loss_column="rmse",
-            primary_loss_mean=-0.05,
-            primary_loss_ci_lo=-0.10,
-            primary_loss_ci_hi=0.00,
+            primary_metric_mean=-0.05,
+            primary_metric_ci_lo=-0.10,
+            primary_metric_ci_hi=0.00,
         ),
         _make_hpo_uplift_row(
             model_name="bad_model",
             n_cells_paired=0,
             n_skipped_cells=0,
-            primary_loss_mean=None,
-            primary_loss_ci_lo=None,
-            primary_loss_ci_hi=None,
+            primary_metric_mean=None,
+            primary_metric_ci_lo=None,
+            primary_metric_ci_hi=None,
             bootstrap_skipped_reason="no_paired_cells",
         ),
     ]
@@ -539,9 +539,9 @@ def _make_ensemble_lift_row(**overrides: object) -> _EnsembleLiftRollupRow:
         "n_folds": 2,
         "n_cells_paired": 6,
         "n_skipped_cells": 0,
-        "primary_loss_mean": 0.20,
-        "primary_loss_ci_lo": 0.15,
-        "primary_loss_ci_hi": 0.25,
+        "primary_metric_mean": 0.20,
+        "primary_metric_ci_lo": 0.15,
+        "primary_metric_ci_hi": 0.25,
         "bootstrap_seed": 42,
         "bootstrap_n_resamples": 10_000,
         "bootstrap_confidence": 0.95,
@@ -597,35 +597,35 @@ def test_write_ensemble_lift_rollup_then_load_round_trips_all_fields(
             dataset_name="fake_regression",
             task_type="regression_point",
             primary_loss_column="rmse",
-            primary_loss_mean=-0.05,
-            primary_loss_ci_lo=-0.10,
-            primary_loss_ci_hi=0.00,
+            primary_metric_mean=-0.05,
+            primary_metric_ci_lo=-0.10,
+            primary_metric_ci_hi=0.00,
         ),
         _make_ensemble_lift_row(
             dataset_name="bad_dataset_a",
             n_cells_paired=0,
             n_skipped_cells=0,
-            primary_loss_mean=None,
-            primary_loss_ci_lo=None,
-            primary_loss_ci_hi=None,
+            primary_metric_mean=None,
+            primary_metric_ci_lo=None,
+            primary_metric_ci_hi=None,
             bootstrap_skipped_reason="no_gbm_predictions",
         ),
         _make_ensemble_lift_row(
             dataset_name="bad_dataset_b",
             n_cells_paired=0,
             n_skipped_cells=0,
-            primary_loss_mean=None,
-            primary_loss_ci_lo=None,
-            primary_loss_ci_hi=None,
+            primary_metric_mean=None,
+            primary_metric_ci_lo=None,
+            primary_metric_ci_hi=None,
             bootstrap_skipped_reason="no_seq_predictions",
         ),
         _make_ensemble_lift_row(
             dataset_name="bad_dataset_c",
             n_cells_paired=0,
             n_skipped_cells=0,
-            primary_loss_mean=None,
-            primary_loss_ci_lo=None,
-            primary_loss_ci_hi=None,
+            primary_metric_mean=None,
+            primary_metric_ci_lo=None,
+            primary_metric_ci_hi=None,
             bootstrap_skipped_reason="all_cells_skipped_in_manifest",
         ),
     ]
@@ -684,3 +684,52 @@ def test_experiment_spec_bootstrap_ensemble_lift_enabled_opt_out() -> None:
 
     spec = ExperimentSpec(kind="ensemble_lift", bootstrap_ensemble_lift_enabled=False)
     assert spec.bootstrap_ensemble_lift_enabled is False
+
+
+# --- Phase B17 / D-B16.5: Guard A (schema-field invariant) ----------------
+
+from benchmarks.bootstrap_manifest import (  # noqa: E402
+    EnsembleLiftRollupRow as _EnsembleLiftRollupRowAll,
+)
+from benchmarks.bootstrap_manifest import (  # noqa: E402
+    HPOUpliftRollupRow as _HPOUpliftRollupRowAll,
+)
+from benchmarks.bootstrap_manifest import (  # noqa: E402
+    PairwiseRollupRow as _PairwiseRollupRowAll,
+)
+from benchmarks.bootstrap_manifest import (  # noqa: E402
+    RollupRow as _RollupRowAll,
+)
+from benchmarks.bootstrap_manifest import (  # noqa: E402
+    TrainingTimeRollupRow as _TrainingTimeRollupRowAll,
+)
+from pydantic import BaseModel  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        _RollupRowAll,
+        _PairwiseRollupRowAll,
+        _TrainingTimeRollupRowAll,
+        _HPOUpliftRollupRowAll,
+        _EnsembleLiftRollupRowAll,
+    ],
+)
+def test_rollup_row_has_no_stray_primary_loss_field(
+    schema: type[BaseModel],
+) -> None:
+    """B17 R-B17-5 Guard A invariant: no rollup row may declare a
+    `primary_loss_*` field other than the dedicated
+    `primary_loss_column` audit field. The bootstrap math uses
+    `primary_metric_*`; mixing the two leads back to the B13
+    confusion this delta closes."""
+    stray = [
+        name
+        for name in schema.model_fields
+        if "primary_loss" in name and name != "primary_loss_column"
+    ]
+    assert stray == [], (
+        f"{schema.__name__} has stray primary_loss_* field(s): "
+        f"{stray}; use primary_metric_* per D-B16.5 / B17"
+    )

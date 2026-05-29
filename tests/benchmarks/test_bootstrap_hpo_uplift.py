@@ -116,7 +116,7 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_paired_cells_emit_ci(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """2 seeds x 2 folds x default+tuned; per-cell default=0.50,
-    tuned=0.30; assert primary_loss_mean ≈ 0.20 (positive Δ,
+    tuned=0.30; assert primary_metric_mean ≈ 0.20 (positive Δ,
     closes qa-C1 sign) and ci_lo <= mean <= ci_hi."""
     config, output_root, manifest = _setup(tmp_path)
     rows = []
@@ -132,12 +132,12 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_paired_cells_emit_ci(
     )
     assert len(rollup) == 1
     row = rollup[0]
-    assert row.primary_loss_mean == pytest.approx(0.20, abs=1e-9)
+    assert row.primary_metric_mean == pytest.approx(0.20, abs=1e-9)
     assert row.n_cells_paired == 4
-    assert row.primary_loss_mean is not None
-    assert row.primary_loss_ci_lo is not None
-    assert row.primary_loss_ci_hi is not None
-    assert row.primary_loss_ci_lo <= row.primary_loss_mean <= row.primary_loss_ci_hi
+    assert row.primary_metric_mean is not None
+    assert row.primary_metric_ci_lo is not None
+    assert row.primary_metric_ci_hi is not None
+    assert row.primary_metric_ci_lo <= row.primary_metric_mean <= row.primary_metric_ci_hi
     assert row.primary_metric == "delta"
     assert row.primary_loss_column == "log_loss"
     assert row.bootstrap_skipped_reason is None
@@ -165,7 +165,7 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_sign_convention_default_minus_tun
     rollup = aggregate_bootstrap_hpo_uplift_rollup(
         config, output_root=output_root, env=env, manifest=manifest
     )
-    assert rollup[0].primary_loss_mean == pytest.approx(0.20, abs=1e-9)
+    assert rollup[0].primary_metric_mean == pytest.approx(0.20, abs=1e-9)
 
 
 # --- 3. Anti-degeneracy oracle ---------------------------------------------
@@ -190,9 +190,9 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_ci_width_nonzero_with_multiple_ce
         config, output_root=output_root, env=env, manifest=manifest
     )
     row = rollup[0]
-    assert row.primary_loss_ci_hi is not None
-    assert row.primary_loss_ci_lo is not None
-    assert row.primary_loss_ci_hi - row.primary_loss_ci_lo > 0.0
+    assert row.primary_metric_ci_hi is not None
+    assert row.primary_metric_ci_lo is not None
+    assert row.primary_metric_ci_hi - row.primary_metric_ci_lo > 0.0
 
 
 # --- 4. Single-entity-degenerate primitive path ----------------------------
@@ -217,9 +217,9 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_single_paired_cell_degenerate(
     )
     row = rollup[0]
     assert row.n_cells_paired == 1
-    assert row.primary_loss_mean == pytest.approx(0.15, abs=1e-9)
-    assert row.primary_loss_ci_lo == row.primary_loss_mean
-    assert row.primary_loss_ci_hi == row.primary_loss_mean
+    assert row.primary_metric_mean == pytest.approx(0.15, abs=1e-9)
+    assert row.primary_metric_ci_lo == row.primary_metric_mean
+    assert row.primary_metric_ci_hi == row.primary_metric_mean
 
 
 # --- 5/6/7. Sentinel rows: default_only, tuned_only, paired_but_no_valid_loss ---
@@ -251,7 +251,7 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_default_only_emits_sentinel(
     )
     by_model = {r.model_name: r for r in rollup}
     assert by_model["m_default_only"].bootstrap_skipped_reason == "default_only"
-    assert by_model["m_default_only"].primary_loss_mean is None
+    assert by_model["m_default_only"].primary_metric_mean is None
 
 
 def test_aggregate_bootstrap_hpo_uplift_rollup_tuned_only_emits_sentinel(

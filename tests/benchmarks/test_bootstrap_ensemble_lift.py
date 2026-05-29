@@ -174,7 +174,7 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_paired_cells_emit_ci(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """2 seeds x 2 folds with `loss(GBM)=0.60, loss(GBM+seq)=0.40`
-    per cell; assert `primary_loss_mean == pytest.approx(0.20)` and
+    per cell; assert `primary_metric_mean == pytest.approx(0.20)` and
     `ci_lo <= mean <= ci_hi`. Closes qa-C1 sign-convention pin."""
     config, output_root, manifest = _setup(tmp_path)
     _stub_load_run(monkeypatch, _ok_rows_both_families())
@@ -190,12 +190,12 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_paired_cells_emit_ci(
     )
     assert len(rollup) == 1
     row = rollup[0]
-    assert row.primary_loss_mean == pytest.approx(0.20, abs=1e-9)
+    assert row.primary_metric_mean == pytest.approx(0.20, abs=1e-9)
     assert row.n_cells_paired == 4
-    assert row.primary_loss_ci_lo is not None
-    assert row.primary_loss_ci_hi is not None
-    assert row.primary_loss_mean is not None
-    assert row.primary_loss_ci_lo <= row.primary_loss_mean <= row.primary_loss_ci_hi
+    assert row.primary_metric_ci_lo is not None
+    assert row.primary_metric_ci_hi is not None
+    assert row.primary_metric_mean is not None
+    assert row.primary_metric_ci_lo <= row.primary_metric_mean <= row.primary_metric_ci_hi
     assert row.primary_metric == "delta_loss"
     assert row.primary_loss_column == "log_loss"
     assert row.bootstrap_skipped_reason is None
@@ -223,7 +223,7 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_sign_convention_baseline_minus
     rollup = aggregate_bootstrap_ensemble_lift_rollup(
         config, output_root=output_root, env=env, manifest=manifest
     )
-    assert rollup[0].primary_loss_mean == pytest.approx(0.20, abs=1e-9)
+    assert rollup[0].primary_metric_mean == pytest.approx(0.20, abs=1e-9)
 
 
 # --- 3. Anti-degeneracy oracle ---------------------------------------------
@@ -248,9 +248,9 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_ci_width_nonzero_with_multiple
         config, output_root=output_root, env=env, manifest=manifest
     )
     row = rollup[0]
-    assert row.primary_loss_ci_hi is not None
-    assert row.primary_loss_ci_lo is not None
-    assert row.primary_loss_ci_hi - row.primary_loss_ci_lo > 0.0
+    assert row.primary_metric_ci_hi is not None
+    assert row.primary_metric_ci_lo is not None
+    assert row.primary_metric_ci_hi - row.primary_metric_ci_lo > 0.0
 
 
 # --- 4. Seed-disjoint -> deterministic lexically-first sentinel ------------
@@ -318,7 +318,7 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_single_paired_cell_degenerate(
     )
     row = rollup[0]
     assert row.n_cells_paired == 1
-    assert row.primary_loss_mean == pytest.approx(0.15, abs=1e-9)
+    assert row.primary_metric_mean == pytest.approx(0.15, abs=1e-9)
 
 
 # --- 6. no_gbm_predictions sentinel (Gate D bypassed by 2nd dataset) ------

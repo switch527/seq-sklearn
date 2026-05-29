@@ -129,11 +129,11 @@ def test_aggregate_bootstrap_training_time_rollup_happy_path_emits_ci(
     assert row.model_name == "fake_constant_binary"
     assert row.primary_metric == "wall_seconds"
     assert row.n_cells_evaluated >= 1
-    assert row.primary_loss_mean is not None
-    assert row.primary_loss_ci_lo is not None
-    assert row.primary_loss_ci_hi is not None
-    assert row.primary_loss_mean >= 0.0
-    assert row.primary_loss_ci_lo <= row.primary_loss_mean <= row.primary_loss_ci_hi
+    assert row.primary_metric_mean is not None
+    assert row.primary_metric_ci_lo is not None
+    assert row.primary_metric_ci_hi is not None
+    assert row.primary_metric_mean >= 0.0
+    assert row.primary_metric_ci_lo <= row.primary_metric_mean <= row.primary_metric_ci_hi
 
 
 def test_aggregate_bootstrap_training_time_rollup_ci_width_nonzero_with_multiple_cells(
@@ -178,13 +178,13 @@ def test_aggregate_bootstrap_training_time_rollup_ci_width_nonzero_with_multiple
     assert len(rows) == 1
     row = rows[0]
     assert row.n_cells_evaluated == 6
-    assert row.primary_loss_mean is not None
-    assert row.primary_loss_ci_lo is not None
-    assert row.primary_loss_ci_hi is not None
+    assert row.primary_metric_mean is not None
+    assert row.primary_metric_ci_lo is not None
+    assert row.primary_metric_ci_hi is not None
     # Strict assertion: CI width must be > 0. An entity-id
     # degeneracy bug (entity_ids=np.zeros) would produce
     # ci_lo == ci_hi and fail this test.
-    assert row.primary_loss_ci_hi - row.primary_loss_ci_lo > 0.0
+    assert row.primary_metric_ci_hi - row.primary_metric_ci_lo > 0.0
 
 
 def test_aggregate_bootstrap_training_time_rollup_zero_wall_seconds_produces_zero_width_ci(
@@ -193,7 +193,7 @@ def test_aggregate_bootstrap_training_time_rollup_zero_wall_seconds_produces_zer
 ) -> None:
     """Round-1 qa-I3 reframe: when every cell has
     wall_seconds=0.0 (smoke-tier degenerate), the rollup row
-    has primary_loss_mean = ci_lo = ci_hi = 0.0. This is the
+    has primary_metric_mean = ci_lo = ci_hi = 0.0. This is the
     n-entities-zero-loss path (each cell is its own entity),
     NOT the single-entity degenerate path at
     benchmarks/metrics/bootstrap.py:133-136."""
@@ -222,9 +222,9 @@ def test_aggregate_bootstrap_training_time_rollup_zero_wall_seconds_produces_zer
     )
     assert len(rows) >= 1
     row = rows[0]
-    assert row.primary_loss_mean == 0.0
-    assert row.primary_loss_ci_lo == 0.0
-    assert row.primary_loss_ci_hi == 0.0
+    assert row.primary_metric_mean == 0.0
+    assert row.primary_metric_ci_lo == 0.0
+    assert row.primary_metric_ci_hi == 0.0
     # Confirm the code path: each cell its own entity (n_entities == n_cells).
     assert captured["n_entities"] == captured["n_cells"]
     assert int(cast(int, captured["n_cells"])) >= 2  # multi-entity, NOT single-entity degenerate
@@ -273,9 +273,9 @@ def test_aggregate_bootstrap_training_time_rollup_single_entity_degenerate(
     row = rows[0]
     assert row.n_cells_evaluated == 1
     # Unconditional assertion: pins the single-entity-degenerate path.
-    assert row.primary_loss_mean == pytest.approx(1.234, abs=1e-9)
-    assert row.primary_loss_ci_lo == row.primary_loss_mean
-    assert row.primary_loss_ci_hi == row.primary_loss_mean
+    assert row.primary_metric_mean == pytest.approx(1.234, abs=1e-9)
+    assert row.primary_metric_ci_lo == row.primary_metric_mean
+    assert row.primary_metric_ci_hi == row.primary_metric_mean
 
 
 # --- All-cells-skipped sentinel ---------------------------------------------

@@ -799,9 +799,9 @@ def _render_dataset_block_with_ci(
             expected = rollup_row.n_seeds * rollup_row.n_folds
             partial = rollup_row.n_cells_paired < expected and expected > 0
             ci_cell = format_ci_cell(
-                rollup_row.primary_loss_mean,
-                rollup_row.primary_loss_ci_lo,
-                rollup_row.primary_loss_ci_hi,
+                rollup_row.primary_metric_mean,
+                rollup_row.primary_metric_ci_lo,
+                rollup_row.primary_metric_ci_hi,
                 partial=partial,
             )
         row_cells = [
