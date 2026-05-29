@@ -1081,6 +1081,132 @@ broadcast from per-instance predictions.
   raw-mts reshape; a follow-up wires aeon's per-categorical
   wrappers or a fixed one-hot path.
 
+### Phase B13: Entity-block bootstrap CIs (B5.4)
+
+**Goal**: implement the B5.4 entity-block bootstrap CI primitive
+that the metrics module references but does not deliver, and
+that the B11 + B12 Gemini final-passes both flagged as a
+load-bearing correctness gap. Minimal v1 scope: bootstrap
+primitive + RollupRow + B5 leaderboard renderer integration.
+
+**Review trail**: 6 design-review rounds (R1: 6C/13I/7N
+deduped -> R2: 1C/2I/3N -> R3 APPROVE) + Gemini design
+final-pass (3 CRITICALs all addressed: loader determinism,
+OOM ceiling, stale-rollup freshness) + R4 (2 NEW CRITICALs
+from R4 fixes: undeclared `RawRollupError` + undeclared
+`RunManifest.fingerprint()`) + R5 (2 NEW CRITICALs: CLI catch
+contradiction + internal inconsistency in B13.0) + R6 APPROVE.
+
+**Modules** (B13.0 foundations + the v1 surface):
+
+- `benchmarks/adapters/_base.py`: unchanged.
+- `benchmarks/run_manifest.py`: extend `RunManifest` with
+  `fingerprint() -> str` (SHA-256 of canonical-JSON serialized
+  reproducibility fields, omitting `completed_at_utc` which
+  rewrites at run-end).
+- `benchmarks/config.py`: extend `ExperimentSpec` with
+  `bootstrap_rollup_enabled: bool = True` +
+  `bootstrap_n_resamples: int | None = None`. Per-experiment
+  opt-out + per-experiment override.
+- `benchmarks/metrics/bootstrap.py` (NEW): the entity-block
+  bootstrap primitive. Pure function:
+  `entity_block_bootstrap_ci(losses, entity_ids, *, n_resamples,
+  confidence, seed, metric_fn) -> (mean, ci_lo, ci_hi)`. Uses
+  `np.random.Generator(np.random.PCG64(seed))` EXPLICITLY (not
+  `default_rng`); `np.percentile(..., method="linear")`
+  EXPLICITLY. Input arrays set `flags.writeable = False` at
+  entry so a mutating `metric_fn` raises immediately.
+- `benchmarks/bootstrap_manifest.py` (NEW): `RollupRow` pydantic
+  model + `write_rollup` / `load_rollup` / `rollup_path`
+  helpers. Atomic-rename parquet write.
+- `benchmarks/report/bootstrap_rollup.py` (NEW): the aggregator.
+  `RawRollupError(RuntimeError)` + `aggregate_bootstrap_rollup
+  (config, *, output_root, env, manifest)`. Reads B5 manifest +
+  per-cell predictions shards, re-resolves entity_id by
+  re-loading the panel + defensive sort by `(entity_col,
+  time_col)` + row-count drift check, builds per-row losses
+  (classification via `metrics.pairwise.classification_nll`,
+  regression as squared error), calls the primitive with
+  per-task `metric_fn` (`np.nanmean` for classification,
+  `sqrt(np.nanmean(.))` for regression so sqrt applies PER
+  RESAMPLE, closing the Gemini-C1 Jensen gap), emits `RollupRow`
+  per (dataset, model, task_type). Row-count ceiling
+  `5e10` gates OOM on huge datasets (D-B13.7 names the
+  sufficient-statistics optimization for the followup).
+- `benchmarks/report/raw_loss.py`: adds
+  `render_leaderboard_markdown_with_ci(manifest, rollup, *,
+  expected_manifest_fingerprint, aggregator_error_class)`
+  alongside the existing `render_leaderboard_markdown`. The
+  renderer dispatches by rollup presence; the CI variant
+  joins on `(dataset, model, task_type)` and renders
+  `mean [ci_lo, ci_hi]` with a `*` suffix when
+  `n_cells_evaluated < n_seeds * n_folds` (partial-fold flag,
+  Gemini-I3). Three footnote sources: per-cell skip (existing),
+  rollup-level skip (`bootstrap_skipped_reason`), and
+  aggregator-failed (CLI-wrapper case). Freshness check via
+  `manifest_fingerprint` on every RollupRow.
+- `benchmarks/run.py`: new `_run_bootstrap_rollup(config, *,
+  env, output_root)` wrapper between raw_loss and the
+  leaderboard render. Calls the aggregator; catches
+  `RawRollupError`; deletes any partial output; returns
+  silently so the run continues with exit code 0. Gated by
+  `is_rollup_enabled(config)`.
+
+**Dependencies**: B5 (manifest + predictions shards), B9 (run
+manifest + fingerprint).
+
+**Deliverable tests** (46 across 6 test files):
+
+- `tests/benchmarks/test_bootstrap.py` (15 tests): primitive
+  contracts (mean matches ground truth, entity-vs-row CI width
+  ratio with zero within-entity variance, PCG64 determinism,
+  cross-process canary, `method="linear"` pin via spy,
+  writeable=False defense, partial-NaN does not propagate,
+  custom metric_fn dispatch, per-resample sqrt oracle).
+- `tests/benchmarks/test_bootstrap_manifest.py` (6 tests):
+  RollupRow round-trip through parquet (all Gemini-added
+  fields enumerated), atomic-replace on overwrite, empty
+  shard, extra=forbid.
+- `tests/benchmarks/test_bootstrap_rollup.py` (11 tests): e2e
+  classification + regression paths, all-skipped sentinel,
+  numpy_version capture, manifest_fingerprint capture,
+  smoke-profile n_resamples (5000), per-experiment override,
+  loader row-count drift raises, row-count ceiling raises,
+  empty manifest raises, shard written to disk.
+- `tests/benchmarks/test_raw_loss_report.py` (8 tests): CI
+  variant rendering, fallback to std on no-rollup, std-column
+  drop when CI present, freshness mismatch fallback,
+  aggregator-failed footnote, partial-fold `*` flag,
+  rollup-skipped separate footnote, std signature preserved.
+- `tests/benchmarks/test_loader_conformance.py` (2 tests):
+  every-registered-loader determinism check + a deliberately
+  non-deterministic loader detected (negative-path proves the
+  conformance check is not vacuously passing).
+- `tests/benchmarks/test_run_bootstrap_rollup_wrapper.py` (4
+  tests): happy-path writes shard, opt-out via
+  `bootstrap_rollup_enabled=False`, RawRollupError caught +
+  partial output deleted, missing run_manifest skip.
+
+**Done when**: `python -m benchmarks.run --config <cfg>
+--experiment=raw_loss` emits `bootstrap_rollup.parquet` next
+to the manifest + the assembled `leaderboard.md` ships the CI
+column. With `bootstrap_rollup_enabled=False`, the rollup is
+skipped and the leaderboard ships the legacy `mean ± std`
+shape.
+
+**B13-followup deferrals** (out of scope for v1):
+
+- D-B13.1: B6 (ensemble pairwise) CI integration.
+- D-B13.2: B7 (training-time) CI.
+- D-B13.3: B8 (HPO-uplift) Δ-statistic paired CI.
+- D-B13.4: B11 (ensemble-lift) per-dataset Δ CI.
+- D-B13.5: BCa CI (v1 ships percentile only).
+- D-B13.6: per-fold CIs (v1 aggregates across folds + seeds
+  for a single CI per (dataset, model)).
+- D-B13.7: per-entity sufficient-statistics optimization for
+  the OOM ceiling on full-tier datasets. Both v1 metric_fns
+  are expressible from (sum, count) sufficient statistics.
+
 ## Risk register
 
 | ID | Risk | Severity | Mitigation |

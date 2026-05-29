@@ -32,9 +32,15 @@ from pathlib import Path
 from typing import Any, cast
 
 import pandas as pd
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
+from benchmarks.bootstrap_manifest import (
+    aggregator_failed_sentinel_path,
+    load_rollup,
+    rollup_path,
+)
 from benchmarks.manifest import load_run
+from benchmarks.run_manifest import load_run_manifest, run_manifest_path
 
 logger = logging.getLogger(__name__)
 
@@ -315,11 +321,280 @@ def render_leaderboard_markdown(manifest: pd.DataFrame) -> str:
     return "\n".join(parts)
 
 
+def render_leaderboard_markdown_with_ci(
+    manifest: pd.DataFrame,
+    rollup: list[Any],
+    *,
+    expected_manifest_fingerprint: str | None = None,
+    aggregator_error_class: str | None = None,
+    manifest_unreadable: bool = False,
+) -> str:
+    """Render the leaderboard with B13 bootstrap CIs.
+
+    The CI variant joins the manifest with the rollup table on
+    `(dataset_name, model_name, task_type)` and replaces the
+    primary-loss `mean ± std` column with `mean [ci_lo, ci_hi]`.
+
+    Footnote-source precedence (evaluation order; each is
+    short-circuiting unless noted):
+
+    1. `aggregator_error_class is not None` (Gemini-C1/C2 wrapper
+       caught a `RawRollupError`): std variant + "Bootstrap
+       aggregator failed: <class>" footnote. Nothing else
+       evaluated.
+    2. `not rollup` (no rollup ran; opt-out or absent file): std
+       variant; no footnote.
+    3. `expected_manifest_fingerprint` given AND any rollup row's
+       `manifest_fingerprint` mismatches (Gemini-C3 freshness):
+       std variant + "rollup is stale" footnote. Nothing else
+       evaluated.
+    4. CI variant body renders; if `manifest_unreadable=True`
+       (R2 arch-I2), append the "freshness check skipped"
+       footnote to the CI body (NOT short-circuiting, the CI
+       variant is what the reader sees).
+
+    Args:
+        manifest: the B5 manifest DataFrame (from `load_run`).
+        rollup: the B13 rollup rows (from `load_rollup`).
+        expected_manifest_fingerprint: the live run manifest's
+            fingerprint; the renderer asserts every rollup row
+            matches before joining.
+        aggregator_error_class: when set, the renderer falls back
+            to the std variant + emits the failure footnote.
+        manifest_unreadable: when True, the renderer appends a
+            "freshness check skipped: manifest unreadable" footnote.
+    """
+    if aggregator_error_class is not None:
+        std_body = render_leaderboard_markdown(manifest)
+        footnote = (
+            "\n### Bootstrap aggregator failed\n\n"
+            f"_The B13 bootstrap-rollup aggregator raised "
+            f"`{aggregator_error_class}`; the leaderboard above is "
+            "rendered in the legacy `mean ± std` shape. See the "
+            "run logs for the underlying cause._\n"
+        )
+        return std_body + footnote
+
+    if not rollup:
+        # No rollup ran (opt-out via ExperimentSpec, or smoke-tier
+        # config that disabled it). Fall back silently.
+        return render_leaderboard_markdown(manifest)
+
+    if expected_manifest_fingerprint is not None and any(
+        row.manifest_fingerprint != expected_manifest_fingerprint for row in rollup
+    ):
+        std_body = render_leaderboard_markdown(manifest)
+        footnote = (
+            "\n### Bootstrap rollup is stale\n\n"
+            "_The B13 bootstrap-rollup file's manifest_fingerprint "
+            "does not match the current manifest's; the CI variant "
+            "was suppressed for safety. Re-run with "
+            "`--experiment=raw_loss` to refresh the rollup._\n"
+        )
+        return std_body + footnote
+
+    body = _render_with_ci(manifest, rollup)
+    if manifest_unreadable:
+        body += (
+            "\n### Bootstrap freshness check skipped\n\n"
+            "_The B13 freshness check could not run because "
+            "`run_manifest.json` is corrupt or schema-mismatched; the "
+            "CI variant above was NOT verified against the live "
+            "manifest's fingerprint. Re-run `--experiment=raw_loss` "
+            "to refresh both the manifest and the rollup._\n"
+        )
+    return body
+
+
+def _format_ci_cell(
+    mean: float | None,
+    ci_lo: float | None,
+    ci_hi: float | None,
+    *,
+    partial: bool,
+) -> str:
+    """`mean [ci_lo, ci_hi]` with 4 decimal places; appends `*` when
+    `partial=True` (rollup ran on fewer cells than `n_seeds *
+    n_folds`)."""
+    if mean is None or ci_lo is None or ci_hi is None:
+        return "(no CI)"
+    star = "*" if partial else ""
+    return f"{mean:.4f} [{ci_lo:.4f}, {ci_hi:.4f}]{star}"
+
+
+def _render_with_ci(manifest: pd.DataFrame, rollup: list[Any]) -> str:
+    # Index the rollup by (dataset, model, task_type) for the join.
+    rollup_index: dict[tuple[str, str, str], Any] = {}
+    for row in rollup:
+        key = (row.dataset_name, row.model_name, row.task_type)
+        rollup_index[key] = row
+
+    # n_folds per (dataset, model) = the number of distinct
+    # fold_index values in the manifest's OK rows for that group.
+    # Used for the partial-fold `*` flag (Gemini-I3).
+    ok = manifest.loc[manifest["skipped_reason"].isna()]
+    folds_per_group: dict[tuple[str, str], int] = {}
+    if not ok.empty:
+        for (ds, mdl), block in ok.groupby(["dataset_name", "model_name"]):
+            key = (str(ds), str(mdl))
+            folds_per_group[key] = int(block["fold_index"].nunique())
+
+    entries = rank_by_primary_loss(manifest)
+    by_dataset: dict[str, list[LeaderboardEntry]] = {}
+    for entry in entries:
+        by_dataset.setdefault(entry.dataset_name, []).append(entry)
+
+    parts = ["# Raw-loss leaderboard", ""]
+    rollup_skipped: list[Any] = []
+    for dataset_name in sorted(by_dataset):
+        block = _render_dataset_block_with_ci(
+            dataset_name,
+            by_dataset[dataset_name],
+            manifest,
+            rollup_index,
+            folds_per_group,
+        )
+        parts.append(block)
+
+    rollup_skipped = [row for row in rollup if row.bootstrap_skipped_reason is not None]
+    cell_footnote = _render_skipped_footnote(manifest)
+    if cell_footnote:
+        parts.append(cell_footnote)
+    if rollup_skipped:
+        parts.append(_render_rollup_skipped_footnote(rollup_skipped))
+    return "\n".join(parts)
+
+
+def _render_dataset_block_with_ci(
+    dataset_name: str,
+    entries: list[LeaderboardEntry],
+    manifest: pd.DataFrame,
+    rollup_index: dict[tuple[str, str, str], Any],
+    folds_per_group: dict[tuple[str, str], int],
+) -> str:
+    if not entries:
+        return ""
+    task_type = entries[0].task_type
+    primary_metric = entries[0].primary_metric
+    secondary_cols = _secondary_columns_for(task_type)
+    header_cells = [
+        "Rank",
+        "Model",
+        f"{primary_metric} [95% CI]",
+        "n_cells",
+        *secondary_cols,
+        *_RESOURCE_COLUMNS,
+    ]
+    sep_cells = ["---"] * len(header_cells)
+    lines = [
+        f"### {dataset_name} ({task_type}, ranked by {primary_metric})",
+        "",
+        "| " + " | ".join(header_cells) + " |",
+        "| " + " | ".join(sep_cells) + " |",
+    ]
+    for rank, entry in enumerate(entries, start=1):
+        key = (entry.dataset_name, entry.model_name, entry.task_type)
+        rollup_row = rollup_index.get(key)
+        if rollup_row is None or rollup_row.bootstrap_skipped_reason is not None:
+            ci_cell = "(no CI)"
+        else:
+            n_folds = folds_per_group.get((entry.dataset_name, entry.model_name), 0)
+            expected = entry.n_seeds * n_folds
+            partial = rollup_row.n_cells_evaluated < expected and expected > 0
+            ci_cell = _format_ci_cell(
+                rollup_row.primary_loss_mean,
+                rollup_row.primary_loss_ci_lo,
+                rollup_row.primary_loss_ci_hi,
+                partial=partial,
+            )
+        ok_block = manifest.loc[
+            (manifest["dataset_name"] == dataset_name)
+            & (manifest["model_name"] == entry.model_name)
+            & manifest["skipped_reason"].isna()
+        ]
+        row_cells = [str(rank), entry.model_name, ci_cell, str(entry.n_cells_evaluated)]
+        for col in secondary_cols:
+            if col not in ok_block.columns:
+                row_cells.append("")
+                continue
+            if col == "mape_skip_reason":
+                vals = ok_block[col].dropna()
+                row_cells.append(str(vals.iloc[0]) if not vals.empty else "")
+                continue
+            row_cells.append(_format_metric(ok_block[col].astype(float).mean()))
+        for col in _RESOURCE_COLUMNS:
+            if col not in ok_block.columns:
+                row_cells.append("")
+                continue
+            row_cells.append(_format_metric(ok_block[col].astype(float).mean()))
+        lines.append("| " + " | ".join(row_cells) + " |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_rollup_skipped_footnote(rollup_skipped: list[Any]) -> str:
+    lines = ["### Bootstrap skipped", ""]
+    lines.append("| Dataset | Model | Reason |")
+    lines.append("| --- | --- | --- |")
+    for row in rollup_skipped:
+        reason = str(row.bootstrap_skipped_reason or "")
+        if len(reason) > 120:
+            reason = reason[:117] + "..."
+        lines.append(f"| {row.dataset_name} | {row.model_name} | {reason} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_from_dir(output_root: Path) -> str:
     """Convenience: load the manifest under `output_root` and render.
 
     The CLI calls this after `run_raw_loss` finishes so the
     leaderboard markdown is written next to the manifest shards.
+    The CI variant kicks in when a rollup file is present AND the
+    rollup's `manifest_fingerprint` matches the live run manifest's
+    (Gemini-C3 freshness check). When the CLI wrapper caught a
+    `RawRollupError` and wrote `bootstrap_aggregator_failed.txt`,
+    the renderer surfaces the "Bootstrap aggregator failed"
+    footnote in the std fallback (B13.0 + Gemini-C2 wrapper case).
     """
     manifest = load_run(output_root)
+
+    # Gemini-C2 wrapper case: a failed aggregator dropped a sentinel
+    # file naming the exception class. Render std + the failure
+    # footnote.
+    failure_sentinel = aggregator_failed_sentinel_path(output_root)
+    if failure_sentinel.exists():
+        error_class = failure_sentinel.read_text(encoding="utf-8").strip()
+        return render_leaderboard_markdown_with_ci(manifest, [], aggregator_error_class=error_class)
+
+    if rollup_path(output_root).exists():
+        rollup = load_rollup(output_root)
+        if rollup:
+            # Gemini-C3 freshness check: pass the live manifest's
+            # fingerprint so a stale rollup falls back to the std
+            # variant with a "rollup is stale" footnote.
+            expected: str | None = None
+            manifest_unreadable = False
+            if run_manifest_path(output_root).exists():
+                try:
+                    run_manifest = load_run_manifest(output_root)
+                except (
+                    FileNotFoundError,
+                    ValueError,
+                    ValidationError,
+                ):
+                    # R2 arch-I2: the manifest file exists but is
+                    # corrupt or schema-mismatched. Surface a
+                    # "freshness check skipped" footnote rather
+                    # than silently rendering an unverified CI.
+                    run_manifest = None
+                    manifest_unreadable = True
+                if run_manifest is not None:
+                    expected = run_manifest.fingerprint()
+            return render_leaderboard_markdown_with_ci(
+                manifest,
+                rollup,
+                expected_manifest_fingerprint=expected,
+                manifest_unreadable=manifest_unreadable,
+            )
     return render_leaderboard_markdown(manifest)

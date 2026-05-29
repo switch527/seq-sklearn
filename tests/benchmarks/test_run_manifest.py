@@ -7,6 +7,7 @@ behavior on a CPU-only mock host.
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -20,6 +21,8 @@ from benchmarks.run_manifest import (
     run_manifest_path,
     write_run_manifest,
 )
+
+from tests.benchmarks._fakes import register_all_fakes_and_get_panels
 
 
 def _config(tmp_path: Path) -> BenchmarkConfig:
@@ -370,3 +373,77 @@ def test_run_manifest_is_frozen_and_extra_forbid(tmp_path: Path) -> None:
             output_root=str(tmp_path / "out"),
             stray_field=1,  # pyright: ignore[reportCallIssue]
         )
+
+
+# --- B13 RunManifest.fingerprint() invariants --------------------------------
+
+
+@pytest.fixture
+def _registered_fakes() -> None:
+    register_all_fakes_and_get_panels()
+
+
+def _build_simple_manifest(
+    *,
+    library_git_sha: str = "0" * 40,
+    completed_at_utc: str | None = None,
+    tmp_path: Path,
+) -> Any:
+    from benchmarks.config import BenchmarkConfig, ExperimentSpec
+    from benchmarks.run_manifest import build_run_manifest
+
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(ExperimentSpec(kind="raw_loss", seeds=(0,)),),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    return build_run_manifest(
+        config=config,
+        run_id="run-1",
+        library_git_sha=library_git_sha,
+        profile="smoke",
+        hardware_tier="cpu",
+        output_root=tmp_path / "out",
+        started_at_utc="2026-05-28T12:00:00+00:00",
+        completed_at_utc=completed_at_utc,
+    )
+
+
+@pytest.mark.usefixtures("_registered_fakes")
+def test_run_manifest_fingerprint_same_content_is_stable(
+    tmp_path: Path,
+) -> None:
+    """qa-I1: two manifests built with identical inputs produce
+    identical SHA-256 hex digests."""
+    m1 = _build_simple_manifest(tmp_path=tmp_path)
+    m2 = _build_simple_manifest(tmp_path=tmp_path)
+    assert m1.fingerprint() == m2.fingerprint()
+    assert len(m1.fingerprint()) == 64  # SHA-256 hex digest length
+
+
+@pytest.mark.usefixtures("_registered_fakes")
+def test_run_manifest_fingerprint_differs_on_library_git_sha_change(
+    tmp_path: Path,
+) -> None:
+    """qa-I1: changing `library_git_sha` changes the digest. The
+    Gemini-C3 stale-rollup detection depends on this."""
+    m1 = _build_simple_manifest(library_git_sha="a" * 40, tmp_path=tmp_path)
+    m2 = _build_simple_manifest(library_git_sha="b" * 40, tmp_path=tmp_path)
+    assert m1.fingerprint() != m2.fingerprint()
+
+
+@pytest.mark.usefixtures("_registered_fakes")
+def test_run_manifest_fingerprint_invariant_under_completed_at_utc_change(
+    tmp_path: Path,
+) -> None:
+    """qa-I1: the volatile `completed_at_utc` field is excluded
+    from the digest by design (a run with `completed_at_utc=None`
+    written at start-of-run and the same run with
+    `completed_at_utc=<timestamp>` written at run-end must produce
+    the SAME fingerprint, otherwise stale-rollup detection breaks
+    on every clean run)."""
+    m1 = _build_simple_manifest(completed_at_utc=None, tmp_path=tmp_path)
+    m2 = _build_simple_manifest(completed_at_utc="2026-05-28T13:00:00+00:00", tmp_path=tmp_path)
+    assert m1.fingerprint() == m2.fingerprint()

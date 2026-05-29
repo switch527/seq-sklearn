@@ -37,6 +37,7 @@ record stays inspectable.
 ../docs_strategy_research
 ../benchmark_suite_design
 ../benchmark_suite_design_b12_delta
+../benchmark_suite_design_b13_delta
 ../benchmark_suite_implementation_plan
 ../hyperparameter_strategy
 ../refactor_prediction_step
