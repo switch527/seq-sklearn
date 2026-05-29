@@ -259,11 +259,15 @@ two reasons:
   fallback would be unreachable.
 
 `benchmarks/run.py + benchmarks/report/raw_loss.py:
-<output_root>/bootstrap_aggregator_failed.txt`: a one-line
-filesystem sentinel that decouples the CLI wrapper from the
-renderer. Cross-module FS contract (R2 arch-C1 close): the
-filename is declared here so a future maintainer changing
-either side doesn't silently break the contract.
+aggregator_failed_sentinel_path(root)`: a one-line filesystem
+sentinel under `<output_root>` (the filename literal lives in
+`benchmarks/bootstrap_manifest.py:_AGGREGATOR_FAILED_SENTINEL_FILENAME`,
+exposed via the helper named here; both writer and reader call
+the helper rather than re-deriving the path). Decouples the CLI
+wrapper from the renderer. Cross-module FS contract (R2 arch-C1
+close): the helper is the single source of truth so a future
+maintainer changing either side cannot silently break the
+contract.
 
 - **Producer**: `benchmarks/run.py:_run_bootstrap_rollup`, in
   the `except RawRollupError as exc` block, writes the file
