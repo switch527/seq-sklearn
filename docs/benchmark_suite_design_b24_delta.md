@@ -563,6 +563,14 @@ IMPROVEMENT, 4 NITPICK. Closures:
 Test count after R1 build-swarm closures: 23 named (was 22;
 code-R1-I1 added test #4c); 973 collected (was 972).
 
+### R2 build-swarm closure
+
+R2 confirming build swarm on commit `4da741d`: code-reviewer
+(0C / 0I / 0N APPROVE), qa-test-coverage (0C / 0I / 0N
+APPROVE), architecture-reviewer (0C / 0I / 0N APPROVE),
+style-reviewer (0C / 0I / 0N APPROVE). Build consensus
+reached: zero CRITICAL, zero IMPROVEMENT, zero NITPICK.
+
 ## Deferred
 
 - **D-B24.1**: surface oracle BCa fallback on rollup rows
