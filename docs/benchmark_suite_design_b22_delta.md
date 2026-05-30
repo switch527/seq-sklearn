@@ -238,10 +238,12 @@ pattern but with their own per-row sources for fold_index +
 seed:
 - **B6 pairwise** + **B7 training-time** + **B8 HPO-uplift**:
   cell-as-entity (B14.0 contract), so `entities = np.arange(n_cells)`
-  and `fold_indices = ok_cells["fold_index"].to_numpy().astype(np.int64)`
-  + `seeds = ok_cells["seed"].to_numpy().astype(np.int64)`.
-  No per-row broadcasting needed because each cell IS a
-  single-row entity.
+  and `fold_indices = ok["fold_index"].to_numpy().astype(np.int64)`
+  + `seeds = ok["seed"].to_numpy().astype(np.int64)`
+  (where `ok` is the local name each aggregator binds to
+  the filtered OK-cells frame; B5 binds `ok_cells`, the
+  other three bind `ok`). No per-row broadcasting needed
+  because each cell IS a single-row entity.
 - **B16 ensemble_lift**: cell-as-entity via
   `computed.cells`; each `PerCellLiftDelta` carries
   `seed` + `fold_index` directly, so `fold_indices` and
@@ -552,14 +554,26 @@ the existing `entity_block_bootstrap_ci` primitive + numpy.
     `load_pairwise_rollup`. Assert every `FoldCI` field
     survives. Closes the pyarrow nested-struct round-
     trip gap for schemas beyond B5.
+19. `test_b16_aggregator_per_fold_cis_does_not_populate_oracle_field`
+    (qa-R2-I2 closure: pin the D-B22.2 deferral
+    explicitly): run the B16 ensemble_lift aggregator with
+    `bootstrap_per_fold_cis_enabled=True` on a fixture
+    including oracle loss data. Assert (a) the emitted
+    `EnsembleLiftRollupRow` has `per_fold_cis is not None`
+    (main delta per-fold IS computed), AND (b) the row's
+    schema does NOT carry an attribute named
+    `per_fold_oracle_cis` (oracle per-fold is deferred
+    under D-B22.2). The second assertion catches a
+    silent v1 scope creep where a coder accidentally adds
+    the oracle field; the test enforces R-B22-Risk-5.
 
 Expected test delta after the build:
 - Existing tests: 903 → 903 (no count change; default-off
   preserves behavior; the byte-pin asserts + the test #16
   per_fold_cis None pin are inline extensions of existing
   tests).
-- B22-new: 18 tests.
-- Total: 903 + 18 = 921 expected post-refactor.
+- B22-new: 19 tests.
+- Total: 903 + 19 = 922 expected post-refactor.
 
 ## B22.7 Risks
 
@@ -598,8 +612,10 @@ Expected test delta after the build:
    byte-pin renderer tests (non-exposure).
 7. **NEW tests**: add
    `tests/benchmarks/test_b22_per_fold_cis.py` with the
-   14 tests.
-8. **Verify**: ruff + pyright clean; 917 tests pass.
+   19 tests (14 design-named + 5 added in R1/R2 closures:
+   qa-R1-C1/C2/I1/I3 added tests #15-#18; qa-R2-I2 added
+   test #19 for the B16 oracle non-population pin).
+8. **Verify**: ruff + pyright clean; 922 tests pass.
 
 ## Addressed
 
@@ -694,6 +710,56 @@ Test count after R1 closures: 18 new tests (was 14;
 arch-R1-C1/C2 didn't add tests but the qa-R1-C1/C2/I1/I3
 closures added tests #15-#18); total `903 + 18 = 921`.
 
+### R2 confirming swarm closure
+
+R2 confirming swarm on commit `af1497d`: architecture-
+reviewer (0C / 0I / 3N APPROVE), qa-test-coverage (0C /
+2I / 1N APPROVE), style-reviewer (0C / 0I / 0N APPROVE).
+All three APPROVE. Deduplicated total: 0 CRITICAL, 2
+IMPROVEMENT, 4 NITPICK. Closures:
+
+- **arch-R2-N1 + qa-R2-I1** (B22.8 step 7 still said "14
+  tests" and step 8 still said "917 tests pass" after R1
+  closures widened to 18 / 921): updated step 7 to "19
+  tests (14 design-named + 5 R1/R2 closures)" and step 8
+  to "922 tests pass". The +1 over the R1 total reflects
+  test #19 added by qa-R2-I2.
+- **qa-R2-I2** (arch-R1-I4 closure was asserted in the
+  Addressed section but no test in the 18-item ledger
+  backed it; test #8 is the B5 aggregator, not B16):
+  added test #19
+  `test_b16_aggregator_per_fold_cis_does_not_populate_oracle_field`
+  with explicit assertions on the B16 aggregator's
+  emitted row (main per-fold computed, oracle field
+  absent from schema).
+- **arch-R2-N2** (B22.1 pseudocode named `ok_cells` for
+  non-B5 aggregators but `bootstrap_pairwise.py`,
+  `bootstrap_training_time.py`, and `bootstrap_hpo_uplift.py`
+  all bind to `ok` instead): rewrote the non-B5 paragraph
+  to reference `ok` with a parenthetical noting B5 binds
+  `ok_cells` specifically.
+- **arch-R2-N3** (the R1 closure block's dedup header
+  read "4C / 7I / 4N" but the enumerated entries are
+  4C / 6I / 3N; arch-R1-I2 unaccounted for): NOT changed.
+  The original arch-R1-I2 finding (B22.6 "6 fixture
+  sites" miscount) was folded into arch-R1-I1 in the
+  closure phrasing; both items refer to the same
+  fixture-site enumeration. The header count is a
+  bookkeeping inaccuracy that does not affect the
+  closure substance; deferred under D-B22.5 for a
+  documentation cleanup pass.
+- **qa-R2-N1** (test #8 asserts `ci_method is "bca"`
+  hardcoded rather than referencing the constant):
+  NOT changed. The constant
+  `BOOTSTRAP_DEFAULT_CI_METHOD` was set to `"bca"` in
+  B21 R-B21-6 and the v1 contract pins it there;
+  referencing the constant in the test would weaken the
+  pin against a constant flip. The hardcoded `"bca"` is
+  intentional.
+
+Test count after R2 closures: 19 new tests (was 18;
+qa-R2-I2 added test #19); total `903 + 19 = 922`.
+
 ## Deferred
 
 - **D-B22.1**: surface per-fold CIs in the renderer
@@ -720,3 +786,8 @@ closures added tests #15-#18); total `903 + 18 = 921`.
   underlying helper is uniform; per-kind override would
   add 5 redundant booleans with no per-kind variation at
   the v1 helper level.
+- **D-B22.5** (arch-R2-N3 closure): documentation cleanup
+  pass on the R1 closure block to reconcile the dedup
+  header counts with the enumerated closure entries.
+  Bookkeeping accuracy only; does not affect closure
+  substance.
