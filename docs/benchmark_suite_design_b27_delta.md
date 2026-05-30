@@ -341,6 +341,24 @@ Test count after R2 closures: 23 named / 1059 collected
 (unchanged from R1; all R2 closures were doc accuracy
 only).
 
+### R1 + R2 build-swarm closure
+
+R1 build swarm on commit `ba6d20c`: code-reviewer (0C / 0I /
+1N APPROVE), qa-test-coverage (0C / 0I / 1N APPROVE),
+architecture-reviewer (0C / 2I / 2N APPROVE), style-reviewer
+(0C / 0I / 0N APPROVE). The single recurring NITPICK is the
+oracle-sentinel-shape note: `_ENSEMBLE_LIFT_BASE` supplies
+non-None oracle metrics so the sentinel test exercises a
+row shape that real aggregators do not emit. Deferred to
+D-B27.2 (oracle CI-sentinel invariant); harmless under v1.
+
+R2 confirming build swarm on commit `ba6d20c`: code-reviewer
+(0C / 0I / 0N APPROVE), qa-test-coverage (0C / 0I / 1N
+APPROVE; D-B27.2 carryover), architecture-reviewer (0C / 0I
+/ 0N APPROVE), style-reviewer (0C / 0I / 0N APPROVE). Build
+consensus reached: zero CRITICAL, zero IMPROVEMENT, 1
+NITPICK (deferred to D-B27.2).
+
 ## Deferred
 
 - **D-B27.2**: extend the CI-sentinel
