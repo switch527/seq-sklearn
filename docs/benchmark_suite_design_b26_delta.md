@@ -332,8 +332,61 @@ Test count after R1 closures: 26 named (was 22; +4 from
 qa-R1-I1's mixed-B variants per schema); 1033 collected
 (was 1029).
 
+### R1 build-swarm closure
+
+R1 build swarm on commit `ee4b81c`: code-reviewer (0C / 0I /
+0N APPROVE), qa-test-coverage (0C / 3I / 2N APPROVE),
+architecture-reviewer (0C / 2I / 2N APPROVE), style-reviewer
+(0C / 0I / 0N APPROVE). Deduplicated total: 0 CRITICAL, 5
+IMPROVEMENT, 4 NITPICK. Closures:
+
+- **arch-R1-build-I2 + arch-R1-build-N4** (forward pointer
+  from `EnsembleLiftRollupRow._validate_row_count_invariants`
+  to D-B26.2 + "IDENTICAL BODY" markers on the 3 copy
+  validators): added a "NOTE" comment to the B23 validator
+  flagging the deferral, and added an "IDENTICAL BODY TO
+  RollupRow" marker on each of the 3 PairwiseRollupRow /
+  TrainingTimeRollupRow / HPOUpliftRollupRow validators so
+  future drift fixes land at all 4 sites.
+- **arch-R1-build-I1** (helper-symmetry preference between
+  filter-inside vs filter-at-call): NOT changed. The B25
+  reviewers explicitly endorsed the filter-at-call pattern
+  (code-R1-build-I1 closure noted as "documented contract
+  for silent-render-on-missing-attr"). The new
+  `if not rollup: return ""` guard preserves the
+  filter-at-call pattern.
+- **qa-R1-build-I1, qa-R1-build-I2, qa-R1-build-I3** (2 of
+  6 mixed variants; ci_hi-only-set untested; reject tests
+  rely on schema defaults): NOT changed. The qa reviewer
+  explicitly noted these are "deferrable; the `all()`
+  predicate over a 3-tuple is symmetric so 2 variants kill
+  the relevant mutations". Captured as deferral D-B26.3
+  below for an explicit ci_hi-only test if a future
+  reviewer wants the full 6-variant pin.
+- **qa-R1-build-N1** (non-empty path of
+  `_render_partial_coverage_footnote` not asserted in B26):
+  NOT changed. The pre-B26 B16 byte-pin tests
+  (`test_b16_ensemble_lift_ci.py`) already cover the
+  non-empty path; the new guard touches only the empty
+  path.
+- **arch-R1-build-N3** (test module docstring "26 named;
+  26 collected" arithmetic spell-out): NOT changed;
+  cosmetic.
+
+Test count after R1 build-swarm closures: 26 named (no
+change; all IMPs/NITs were comment-grade); 1033 collected.
+
 ## Deferred
 
+- **D-B26.3**: extend mixed-reject coverage to all 6
+  partially-set combinations per schema (current 2 cover
+  mean-only and ci_lo-only; missing: ci_hi-only, mean+ci_lo,
+  mean+ci_hi, ci_lo+ci_hi). v1 of B26 ships 2 variants per
+  schema (8 total) because the `all()` predicate over a
+  3-tuple is positionally symmetric and the existing 2
+  variants kill the mutation surfaces named at qa-R1-build-I1
+  closure. A future audit pass could parametrize the 6
+  variants for full position-coverage.
 - **D-B26.1**: add the structural cell-count invariant
   `n_cells_paired + n_skipped_cells <= n_seeds * n_folds`
   to `HPOUpliftRollupRow`. v1 of B26 keeps to the CI-

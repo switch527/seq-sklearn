@@ -354,6 +354,8 @@ class PairwiseRollupRow(BaseModel):
     @model_validator(mode="after")
     def _validate_ci_sentinel_consistency(self) -> "PairwiseRollupRow":
         # B26 / D-B23.2 closure: same CI-sentinel invariant as RollupRow.
+        # IDENTICAL BODY TO RollupRow._validate_ci_sentinel_consistency;
+        # keep all 4 copies in sync.
         metric_fields = (
             self.primary_metric_mean,
             self.primary_metric_ci_lo,
@@ -437,6 +439,8 @@ class TrainingTimeRollupRow(BaseModel):
     @model_validator(mode="after")
     def _validate_ci_sentinel_consistency(self) -> "TrainingTimeRollupRow":
         # B26 / D-B23.2 closure: same CI-sentinel invariant as RollupRow.
+        # IDENTICAL BODY TO RollupRow._validate_ci_sentinel_consistency;
+        # keep all 4 copies in sync.
         metric_fields = (
             self.primary_metric_mean,
             self.primary_metric_ci_lo,
@@ -613,6 +617,8 @@ class HPOUpliftRollupRow(BaseModel):
     @model_validator(mode="after")
     def _validate_ci_sentinel_consistency(self) -> "HPOUpliftRollupRow":
         # B26 / D-B23.2 closure: same CI-sentinel invariant as RollupRow.
+        # IDENTICAL BODY TO RollupRow._validate_ci_sentinel_consistency;
+        # keep all 4 copies in sync.
         metric_fields = (
             self.primary_metric_mean,
             self.primary_metric_ci_lo,
@@ -784,7 +790,12 @@ class EnsembleLiftRollupRow(BaseModel):
     @model_validator(mode="after")
     def _validate_row_count_invariants(self) -> "EnsembleLiftRollupRow":
         # B23 / D-B20.3 + arch-R1-I1 closure: three structural
-        # invariants from the v1 B16 aggregator. The oracle
+        # invariants from the v1 B16 aggregator.
+        # NOTE: the CI-sentinel invariant that B26 added to the
+        # other 4 RollupRow schemas is intentionally deferred
+        # here as D-B26.2 (compose by chaining a second
+        # `@model_validator(mode="after")`); do NOT add it
+        # inline without consulting that deferral. The oracle
         # bootstrap operates on a subset of the paired cells, which
         # in turn are a subset of the intersection grid. The
         # renderer's partial-coverage flag at ensemble_lift.py:166
