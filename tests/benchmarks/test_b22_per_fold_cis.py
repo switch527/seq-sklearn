@@ -467,15 +467,15 @@ def test_aggregator_per_fold_cis_seed_derivation_pin(
     # pool, NOT after both. The per-fold calls live inside
     # `_bootstrap_aggregate.compute_per_fold_cis`, so we patch
     # BOTH module sites.
-    POOLED_CALLS_BEFORE_PER_FOLD = 1  # main only
+    pooled_calls_before_per_fold = 1  # main only
 
     def _capture(*args: object, **kwargs: object):
         nonlocal call_count
         call_count += 1
         seed = int(kwargs["seed"])  # type: ignore[arg-type]
         # Capture the next 3 calls after the main pool as fold 0/1/2.
-        if POOLED_CALLS_BEFORE_PER_FOLD < call_count <= POOLED_CALLS_BEFORE_PER_FOLD + 3:
-            fold_index = call_count - POOLED_CALLS_BEFORE_PER_FOLD - 1
+        if pooled_calls_before_per_fold < call_count <= pooled_calls_before_per_fold + 3:
+            fold_index = call_count - pooled_calls_before_per_fold - 1
             seeds_captured[fold_index] = seed
         return _real(*args, **kwargs)  # type: ignore[arg-type]
 
@@ -790,3 +790,451 @@ def test_b16_aggregator_per_fold_cis_does_not_populate_oracle_field(
     assert row.per_fold_cis is not None
     assert not hasattr(row, "per_fold_oracle_cis")
     assert "per_fold_oracle_cis" not in EnsembleLiftRollupRow.model_fields
+
+
+# =============================================================================
+# B22 build R1 closures: per-fold wiring on B5/B6/B7/B8 + sentinel + parquet
+# =============================================================================
+
+
+def _sentinel_fold_ci_list() -> list[FoldCI]:
+    """Lightweight FoldCI list used by the wiring tests below to
+    verify that the per-fold helper's return value reaches the row
+    constructor on each aggregator's enabled path."""
+    return [
+        FoldCI(
+            fold_index=0,
+            n_seeds=1,
+            n_entities=1,
+            metric_mean=0.5,
+            metric_ci_lo=0.4,
+            metric_ci_hi=0.6,
+            ci_method="bca",
+            ci_fallback_reason=None,
+        ),
+    ]
+
+
+def test_b5_aggregator_writes_per_fold_cis_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """qa-R1-I1 closure: pin the B5 aggregator's per-fold wiring by
+    monkeypatching `compute_per_fold_cis` to a sentinel and asserting
+    the returned list appears on the emitted RollupRow."""
+    from benchmarks.experiments.raw_loss import run_raw_loss
+    from benchmarks.report import _bootstrap_aggregate
+    from benchmarks.report.bootstrap_rollup import aggregate_bootstrap_rollup
+
+    register_all_fakes_and_get_panels()
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(
+            ExperimentSpec(
+                kind="raw_loss",
+                seeds=(0,),
+                bootstrap_per_fold_cis_enabled=True,
+            ),
+        ),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_raw_loss(config, output_root=output_root, env=env)
+    manifest = build_run_manifest(
+        config=config,
+        run_id="b5-per-fold",
+        library_git_sha="0" * 40,
+        profile="smoke",
+        hardware_tier="cpu",
+        output_root=output_root,
+    )
+
+    sentinel = _sentinel_fold_ci_list()
+    monkeypatch.setattr(_bootstrap_aggregate, "compute_per_fold_cis", lambda **_k: sentinel)
+
+    rows = aggregate_bootstrap_rollup(config, output_root=output_root, env=env, manifest=manifest)
+    assert len(rows) == 1
+    assert rows[0].per_fold_cis == sentinel
+
+
+def test_b6_aggregator_writes_per_fold_cis_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """qa-R1-I1 closure: B6 pairwise wiring."""
+    from benchmarks.experiments.ensemble import pairwise_dir
+    from benchmarks.report import _bootstrap_aggregate
+    from benchmarks.report.bootstrap_pairwise import (
+        aggregate_bootstrap_pairwise_rollup,
+    )
+
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(
+            ExperimentSpec(
+                kind="ensemble",
+                seeds=(0,),
+                bootstrap_per_fold_cis_enabled=True,
+            ),
+        ),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    target_dir = pairwise_dir(output_root)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    row = {
+        "library_git_sha": "0" * 40,
+        "run_id": "b6-per-fold",
+        "started_at_utc": "2026-05-30T00:00:00+00:00",
+        "dataset_name": "fake_binary",
+        "model_a": "model_a",
+        "model_b": "model_b",
+        "seed": 0,
+        "fold_index": 0,
+        "task_type": "binary",
+        "skipped_reason": None,
+        "n_samples": 100,
+        "n11": 40,
+        "n10": 10,
+        "n01": 15,
+        "n00": 35,
+        "yule_q": 0.7,
+        "phi": 0.5,
+        "disagreement_rate": 0.2,
+        "double_fault_rate": 0.1,
+        "pearson_pred_corr": 0.6,
+        "spearman_pred_corr": 0.55,
+        "pearson_error_corr": 0.3,
+    }
+    pd.DataFrame([row]).to_parquet(target_dir / "shard_0000.parquet", index=False)
+    manifest = build_run_manifest(
+        config=config,
+        run_id="b6-per-fold",
+        library_git_sha="0" * 40,
+        profile="smoke",
+        hardware_tier="cpu",
+        output_root=output_root,
+    )
+
+    sentinel = _sentinel_fold_ci_list()
+    monkeypatch.setattr(_bootstrap_aggregate, "compute_per_fold_cis", lambda **_k: sentinel)
+
+    env = build_run_environment(profile="smoke")
+    rows = aggregate_bootstrap_pairwise_rollup(
+        config, output_root=output_root, env=env, manifest=manifest
+    )
+    assert len(rows) == 1
+    assert rows[0].per_fold_cis == sentinel
+
+
+def test_b7_aggregator_writes_per_fold_cis_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """qa-R1-I1 closure: B7 training-time wiring."""
+    from benchmarks.experiments.raw_loss import run_raw_loss
+    from benchmarks.report import _bootstrap_aggregate
+    from benchmarks.report.bootstrap_training_time import (
+        aggregate_bootstrap_training_time_rollup,
+    )
+
+    register_all_fakes_and_get_panels()
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(
+            ExperimentSpec(kind="raw_loss", seeds=(0,)),
+            ExperimentSpec(
+                kind="training_time",
+                seeds=(0,),
+                bootstrap_per_fold_cis_enabled=True,
+            ),
+        ),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_raw_loss(config, output_root=output_root, env=env)
+    manifest = build_run_manifest(
+        config=config,
+        run_id="b7-per-fold",
+        library_git_sha="0" * 40,
+        profile="smoke",
+        hardware_tier="cpu",
+        output_root=output_root,
+    )
+
+    sentinel = _sentinel_fold_ci_list()
+    monkeypatch.setattr(_bootstrap_aggregate, "compute_per_fold_cis", lambda **_k: sentinel)
+
+    rows = aggregate_bootstrap_training_time_rollup(
+        config, output_root=output_root, env=env, manifest=manifest
+    )
+    assert len(rows) == 1
+    assert rows[0].per_fold_cis == sentinel
+
+
+def test_b8_aggregator_writes_per_fold_cis_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """qa-R1-I1 closure: B8 HPO-uplift wiring via stubbed load_run."""
+    from benchmarks.report import _bootstrap_aggregate
+    from benchmarks.report.bootstrap_hpo_uplift import (
+        aggregate_bootstrap_hpo_uplift_rollup,
+    )
+
+    register_all_fakes_and_get_panels()
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(
+            ExperimentSpec(kind="raw_loss", seeds=(0,)),
+            ExperimentSpec(
+                kind="hpo_uplift",
+                seeds=(0,),
+                bootstrap_per_fold_cis_enabled=True,
+            ),
+        ),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    # Inject a synthetic B8 manifest: 2 paired (default, tuned) cells.
+    import benchmarks.report.bootstrap_hpo_uplift as _b8
+
+    def _stub_load_run(_root: Path) -> pd.DataFrame:
+        rows = []
+        for s, f in ((0, 0), (0, 1)):
+            for variant, loss in (("default", 0.50), ("tuned", 0.30)):
+                rows.append(
+                    {
+                        "dataset_name": "fake_binary",
+                        "model_name": "fake_constant_binary",
+                        "task_type": "binary",
+                        "seed": s,
+                        "fold_index": f,
+                        "variant": variant,
+                        "log_loss": loss,
+                        "skipped_reason": None,
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    monkeypatch.setattr(_b8, "load_run", _stub_load_run)
+
+    manifest = build_run_manifest(
+        config=config,
+        run_id="b8-per-fold",
+        library_git_sha="0" * 40,
+        profile="smoke",
+        hardware_tier="cpu",
+        output_root=output_root,
+    )
+
+    sentinel = _sentinel_fold_ci_list()
+    monkeypatch.setattr(_bootstrap_aggregate, "compute_per_fold_cis", lambda **_k: sentinel)
+
+    rows = aggregate_bootstrap_hpo_uplift_rollup(
+        config, output_root=output_root, env=env, manifest=manifest
+    )
+    assert len(rows) == 1
+    assert rows[0].per_fold_cis == sentinel
+
+
+def test_b5_sentinel_row_carries_per_fold_cis_none_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """qa-R1-I2 closure: B5 sentinel row hardcodes per_fold_cis=None
+    even when the flag is enabled. Inject an all-skipped B5 manifest
+    so the aggregator routes through the sentinel emit."""
+    from benchmarks.report.bootstrap_rollup import aggregate_bootstrap_rollup
+
+    register_all_fakes_and_get_panels()
+    config = BenchmarkConfig(
+        datasets=("fake_binary",),
+        models=("fake_constant_binary",),
+        experiments=(
+            ExperimentSpec(
+                kind="raw_loss",
+                seeds=(0,),
+                bootstrap_per_fold_cis_enabled=True,
+            ),
+        ),
+        output_dir=tmp_path / "out",
+        cache_dir=tmp_path / "cache",
+    )
+    env = build_run_environment(profile="smoke")
+    output_root = tmp_path / "out"
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    # Inject a manifest where every cell carries a skipped_reason so
+    # the aggregator routes through the all_cells_skipped sentinel.
+    import benchmarks.report.bootstrap_rollup as _b5
+
+    def _stub_load_run(_root: Path) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "dataset_name": "fake_binary",
+                    "model_name": "fake_constant_binary",
+                    "task_type": "binary",
+                    "seed": 0,
+                    "fold_index": 0,
+                    "variant": "default",
+                    "skipped_reason": "deliberately_skipped",
+                }
+            ]
+        )
+
+    monkeypatch.setattr(_b5, "load_run", _stub_load_run)
+    manifest = build_run_manifest(
+        config=config,
+        run_id="b5-sentinel",
+        library_git_sha="0" * 40,
+        profile="smoke",
+        hardware_tier="cpu",
+        output_root=output_root,
+    )
+
+    rows = aggregate_bootstrap_rollup(config, output_root=output_root, env=env, manifest=manifest)
+    assert len(rows) == 1
+    assert rows[0].bootstrap_skipped_reason == "all_cells_skipped_in_manifest"
+    assert rows[0].per_fold_cis is None
+
+
+def test_training_time_rollup_row_per_fold_cis_round_trip(tmp_path: Path) -> None:
+    """code-R1-N1 closure: B7 parquet round-trip for per_fold_cis."""
+    from benchmarks.bootstrap_manifest import (
+        load_training_time_rollup,
+        write_training_time_rollup,
+    )
+
+    fc = FoldCI(
+        fold_index=0,
+        n_seeds=2,
+        n_entities=4,
+        metric_mean=10.0,
+        metric_ci_lo=8.0,
+        metric_ci_hi=12.0,
+        ci_method="bca",
+        ci_fallback_reason=None,
+    )
+    row = TrainingTimeRollupRow(
+        dataset_name="ds",
+        model_name="m",
+        hardware_tier="cpu",
+        task_type="binary",
+        primary_metric="wall_seconds",
+        n_seeds=2,
+        n_cells_evaluated=4,
+        n_skipped_cells=0,
+        primary_metric_mean=10.0,
+        primary_metric_ci_lo=8.0,
+        primary_metric_ci_hi=12.0,
+        bootstrap_seed=42,
+        bootstrap_n_resamples=100,
+        bootstrap_numpy_version="2.0.0",
+        manifest_fingerprint="f" * 64,
+        per_fold_cis=[fc],
+    )
+    write_training_time_rollup(tmp_path, [row])
+    loaded = load_training_time_rollup(tmp_path)
+    assert len(loaded) == 1
+    assert loaded[0].per_fold_cis == [fc]
+
+
+def test_hpo_uplift_rollup_row_per_fold_cis_round_trip(tmp_path: Path) -> None:
+    """code-R1-N1 closure: B8 parquet round-trip for per_fold_cis."""
+    from benchmarks.bootstrap_manifest import (
+        load_hpo_uplift_rollup,
+        write_hpo_uplift_rollup,
+    )
+
+    fc = FoldCI(
+        fold_index=0,
+        n_seeds=2,
+        n_entities=4,
+        metric_mean=0.1,
+        metric_ci_lo=0.05,
+        metric_ci_hi=0.15,
+        ci_method="bca",
+        ci_fallback_reason=None,
+    )
+    row = HPOUpliftRollupRow(
+        dataset_name="ds",
+        model_name="m",
+        task_type="binary",
+        primary_metric="delta",
+        primary_loss_column="log_loss",
+        n_seeds=2,
+        n_folds=2,
+        n_cells_paired=4,
+        n_skipped_cells=0,
+        primary_metric_mean=0.1,
+        primary_metric_ci_lo=0.05,
+        primary_metric_ci_hi=0.15,
+        bootstrap_seed=42,
+        bootstrap_n_resamples=100,
+        bootstrap_numpy_version="2.0.0",
+        manifest_fingerprint="f" * 64,
+        per_fold_cis=[fc],
+    )
+    write_hpo_uplift_rollup(tmp_path, [row])
+    loaded = load_hpo_uplift_rollup(tmp_path)
+    assert len(loaded) == 1
+    assert loaded[0].per_fold_cis == [fc]
+
+
+def test_ensemble_lift_rollup_row_per_fold_cis_round_trip(tmp_path: Path) -> None:
+    """code-R1-N1 closure: B16 parquet round-trip for per_fold_cis."""
+    from benchmarks.bootstrap_manifest import (
+        load_ensemble_lift_rollup,
+        write_ensemble_lift_rollup,
+    )
+
+    fc = FoldCI(
+        fold_index=0,
+        n_seeds=2,
+        n_entities=4,
+        metric_mean=0.2,
+        metric_ci_lo=0.15,
+        metric_ci_hi=0.25,
+        ci_method="bca",
+        ci_fallback_reason=None,
+    )
+    row = EnsembleLiftRollupRow(
+        dataset_name="ds",
+        task_type="binary",
+        primary_metric="delta_loss",
+        primary_loss_column="log_loss",
+        n_seeds=2,
+        n_folds=2,
+        n_cells_paired=4,
+        n_pair_grid=4,
+        n_oracle_cells_paired=4,
+        n_skipped_cells=0,
+        primary_metric_mean=0.2,
+        primary_metric_ci_lo=0.15,
+        primary_metric_ci_hi=0.25,
+        oracle_metric_mean=0.1,
+        oracle_metric_ci_lo=0.08,
+        oracle_metric_ci_hi=0.12,
+        bootstrap_seed=42,
+        bootstrap_n_resamples=100,
+        bootstrap_numpy_version="2.0.0",
+        manifest_fingerprint="f" * 64,
+        per_fold_cis=[fc],
+    )
+    write_ensemble_lift_rollup(tmp_path, [row])
+    loaded = load_ensemble_lift_rollup(tmp_path)
+    assert len(loaded) == 1
+    assert loaded[0].per_fold_cis == [fc]
