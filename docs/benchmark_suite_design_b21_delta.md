@@ -494,8 +494,14 @@ import added complexity without measurable benefit.
 
 ### Existing tests touched
 
-Each fixture site that constructs a RollupRow needs 2 (or
-3 for `EnsembleLiftRollupRow`) new kwargs:
+Six existing test sites need updates (arch-R4-I1 closure:
+the original "Each fixture site that constructs a RollupRow"
+header excluded the 6th site `test_bootstrap.py` which is a
+primitive-call unpack-arity widening site, not a fixture
+construction site). Sites #1-#5 are RollupRow fixture sites
+that gain 2 (or 3 for `EnsembleLiftRollupRow`) new kwargs;
+site #6 is the primitive's own unit-test file with 4 unpack
+sites that widen from 3-tuple to 4-tuple.
 
 1. **`tests/benchmarks/test_bootstrap_manifest.py`**:
    each of the 5 RollupRow factory helpers
@@ -693,6 +699,12 @@ public-primitive happy path is exercised by tests #1, #2,
         # ...]) = 0.0, reliably tripping `p0_at_edge`.
         return -1e9 if call_count == 1 else 1e9
 
+    # arch-R4-N1 closure: bind the real primitive BEFORE
+    # the monkeypatch so the wrapper can delegate.
+    from benchmarks.metrics.bootstrap import (
+        entity_block_bootstrap_ci as real_entity_block_bootstrap_ci,
+    )
+
     def _wrapped_primitive(losses, entity_ids, **kwargs):
         # Replace the aggregator's metric_fn (typically
         # nanmean or sqrt(nanmean)) with the stateful stub
@@ -707,19 +719,46 @@ public-primitive happy path is exercised by tests #1, #2,
     `bootstrap_ci_fallback_reason == "p0_at_edge"` AND
     `bootstrap_ci_method == "bca"` AND `lo <= mean <=
     hi`.
-14. `test_ensemble_lift_aggregator_writes_independent_oracle_fallback_reason`:
-    fixture with main bootstrap on a non-degenerate
-    distribution AND oracle bootstrap engineered via the
-    same call-counter stateful metric_fn pattern (with a
-    SEPARATE call_count for the oracle metric_fn so the
-    two bootstraps' first calls are independently the
-    "ground-truth" calls). Assert the emitted
-    `EnsembleLiftRollupRow` has
-    `bootstrap_ci_fallback_reason is None` (main) AND
+14. `test_ensemble_lift_aggregator_writes_independent_oracle_fallback_reason`
+    (qa-R4-I1 closure: concrete invocation-routing seam):
+    monkeypatch
+    `benchmarks.report.bootstrap_ensemble_lift.entity_block_bootstrap_ci`
+    with a wrapper that ROUTES BY INVOCATION ORDER. The
+    B16 aggregator calls the primitive twice per dataset
+    (call #1 = main delta_loss, call #2 = oracle delta),
+    so a module-level call counter on the wrapper itself
+    discriminates main from oracle:
+
+    ```python
+    primitive_call_count = 0
+    def _wrapped_primitive(losses, entity_ids, **kwargs):
+        nonlocal primitive_call_count
+        primitive_call_count += 1
+        if primitive_call_count == 1:
+            # Main delta_loss bootstrap: pass through the
+            # real metric_fn (the aggregator's nanmean or
+            # sqrt(nanmean)) so the main path produces a
+            # non-degenerate distribution.
+            return real_entity_block_bootstrap_ci(
+                losses, entity_ids, **kwargs
+            )
+        else:
+            # Oracle delta bootstrap (call #2): inject the
+            # stateful stub from test #13 so the oracle
+            # path hits p_0 = 0.0 and falls back.
+            kwargs["metric_fn"] = stateful_metric_fn
+            return real_entity_block_bootstrap_ci(
+                losses, entity_ids, **kwargs
+            )
+    ```
+
+    Assert the emitted `EnsembleLiftRollupRow` has
+    `bootstrap_ci_fallback_reason is None` (main, the
+    pass-through call) AND
     `bootstrap_oracle_ci_fallback_reason == "p0_at_edge"`
-    (oracle). Pins the R-B21-7 independence contract.
-    Cross-reference: B20 test #13 covers R-B20-2a's
-    seed-side; this B21 test adds the
+    (oracle, the stubbed call). Pins the R-B21-7
+    independence contract. Cross-reference: B20 test #13
+    covers R-B20-2a's seed-side; this B21 test adds the
     fallback-reason-independence side.
 15. `test_b21_audit_fields_survive_parquet_round_trip`
     (qa-R1-I1 closure): construct one row of each of the
@@ -733,6 +772,18 @@ public-primitive happy path is exercised by tests #1, #2,
     set of rows with `bootstrap_ci_method="percentile"`
     and `bootstrap_ci_fallback_reason=None` to verify the
     `pd.NA -> None` coercion on the nullable field.
+16. `test_rollup_row_schema_default_ci_method_is_percentile`
+    (qa-R4-I2 closure: backward-compat invariant for
+    pre-B21 parquet shard loading): construct each of the
+    5 `RollupRow` types with ALL OTHER required fields
+    supplied but `bootstrap_ci_method` LEFT UNSUPPLIED
+    (relying on the schema default). Assert the
+    constructed row's `bootstrap_ci_method == "percentile"`
+    on each row type. Pins the schema-level default
+    against accidental migration; without this test, a
+    future change to `bootstrap_ci_method: str = "bca"` at
+    the schema layer would silently mislabel CI bounds on
+    any pre-B21 parquet shard loaded by post-B21 code.
 
 **Inline pins on existing tests** (qa-R1-I3 closure;
 NOT a new test): extend each of the 4 B17 byte-pin
@@ -761,8 +812,8 @@ Expected test delta after the build:
   on 4 byte-pin tests; qa-R1-N1 closure: the 886 baseline
   was confirmed via live pytest --collect-only count on
   the post-B20 main branch tip at commit 3358651).
-- B21-new: 15 tests.
-- Total: 886 + 15 = 901 expected post-refactor.
+- B21-new: 16 tests.
+- Total: 886 + 16 = 902 expected post-refactor.
 
 ## B21.7 Risks
 
@@ -817,11 +868,12 @@ Expected test delta after the build:
    sites from 3-tuple to 4-tuple per qa-R3-C1 closure;
    sites 1-5 add the schema audit fields).
 7. **NEW tests**: add `tests/benchmarks/test_b21_bca_ci.py`
-   with the 15 tests (13 design-named + 2 added in R1
+   with the 16 tests (13 design-named + 3 added in R1/R4
    closures: arch-R1-C2 split test #12 into seam +
    fallback, qa-R1-I1 added the parquet round-trip test
-   #15).
-8. **Verify**: ruff + pyright clean; 901 tests pass.
+   #15, qa-R4-I2 added the schema-default isolation test
+   #16).
+8. **Verify**: ruff + pyright clean; 902 tests pass.
 
 ## Addressed
 
@@ -1052,7 +1104,7 @@ style-reviewer (0C / 0I / 0N APPROVE). Deduplicated total:
   the fallback-reason-independence side").
 
 Test count after R2 closures: 15 new tests; total
-`886 + 15 = 901`.
+`886 + 16 = 902`.
 
 ### R3 confirming swarm closure
 
@@ -1093,6 +1145,70 @@ Test count after R3 closures: 15 new tests; total
 `886 + 15 = 901` (test_bootstrap.py edits are unpack-shape
 widening, not new tests).
 
+### R4 confirming swarm closure
+
+R4 confirming swarm on commit `2f58b46` (post R3 closures,
+design-review hard cap reached):
+architecture-reviewer (0C / 1I / 1N APPROVE),
+qa-test-coverage (0C / 2I / 1N APPROVE),
+style-reviewer (0C / 0I / 0N APPROVE). All three APPROVE
+on a clean R3 closure surface. Deduplicated R4 total:
+0 CRITICAL, 3 IMPROVEMENT, 2 NITPICK. Closures:
+
+- **arch-R4-I1** (B21.6 section header "Each fixture site
+  that constructs a RollupRow" excluded the 6th site
+  `test_bootstrap.py` which is a primitive-call unpack
+  widening site): header rewritten to "Six existing test
+  sites need updates" with explicit distinction between
+  the 5 RollupRow fixture sites (#1-#5) and the 1
+  primitive-call site (#6).
+- **qa-R4-I1** (test #14 spec underspecified the
+  invocation-routing mechanism for the
+  monkeypatch.setattr on the B16 aggregator module's
+  `entity_block_bootstrap_ci`; the wrapper sees BOTH
+  calls and the spec didn't explain how to discriminate
+  main from oracle): test #14 now includes a concrete
+  fenced code block showing `primitive_call_count`
+  routing logic that delegates call #1 (main) to the
+  real primitive AND injects the stateful stub on call
+  #2 (oracle).
+- **qa-R4-I2** (schema-field default `bootstrap_ci_method
+  = "percentile"` has no isolation test; the factory
+  helpers always supply `"bca"` explicitly, masking the
+  schema default; a future change to the schema default
+  would silently mislabel pre-B21 parquet shard loads):
+  added test #16
+  `test_rollup_row_schema_default_ci_method_is_percentile`
+  constructing each of the 5 RollupRow types WITHOUT
+  supplying `bootstrap_ci_method` and asserting the field
+  reads back `"percentile"`. Pins the backward-compat
+  invariant.
+- **arch-R4-N1** (`_wrapped_primitive` snippet in test
+  #13 references `real_entity_block_bootstrap_ci`
+  without showing the bind step): added an import line
+  `from benchmarks.metrics.bootstrap import
+  entity_block_bootstrap_ci as
+  real_entity_block_bootstrap_ci` before the wrapper
+  definition.
+- **qa-R4-N1** (`_BCA_DENOM_EPS = 1e-12` constant value
+  has no boundary test): NOT changed. The arch-R1-I5
+  closure acknowledged the near-zero range `(0, 1e-12]`
+  as below test threshold; test #5's `a=10.0` already
+  exercises the `denom <= eps` branch with `denom_hi =
+  -18.6`, far below 1e-12. The exact-boundary test
+  would require constructing a fixture deliberately
+  tuned to land in `(0, 1e-12]`, which would be brittle
+  to numerical drift; deferred under D-B21.5 below.
+
+Test count after R4 closures: 16 new tests (was 15;
+qa-R4-I2 added test #16); total `886 + 16 = 902`.
+
+Design consensus reached at R4 (hard cap). All four
+swarms returned APPROVE with the R4 IMPs closed in-place
+above. Final tally: 0 CRITICAL · 0 unresolved IMPROVEMENT
+· remaining NITPICKs documented as out-of-scope or
+deferred.
+
 ## Deferred
 
 - **D-B21.1**: surface `bootstrap_ci_method` and
@@ -1121,3 +1237,13 @@ widening, not new tests).
   used, BCa intermediate values for debugging, etc.); the
   v1 tuple is shippable and the structural-typing cost of
   the migration is small.
+- **D-B21.5** (qa-R4-N1 closure): boundary test for
+  `_BCA_DENOM_EPS = 1e-12`. v1 test #5 exercises the
+  `denom <= eps` branch with `denom_hi = -18.6` (far
+  below the epsilon); the exact-boundary case in
+  `(0, 1e-12]` is below the test threshold and would
+  require a fixture deliberately tuned to land in that
+  narrow window, which is brittle to numerical drift.
+  Deferred until D-B21.4 introduces a structured result
+  that surfaces the actual `a` value, at which point a
+  boundary test becomes possible.
