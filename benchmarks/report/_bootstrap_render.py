@@ -1,7 +1,8 @@
 """Shared bootstrap-CI render helpers (Phase B14 extraction).
 
-Houses the cell formatter, the rollup-skipped-footnote renderer,
-the BCa health footnote renderer (B24 / D-B21.1), and the
+Houses the cell formatter, the rollup-skipped-footnote
+renderer, the BCa health footnote renderer (B24 / D-B21.1),
+the per-fold CIs footnote renderer (B25 / D-B22.1), and the
 partial-fold denominator helper. Hoisted from
 `benchmarks/report/raw_loss.py` by B14 so the renderers share
 one source of truth.
@@ -121,6 +122,99 @@ def render_bca_health_footnote(
     return "\n".join(lines)
 
 
+def render_per_fold_cis_footnote(
+    rollup_with_per_fold: Sequence[Any],
+    *,
+    group_columns: Sequence[str] = ("dataset_name", "model_name"),
+    header_labels: Sequence[str] = ("Dataset", "Model"),
+) -> str:
+    """B25 / D-B22.1: render the 'Per-fold CIs' footnote.
+
+    Caller pre-filter contract: pass only rows whose
+    `per_fold_cis` is non-None AND non-empty. The helper's
+    outer empty-Sequence early return returns "" for an
+    empty `rollup_with_per_fold`; the per-row empty check is
+    the caller's responsibility.
+
+    The helper reads ONLY 6 FoldCI fields per fold:
+    `fold_index, metric_mean, metric_ci_lo, metric_ci_hi,
+    ci_method, ci_fallback_reason`. `n_seeds` and
+    `n_entities` are NOT rendered (parquet-shard-audit only;
+    D-B25.3). Rows missing `per_fold_cis` render with no
+    fold rows via `getattr(row, "per_fold_cis", []) or []`.
+
+    Rows are sorted by `group_columns[0]`; folds within each
+    row are sorted defensively by `fold_index` ascending.
+
+    Nullable metric cells render as `-` (literal hyphen);
+    `ci_fallback_reason=None` renders as `-`. The 120-char
+    truncation on `ci_fallback_reason` matches the sibling
+    helpers.
+
+    Raises:
+        ValueError: when `group_columns` and `header_labels`
+            differ in length.
+    """
+    if len(group_columns) != len(header_labels):
+        raise ValueError(
+            f"group_columns and header_labels must have equal length; "
+            f"got {len(group_columns)} vs {len(header_labels)}"
+        )
+    if not rollup_with_per_fold:
+        return ""
+    sort_key = group_columns[0]
+    sorted_rows = sorted(rollup_with_per_fold, key=lambda r: str(getattr(r, sort_key, "")))
+    lines = ["### Per-fold CIs", ""]
+    header = (
+        "| "
+        + " | ".join(
+            [
+                *header_labels,
+                "fold",
+                "metric_mean",
+                "metric_ci_lo",
+                "metric_ci_hi",
+                "ci_method",
+                "ci_fallback_reason",
+            ]
+        )
+        + " |"
+    )
+    sep = "| " + " | ".join(["---"] * (len(group_columns) + 6)) + " |"
+    lines.append(header)
+    lines.append(sep)
+    for row in sorted_rows:
+        fold_cis: Sequence[Any] = getattr(row, "per_fold_cis", None) or []
+        sorted_folds = sorted(
+            fold_cis, key=lambda f: int(getattr(f, "fold_index", 0))
+        )
+        id_cells = [str(getattr(row, col, "")) for col in group_columns]
+        for fci in sorted_folds:
+            mean = getattr(fci, "metric_mean", None)
+            ci_lo = getattr(fci, "metric_ci_lo", None)
+            ci_hi = getattr(fci, "metric_ci_hi", None)
+            mean_cell = "-" if mean is None else f"{mean:.4f}"
+            lo_cell = "-" if ci_lo is None else f"{ci_lo:.4f}"
+            hi_cell = "-" if ci_hi is None else f"{ci_hi:.4f}"
+            ci_method = str(getattr(fci, "ci_method", ""))
+            reason_raw = getattr(fci, "ci_fallback_reason", None)
+            reason_cell = "-" if reason_raw is None else str(reason_raw)
+            if len(reason_cell) > 120:
+                reason_cell = reason_cell[:117] + "..."
+            row_cells = [
+                *id_cells,
+                str(int(getattr(fci, "fold_index", 0))),
+                mean_cell,
+                lo_cell,
+                hi_cell,
+                ci_method,
+                reason_cell,
+            ]
+            lines.append("| " + " | ".join(row_cells) + " |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def folds_per_group(
     manifest: pd.DataFrame,
     *,
@@ -152,5 +246,6 @@ __all__ = [
     "folds_per_group",
     "format_ci_cell",
     "render_bca_health_footnote",
+    "render_per_fold_cis_footnote",
     "render_rollup_skipped_footnote",
 ]
