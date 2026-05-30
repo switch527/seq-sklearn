@@ -224,13 +224,17 @@ After the existing resample loop produces `resampled:
 np.ndarray` of shape `(n_resamples,)` and the unresampled
 `ground_truth_mean: float`:
 
-The BCa transform is factored into TWO pure helpers
-(qa-R2-C1 + arch-R2-I3 closures: separating the jackknife
-loop from the percentile-point transform lets test #5
-unit-test `a_overshoot` with a constructed `a` value
-bypassing the Cauchy-Schwarz bound `|a| <= 1/(6*sqrt(n))`
-that makes the overshoot branch theoretically unreachable
-via any real `metric_fn`):
+The BCa transform is factored into THREE module-level
+helpers (qa-R2-C1 closure: separating the jackknife loop
+from the percentile-point transform lets test #5 unit-test
+`a_overshoot` with a constructed `a` value bypassing the
+Cauchy-Schwarz bound `|a| <= 1/(6*sqrt(n))` that makes the
+overshoot branch theoretically unreachable via any real
+`metric_fn`): the orchestrator `_bca_percentiles` threads
+the resample loop into the two pure helpers
+`_compute_acceleration_from_jackknife` (jackknife → `a`)
+and `_bca_percentile_points` (`p0, a, confidence` →
+percentile points + fallback reason):
 
 ```python
 from scipy.stats import norm  # module-level import
@@ -521,6 +525,17 @@ Each fixture site that constructs a RollupRow needs 2 (or
 5. **`tests/benchmarks/test_ensemble_lift_report_b16.py`**:
    the `_make_rollup_row` factory adds the 3 new oracle-
    inclusive fields.
+6. **`tests/benchmarks/test_bootstrap.py`** (qa-R3-C1
+   closure: the primitive's own unit test file has
+   FOUR 3-tuple unpack sites that break when the return
+   widens to 4-tuple):
+   - line 22: `mean, _, _ =` → `mean, _, _, _ =`
+   - line 41: `_, e_lo, e_hi =` → `_, e_lo, e_hi, _ =`
+   - line 46: `_, r_lo, r_hi =` → `_, r_lo, r_hi, _ =`
+   - line 87: `mean, ci_lo, ci_hi =` → `mean, ci_lo,
+     ci_hi, _ =`
+   The whole-tuple equality assertions at lines 64-66
+   (`out1 == out2`) continue to pass on 4-tuples.
 
 ### NEW B21 tests
 
@@ -650,11 +665,21 @@ public-primitive happy path is exercised by tests #1, #2,
     semantics; the field stays None). This exercises the
     late-binding seam, NOT a no-op self-monkeypatch.
 13. `test_aggregator_writes_fallback_reason_when_bca_falls_back`
-    (qa-R1-I2 + qa-R2-I2 closure: concrete stateful
-    metric_fn): inject a stub `metric_fn` via the
-    aggregator's test seam that produces a bootstrap
-    distribution where `p_0 = 0.0`. Concrete construction
-    (closing the R1 circular spec):
+    (qa-R1-I2 + qa-R2-I2 + qa-R3-I1 closure: concrete
+    stateful metric_fn AND concrete injection seam):
+    monkeypatch
+    `benchmarks.metrics.bootstrap.entity_block_bootstrap_ci`
+    at the aggregator module's import (e.g.,
+    `monkeypatch.setattr(benchmarks.report.bootstrap_rollup,
+    "entity_block_bootstrap_ci", _wrapped_primitive)`).
+    The wrapper passes through to the real primitive but
+    REPLACES `metric_fn` with a stateful
+    counter-keyed stub. The aggregator's unpack-and-
+    propagate path then runs end-to-end against a
+    deterministic `p_0 = 0.0` output, exercising the
+    aggregator's plumbing of `fallback_reason` into the
+    row constructor (NOT bypassing the aggregator by
+    calling the primitive directly). Concrete construction:
 
     ```python
     call_count = 0
@@ -667,6 +692,15 @@ public-primitive happy path is exercised by tests #1, #2,
         # subsequent stat) yields p_0 = mean([1e9 <= -1e9
         # ...]) = 0.0, reliably tripping `p0_at_edge`.
         return -1e9 if call_count == 1 else 1e9
+
+    def _wrapped_primitive(losses, entity_ids, **kwargs):
+        # Replace the aggregator's metric_fn (typically
+        # nanmean or sqrt(nanmean)) with the stateful stub
+        # while preserving everything else.
+        kwargs["metric_fn"] = stateful_metric_fn
+        return real_entity_block_bootstrap_ci(
+            losses, entity_ids, **kwargs
+        )
     ```
 
     Assert the emitted row's
@@ -778,7 +812,10 @@ Expected test delta after the build:
    `EnsembleLiftRollupRow` sentinel also hardcodes
    `bootstrap_oracle_ci_fallback_reason=None`.
 6. **Update existing fixtures**: the 6 sites enumerated in
-   B21.6 get the new fields with documentary defaults.
+   B21.6 get the new fields with documentary defaults
+   (the 6th site, `test_bootstrap.py`, widens 4 unpack
+   sites from 3-tuple to 4-tuple per qa-R3-C1 closure;
+   sites 1-5 add the schema audit fields).
 7. **NEW tests**: add `tests/benchmarks/test_b21_bca_ci.py`
    with the 15 tests (13 design-named + 2 added in R1
    closures: arch-R1-C2 split test #12 into seam +
@@ -1016,6 +1053,45 @@ style-reviewer (0C / 0I / 0N APPROVE). Deduplicated total:
 
 Test count after R2 closures: 15 new tests; total
 `886 + 15 = 901`.
+
+### R3 confirming swarm closure
+
+R3 confirming swarm on commit `b985de7` (post R2 closures):
+architecture-reviewer (0C / 1I / 1N REQUEST_CHANGES),
+qa-test-coverage (1C / 1I / 1N REQUEST_CHANGES),
+style-reviewer (0C / 0I / 0N APPROVE). Deduplicated total:
+1 CRITICAL, 2 IMPROVEMENT, 1 NITPICK. Closures:
+
+- **qa-R3-C1** (`tests/benchmarks/test_bootstrap.py` had
+  FOUR 3-tuple unpack sites at lines 22, 41, 46, 87 that
+  would break when the primitive widens to 4-tuple; the
+  file was omitted from the B21.6 fixture-site
+  inventory): added as item #6 in the B21.6 "Existing
+  tests touched" enumeration with explicit line-by-line
+  unpack edits; B21.8 step 6 now mentions
+  `test_bootstrap.py` as the 6th fixture site.
+- **arch-R3-I1 + qa-R3-N1** (B21.1.1 seam-note at :227
+  said "factored into TWO pure helpers" but the code
+  block defines THREE and the qa-R2-C1 closure narrative
+  said THREE): updated to "factored into THREE module-
+  level helpers" with explicit naming of the orchestrator
+  `_bca_percentiles` alongside the two pure helpers.
+- **qa-R3-I1** (test #13's injection seam was named
+  ambiguously as "the aggregator's test seam" without
+  specifying the mechanism; the spec must distinguish
+  monkeypatching `entity_block_bootstrap_ci` at the
+  aggregator module's import from monkeypatching the
+  metric_fn parameter directly): test #13 now spells
+  the seam as a `monkeypatch.setattr` on the aggregator
+  module's `entity_block_bootstrap_ci` symbol, with a
+  `_wrapped_primitive` shim that injects the stateful
+  metric_fn while preserving every other kwarg. The
+  aggregator's unpack-and-propagate path runs end-to-end,
+  not bypassed.
+
+Test count after R3 closures: 15 new tests; total
+`886 + 15 = 901` (test_bootstrap.py edits are unpack-shape
+widening, not new tests).
 
 ## Deferred
 
