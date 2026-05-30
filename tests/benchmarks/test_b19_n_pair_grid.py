@@ -251,8 +251,20 @@ def _make_lift_result_for_renderer() -> EnsembleLiftExperimentResult:
 
 
 def _make_rollup_row_for_renderer(
-    *, n_seeds: int, n_folds: int, n_cells_paired: int, n_pair_grid: int
+    *,
+    n_seeds: int,
+    n_folds: int,
+    n_cells_paired: int,
+    n_pair_grid: int,
+    n_oracle_cells_paired: int | None = None,
 ) -> EnsembleLiftRollupRow:
+    # B20 / D-B16.1: mirror the B19 None-fallback pattern. When
+    # n_oracle_cells_paired is not supplied, default to n_cells_paired
+    # so the existing B19 tests assert on the main Δloss CI cell only
+    # (the oracle CI cell is symmetric and does not fire its own
+    # asterisk).
+    if n_oracle_cells_paired is None:
+        n_oracle_cells_paired = n_cells_paired
     return EnsembleLiftRollupRow(
         dataset_name="ds_one",
         task_type="binary",
@@ -262,10 +274,14 @@ def _make_rollup_row_for_renderer(
         n_folds=n_folds,
         n_cells_paired=n_cells_paired,
         n_pair_grid=n_pair_grid,
+        n_oracle_cells_paired=n_oracle_cells_paired,
         n_skipped_cells=0,
         primary_metric_mean=0.20,
         primary_metric_ci_lo=0.15,
         primary_metric_ci_hi=0.25,
+        oracle_metric_mean=0.10,
+        oracle_metric_ci_lo=0.08,
+        oracle_metric_ci_hi=0.12,
         bootstrap_seed=42,
         bootstrap_n_resamples=10_000,
         bootstrap_numpy_version="2.3.0",
@@ -318,10 +334,14 @@ def test_n_pair_grid_round_trips_through_parquet_shard(tmp_path: Path) -> None:
         n_folds=2,
         n_cells_paired=4,
         n_pair_grid=137,
+        n_oracle_cells_paired=4,
         n_skipped_cells=0,
         primary_metric_mean=0.20,
         primary_metric_ci_lo=0.15,
         primary_metric_ci_hi=0.25,
+        oracle_metric_mean=0.10,
+        oracle_metric_ci_lo=0.08,
+        oracle_metric_ci_hi=0.12,
         bootstrap_seed=42,
         bootstrap_n_resamples=10_000,
         bootstrap_numpy_version="2.3.0",
@@ -349,10 +369,14 @@ def test_n_pair_grid_zero_passes_field_validator() -> None:
         n_folds=2,
         n_cells_paired=0,
         n_pair_grid=0,
+        n_oracle_cells_paired=0,
         n_skipped_cells=0,
         primary_metric_mean=None,
         primary_metric_ci_lo=None,
         primary_metric_ci_hi=None,
+        oracle_metric_mean=None,
+        oracle_metric_ci_lo=None,
+        oracle_metric_ci_hi=None,
         bootstrap_seed=42,
         bootstrap_n_resamples=10_000,
         bootstrap_numpy_version="2.3.0",
@@ -379,10 +403,14 @@ def test_n_pair_grid_negative_rejected_by_field_validator() -> None:
             n_folds=2,
             n_cells_paired=0,
             n_pair_grid=-1,
+            n_oracle_cells_paired=0,
             n_skipped_cells=0,
             primary_metric_mean=None,
             primary_metric_ci_lo=None,
             primary_metric_ci_hi=None,
+            oracle_metric_mean=None,
+            oracle_metric_ci_lo=None,
+            oracle_metric_ci_hi=None,
             bootstrap_seed=42,
             bootstrap_n_resamples=10_000,
             bootstrap_numpy_version="2.3.0",
@@ -394,9 +422,7 @@ def test_n_pair_grid_negative_rejected_by_field_validator() -> None:
 # --- 8. Renderer `expected > 0` defensive guard (closes build R1 qa-I1) ---
 
 
-def test_renderer_expected_greater_than_zero_guard_suppresses_partial_on_zero_grid() -> (
-    None
-):
+def test_renderer_expected_greater_than_zero_guard_suppresses_partial_on_zero_grid() -> None:
     """Build R1 qa-I1 closure: pin the renderer's defensive
     `expected > 0` short-circuit. Construct a hypothetical
     non-sentinel rollup row with `n_pair_grid=0` AND
@@ -414,16 +440,10 @@ def test_renderer_expected_greater_than_zero_guard_suppresses_partial_on_zero_gr
     survive; the test pins the current observable behavior
     rather than the precise short-circuit mechanism."""
     result = _make_lift_result_for_renderer()
-    rollup = [
-        _make_rollup_row_for_renderer(
-            n_seeds=0, n_folds=0, n_cells_paired=0, n_pair_grid=0
-        )
-    ]
+    rollup = [_make_rollup_row_for_renderer(n_seeds=0, n_folds=0, n_cells_paired=0, n_pair_grid=0)]
     md = render_ensemble_lift_markdown_with_ci(result, rollup)
     # The row renders without a partial-coverage asterisk on
     # the CI cell. The numeric interval still appears because
     # primary_metric_mean/_ci_lo/_ci_hi are populated.
-    ci_line = next(
-        line for line in md.splitlines() if "0.2000 [0.1500, 0.2500]" in line
-    )
+    ci_line = next(line for line in md.splitlines() if "0.2000 [0.1500, 0.2500]" in line)
     assert "*" not in ci_line

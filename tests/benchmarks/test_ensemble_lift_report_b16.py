@@ -82,10 +82,14 @@ def _make_rollup_row(
     n_folds: int = 2,
     n_cells_paired: int = 4,
     n_pair_grid: int | None = None,
+    n_oracle_cells_paired: int | None = None,
     n_skipped_cells: int = 0,
     primary_metric_mean: float | None = 0.20,
     primary_metric_ci_lo: float | None = 0.15,
     primary_metric_ci_hi: float | None = 0.25,
+    oracle_metric_mean: float | None = 0.10,
+    oracle_metric_ci_lo: float | None = 0.08,
+    oracle_metric_ci_hi: float | None = 0.12,
     bootstrap_skipped_reason: str | None = None,
     manifest_fingerprint: str = "f" * 64,
 ) -> EnsembleLiftRollupRow:
@@ -94,6 +98,14 @@ def _make_rollup_row(
     # matches the pre-B19 symmetric-roster happy-path semantics.
     if n_pair_grid is None:
         n_pair_grid = n_cells_paired
+    # B20 / D-B16.1: when n_oracle_cells_paired is not supplied, default
+    # to n_cells_paired (every paired cell has a computable oracle_loss)
+    # so the renderer's oracle-partial flag does not fire on the
+    # symmetric-roster default. Mirrors the B19 n_pair_grid None-fallback
+    # pattern: the schema field stays `int = Field(ge=0)` with no Python
+    # default; the fallback lives in the factory body only.
+    if n_oracle_cells_paired is None:
+        n_oracle_cells_paired = n_cells_paired
     return EnsembleLiftRollupRow(
         dataset_name=dataset_name,
         task_type=task_type,
@@ -103,10 +115,14 @@ def _make_rollup_row(
         n_folds=n_folds,
         n_cells_paired=n_cells_paired,
         n_pair_grid=n_pair_grid,
+        n_oracle_cells_paired=n_oracle_cells_paired,
         n_skipped_cells=n_skipped_cells,
         primary_metric_mean=primary_metric_mean,
         primary_metric_ci_lo=primary_metric_ci_lo,
         primary_metric_ci_hi=primary_metric_ci_hi,
+        oracle_metric_mean=oracle_metric_mean,
+        oracle_metric_ci_lo=oracle_metric_ci_lo,
+        oracle_metric_ci_hi=oracle_metric_ci_hi,
         bootstrap_seed=42,
         bootstrap_n_resamples=10_000,
         bootstrap_numpy_version="2.3.0",

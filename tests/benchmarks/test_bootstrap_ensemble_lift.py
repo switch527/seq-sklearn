@@ -636,9 +636,12 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_oom_gate_raises(
         monkeypatch,
         {"fake_binary": _per_cell_pairs([(0, 0, 0.60, 0.40)])},
     )
-    import benchmarks.report.bootstrap_ensemble_lift as _module
+    # B20 R1 arch-I1 closure: the aggregator now late-binds
+    # `BOOTSTRAP_ROW_COUNT_CEILING` via `_bootstrap_aggregate.<NAME>`,
+    # so tests monkeypatch the source module (not the consumer).
+    import benchmarks.report._bootstrap_aggregate as _agg
 
-    monkeypatch.setattr(_module, "BOOTSTRAP_ROW_COUNT_CEILING", 1)  # type: ignore[misc]
+    monkeypatch.setattr(_agg, "BOOTSTRAP_ROW_COUNT_CEILING", 1)  # type: ignore[misc]
 
     env = build_run_environment(profile="smoke")
     with pytest.raises(RawRollupError, match="ceiling"):

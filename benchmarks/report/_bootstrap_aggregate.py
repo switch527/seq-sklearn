@@ -22,6 +22,16 @@ BOOTSTRAP_N_RESAMPLES_BY_PROFILE: dict[str, int] = {
     "full": 10_000,
 }
 BOOTSTRAP_DEFAULT_SEED: int = 0xB13_5EED_B007
+# B20 / D-B16.1: XOR mask used to derive an independent PCG64 stream
+# for the oracle delta bootstrap in `bootstrap_ensemble_lift`. The
+# main delta_loss bootstrap uses BOOTSTRAP_DEFAULT_SEED; the oracle
+# bootstrap uses BOOTSTRAP_DEFAULT_SEED ^ BOOTSTRAP_ORACLE_SEED_OFFSET
+# so the two streams (which can operate on overlapping cell indices)
+# produce uncorrelated resample sequences. `benchmarks/metrics/
+# bootstrap.py` constructs `np.random.Generator(np.random.PCG64(seed))`
+# where the stream depends ONLY on `seed`; sharing a seed would
+# yield identical resample indices on shared `n_entities`.
+BOOTSTRAP_ORACLE_SEED_OFFSET: int = 0xB20_07A_C7E
 BOOTSTRAP_CONFIDENCE: float = 0.95
 
 # Defensive row-count ceiling (R-B13-3 / Gemini-C2).
@@ -70,6 +80,7 @@ __all__ = [
     "BOOTSTRAP_CONFIDENCE",
     "BOOTSTRAP_DEFAULT_SEED",
     "BOOTSTRAP_N_RESAMPLES_BY_PROFILE",
+    "BOOTSTRAP_ORACLE_SEED_OFFSET",
     "BOOTSTRAP_ROW_COUNT_CEILING",
     "numpy_version",
     "resolve_n_resamples",
