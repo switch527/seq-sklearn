@@ -292,7 +292,12 @@ Baseline test count (commit `6ef4fcd` on main): 973
     output AND the literals `"99"` and `"88"` do NOT appear
     in the per-fold section. Pins R-B25-1's "exactly 6
     columns" contract; a future regression that surfaced
-    the audit fields would fail.
+    the audit fields would fail. Implementer note (qa-R2-N1
+    closure): use a `dataset_name` and other group-column
+    values that do NOT contain the literals `"99"` or
+    `"88"` (e.g., `dataset_name="fake_binary"`,
+    `model_name="m1"`) so the negative assertions remain
+    non-vacuous.
 10b. `test_per_fold_cis_footnote_ci_fallback_reason_source_binding`
     (qa-R1-C1 closure): two rollup-row fixtures differing
     only in the FoldCI's `ci_fallback_reason` (one
