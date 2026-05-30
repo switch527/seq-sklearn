@@ -753,12 +753,16 @@ def test_rollup_row_schema_default_ci_method_is_percentile() -> None:
     `"percentile"`. Pins the backward-compat invariant for pre-B21
     parquet shard loading; a future schema-default change to
     `"bca"` would silently mislabel pre-B21 CI bounds."""
+    # B26 / D-B23.2 closure: bootstrap_skipped_reason populated so
+    # the rows construct as valid sentinels under the new
+    # CI-sentinel @model_validator (all metric_* default to None).
     common_base = dict(
         dataset_name="ds",
         task_type="binary",
         bootstrap_seed=42,
         bootstrap_n_resamples=100,
         bootstrap_numpy_version="2.0.0",
+        bootstrap_skipped_reason="test_fixture",
         manifest_fingerprint="f" * 64,
     )
 
