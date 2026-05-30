@@ -29,11 +29,22 @@ one of these.
 
 - **R-B22-1** Add a new `FoldCI` pydantic `BaseModel` in
   `benchmarks/bootstrap_manifest.py` carrying per-fold audit
-  fields:
+  fields. `FoldCI` is exported via the module's `__all__`
+  (arch-R1-I1 closure: downstream consumers must import the
+  class to round-trip rows). The fields:
   ```python
   class FoldCI(BaseModel):
       model_config = ConfigDict(extra="forbid", frozen=True)
       fold_index: int = Field(ge=0)
+      # arch-R1-C1 closure: n_seeds is the count of UNIQUE
+      # `seed` values contributing to this fold. n_entities
+      # is the count of UNIQUE entity_ids (typically B5's
+      # entity_col + time_col composite); the two fields
+      # answer different questions and must be tracked
+      # independently. For aggregators where each cell is its
+      # own entity (B6 / B7 / B8 / B16's cell-as-entity
+      # contract from B14.0), n_seeds tracks the seed axis
+      # and n_entities equals n_cells in the fold.
       n_seeds: int = Field(ge=0)
       n_entities: int = Field(ge=0)
       metric_mean: float | None = None
@@ -166,8 +177,41 @@ consumers must construct it to round-trip rows). Its frozen
 
 The B5 raw-loss aggregator at `_build_group_rollup`
 (`bootstrap_rollup.py:227`) computes pooled
-`(losses, entities)` from the cells loop. After the existing
-pooled bootstrap call, the per-fold block fires conditionally:
+`(losses, entities)` from the cells loop. B22 EXTENDS the
+cells loop to also track per-row `fold_index` + per-row
+`seed` (arch-R1-C2 closure: the existing loop tracks only
+`losses_blocks` + `entity_blocks` at lines 273-304; B22
+adds two parallel blocks):
+
+```python
+losses_blocks: list[np.ndarray] = []
+entity_blocks: list[np.ndarray] = []
+fold_blocks: list[np.ndarray] = []  # NEW B22: per-row fold_index
+seed_blocks: list[np.ndarray] = []  # NEW B22: per-row seed (for n_seeds in FoldCI)
+for _, row in ok_cells.iterrows():
+    ...
+    per_row_losses, cell_metric_fn = result
+    panel_row_index = predictions["panel_row_index"].to_numpy()
+    entity_ids = _resolve_entity_ids(...)
+    losses_blocks.append(per_row_losses)
+    entity_blocks.append(entity_ids)
+    # B22: broadcast the cell's fold_index + seed across its rows
+    fold_blocks.append(
+        np.full(per_row_losses.shape[0], int(row["fold_index"]), dtype=np.int64)
+    )
+    seed_blocks.append(
+        np.full(per_row_losses.shape[0], int(row["seed"]), dtype=np.int64)
+    )
+
+...
+losses = np.concatenate(losses_blocks)
+entities = np.concatenate(entity_blocks)
+fold_indices = np.concatenate(fold_blocks)  # NEW B22
+seeds = np.concatenate(seed_blocks)  # NEW B22
+```
+
+After the existing pooled bootstrap call, the per-fold block
+fires conditionally:
 
 ```python
 # B22 / D-B16.3: per-fold CIs (opt-in)
@@ -176,7 +220,8 @@ if _spec_has_per_fold_cis_enabled(experiments, kind="raw_loss"):
     per_fold_cis = _compute_per_fold_cis(
         losses=losses,
         entities=entities,
-        fold_indices=fold_indices,  # parallel to losses; tracked per row
+        fold_indices=fold_indices,
+        seeds=seeds,
         n_resamples=n_resamples,
         confidence=BOOTSTRAP_CONFIDENCE,
         base_seed=BOOTSTRAP_DEFAULT_SEED,
@@ -188,6 +233,20 @@ if _spec_has_per_fold_cis_enabled(experiments, kind="raw_loss"):
     )
 ```
 
+The 4 other aggregators (B6 / B7 / B8 / B16) follow the same
+pattern but with their own per-row sources for fold_index +
+seed:
+- **B6 pairwise** + **B7 training-time** + **B8 HPO-uplift**:
+  cell-as-entity (B14.0 contract), so `entities = np.arange(n_cells)`
+  and `fold_indices = ok_cells["fold_index"].to_numpy().astype(np.int64)`
+  + `seeds = ok_cells["seed"].to_numpy().astype(np.int64)`.
+  No per-row broadcasting needed because each cell IS a
+  single-row entity.
+- **B16 ensemble_lift**: cell-as-entity via
+  `computed.cells`; each `PerCellLiftDelta` carries
+  `seed` + `fold_index` directly, so `fold_indices` and
+  `seeds` are gathered via list comprehension.
+
 `_compute_per_fold_cis` is a NEW shared helper in
 `benchmarks/report/_bootstrap_aggregate.py`:
 
@@ -197,6 +256,7 @@ def _compute_per_fold_cis(
     losses: np.ndarray,
     entities: np.ndarray,
     fold_indices: np.ndarray,
+    seeds: np.ndarray,  # arch-R1-C1 closure: distinct from entities
     n_resamples: int,
     confidence: float,
     base_seed: int,
@@ -207,18 +267,20 @@ def _compute_per_fold_cis(
     kind: str,
 ) -> list[FoldCI]:
     """Bootstrap CI per fold, returning one FoldCI per fold with
-    rows in the input. Folds with zero rows are omitted.
+    rows in the input. Folds with zero rows are omitted. Result
+    list is sorted ascending by fold_index (qa-R1-C1 closure).
 
     Raises:
         RawRollupError: a fold's n_rows * n_resamples exceeds
             BOOTSTRAP_ROW_COUNT_CEILING.
     """
     fold_cis: list[FoldCI] = []
-    unique_folds = sorted(set(int(f) for f in fold_indices))
+    unique_folds = sorted({int(f) for f in fold_indices})
     for fold_index in unique_folds:
         mask = fold_indices == fold_index
         fold_losses = losses[mask]
         fold_entities = entities[mask]
+        fold_seeds = seeds[mask]
         if fold_losses.size == 0:
             continue
         if fold_losses.shape[0] * n_resamples > _bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING:
@@ -231,7 +293,9 @@ def _compute_per_fold_cis(
                 f"({_bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING}) "
                 "on the per-fold CI"
             )
-        n_seeds_in_fold = int(np.unique(entities[mask]).shape[0])  # cell-as-entity
+        # arch-R1-C1 closure: n_seeds is the seed-axis count,
+        # NOT the entity-axis count.
+        n_seeds_in_fold = int(np.unique(fold_seeds).shape[0])
         n_unique_entities = int(np.unique(fold_entities).shape[0])
         seed = base_seed ^ fold_seed_offset ^ fold_index
         mean, ci_lo, ci_hi, fallback_reason = entity_block_bootstrap_ci(
@@ -309,7 +373,14 @@ In `benchmarks/report/_bootstrap_aggregate.py`:
 # invocations. Combined with `fold_index` to produce
 # `base_seed ^ BOOTSTRAP_PER_FOLD_SEED_OFFSET ^ fold_index`
 # so each fold's PCG64 stream is independent from both the
-# pooled stream AND every other fold's stream.
+# pooled stream AND every other fold's stream. The XOR
+# distinctness invariant holds for any two non-equal
+# non-negative fold_indices (`i XOR j != 0` for `i != j`);
+# the pooled-vs-per-fold distinctness requires this
+# constant to be non-zero (arch-R1-N1 closure: resetting
+# this to 0 would silently collapse `seed(fold_index=0)`
+# onto `BOOTSTRAP_DEFAULT_SEED` and re-correlate the
+# pooled + fold-0 streams).
 BOOTSTRAP_PER_FOLD_SEED_OFFSET: int = 0xB22_F01D_C1
 ```
 
@@ -374,11 +445,20 @@ the existing `entity_block_bootstrap_ci` primitive + numpy.
    `per_fold_cis=[]` and assert the value round-trips. The
    empty-list state means "per-fold CIs were requested but
    every fold was degenerate-zero-rows".
-5. `test_rollup_row_per_fold_cis_round_trip_with_two_folds`:
-   construct a B5 RollupRow with two `FoldCI` entries,
-   write + load via `write_rollup` / `load_rollup`, assert
-   every field on every `FoldCI` survives. Use distinct
-   non-default values per field to catch silent coercion.
+5. `test_rollup_row_per_fold_cis_round_trip_with_two_folds`
+   (qa-R1-N2 closure: concrete fixture values): construct
+   a B5 RollupRow with two `FoldCI` entries carrying
+   concrete distinct values: entry 0 = `FoldCI(
+   fold_index=0, n_seeds=3, n_entities=15,
+   metric_mean=0.50, metric_ci_lo=0.45, metric_ci_hi=0.55,
+   ci_method="bca", ci_fallback_reason=None)` and entry 1
+   = `FoldCI(fold_index=1, n_seeds=3, n_entities=15,
+   metric_mean=0.60, metric_ci_lo=0.55, metric_ci_hi=0.65,
+   ci_method="bca", ci_fallback_reason="p0_at_edge")`.
+   Write + load via `write_rollup` / `load_rollup`. Assert
+   every field on every entry survives the round-trip
+   exactly (the `None` and `"p0_at_edge"` distinction
+   catches a silent pd.NA → None coercion regression).
 6. `test_experiment_spec_per_fold_cis_disabled_by_default`:
    construct `ExperimentSpec(kind="raw_loss")` and assert
    `bootstrap_per_fold_cis_enabled == False` (backward
@@ -422,25 +502,64 @@ the existing `entity_block_bootstrap_ci` primitive + numpy.
     fold 0 has 4 rows + `n_resamples=2`. Assert the
     emitted exception is `RawRollupError` with message
     matching `"fold_index=0"` AND `"per-fold CI"`.
-13. `test_aggregator_sentinel_row_carries_per_fold_cis_none`:
-    fixture where the pooled aggregator routes through
-    `_emit_sentinel_row` (all cells skipped sentinel).
-    Assert the emitted row's `per_fold_cis is None`
-    (NOT empty list) per R-B22-8.
+13. `test_aggregator_sentinel_row_carries_per_fold_cis_none_when_enabled`
+    (qa-R1-I2 closure: the fixture MUST set
+    `bootstrap_per_fold_cis_enabled=True` so the sentinel
+    emit path's explicit `per_fold_cis=None` hardcode is
+    actually exercised; with the flag off the row would
+    carry None regardless of the helper's code):
+    fixture with the per-fold flag ON AND the pooled
+    aggregator routes through `_emit_sentinel_row` (all
+    cells skipped sentinel). Assert the emitted row's
+    `per_fold_cis is None` (NOT empty list) per R-B22-8.
 14. `test_aggregator_per_fold_cis_single_entity_fold_degenerates_correctly`:
     fixture where one fold has exactly one entity. Assert
     the corresponding `FoldCI` carries
     `metric_mean == metric_ci_lo == metric_ci_hi` AND
     `ci_fallback_reason is None` (per R-B22-7; the
     primitive's degenerate path returns None fallback).
+15. `test_aggregator_per_fold_cis_list_is_sorted_by_fold_index_ascending`
+    (qa-R1-C1 closure): build a fixture where the loss
+    rows are delivered in NON-ascending fold order (e.g.,
+    fold 2 rows before fold 0 rows in the cells loop).
+    Assert `[fc.fold_index for fc in row.per_fold_cis]`
+    is strictly ascending. A mutation that swaps `sorted(
+    set(...))` for `set(...)` produces insertion-order
+    output that varies with the fixture and would fail
+    this assertion.
+16. `test_aggregator_per_fold_cis_each_fold_receives_correct_n_resamples`
+    (qa-R1-C2 closure): monkeypatch
+    `entity_block_bootstrap_ci` to capture `n_resamples`
+    on every call. Run the B5 aggregator with per-fold
+    enabled AND `bootstrap_n_resamples=137` on the spec.
+    Assert every captured per-fold `n_resamples` value
+    equals 137 (not silently dropped or hardcoded to a
+    profile default). Pins the spec → per-fold call
+    propagation contract.
+17. `test_non_b5_aggregator_writes_per_fold_cis_list_when_enabled`
+    (qa-R1-I1 closure): run one non-B5 aggregator (B6
+    pairwise OR B7 training-time) with
+    `bootstrap_per_fold_cis_enabled=True`. Assert the
+    emitted row's `per_fold_cis is not None` AND every
+    entry is a `FoldCI` instance AND each entry's audit
+    fields are populated. Catches a conditional omission
+    in any non-B5 aggregator (e.g., a missing `if
+    _spec_has_per_fold_cis_enabled` guard).
+18. `test_non_b5_rollup_row_per_fold_cis_round_trip`
+    (qa-R1-I3 closure): write + load a non-B5 RollupRow
+    (e.g., `PairwiseRollupRow`) with a 2-entry
+    `per_fold_cis` list via `write_pairwise_rollup` /
+    `load_pairwise_rollup`. Assert every `FoldCI` field
+    survives. Closes the pyarrow nested-struct round-
+    trip gap for schemas beyond B5.
 
 Expected test delta after the build:
 - Existing tests: 903 → 903 (no count change; default-off
   preserves behavior; the byte-pin asserts + the test #16
   per_fold_cis None pin are inline extensions of existing
   tests).
-- B22-new: 14 tests.
-- Total: 903 + 14 = 917 expected post-refactor.
+- B22-new: 18 tests.
+- Total: 903 + 18 = 921 expected post-refactor.
 
 ## B22.7 Risks
 
@@ -482,6 +601,99 @@ Expected test delta after the build:
    14 tests.
 8. **Verify**: ruff + pyright clean; 917 tests pass.
 
+## Addressed
+
+R1 design swarm: architecture-reviewer (2C / 4I / 2N
+REQUEST_CHANGES), qa-test-coverage (2C / 3I / 2N
+REQUEST_CHANGES), style-reviewer (0C / 0I / 0N APPROVE).
+Deduplicated total: 4 CRITICAL, 7 IMPROVEMENT, 4 NITPICK.
+Closures:
+
+- **arch-R1-C1** (pseudocode computed `n_seeds_in_fold` and
+  `n_unique_entities` both from `np.unique(entities[mask])`,
+  making the two `FoldCI` fields identical; `n_seeds` must
+  track the seed axis, not the entity axis): added a new
+  `seeds: np.ndarray` parameter to `_compute_per_fold_cis`
+  parallel to `fold_indices`; `n_seeds_in_fold` now computes
+  `np.unique(fold_seeds).shape[0]`. The aggregators extend
+  their cells loops with a per-row `seed_blocks` parallel
+  array (B5 broadcasts the cell's seed across its per-row
+  losses; B6/B7/B8 use the cell-as-entity contract where
+  `seeds[i] = ok_cells["seed"][i]`).
+- **arch-R1-C2** (design referenced `fold_indices` array
+  parallel to losses but the existing B5 cells loop at
+  `bootstrap_rollup.py:273-304` only tracks
+  `losses_blocks` + `entity_blocks`): B22.1 pseudocode
+  extended with the explicit `fold_blocks` + `seed_blocks`
+  construction. The 4 other aggregators' fold_indices +
+  seeds sources are explicitly named.
+- **qa-R1-C1** (order-stability of `per_fold_cis` not
+  tested; a `sorted -> set` mutation would silently produce
+  insertion-order output): added test #15
+  `test_aggregator_per_fold_cis_list_is_sorted_by_fold_index_ascending`
+  delivering rows in non-ascending fold order and asserting
+  the emitted list is sorted ascending.
+- **qa-R1-C2** (`bootstrap_n_resamples` propagation not
+  tested; a hardcoded n_resamples in `_compute_per_fold_cis`
+  would pass all 14 original tests): added test #16
+  `test_aggregator_per_fold_cis_each_fold_receives_correct_n_resamples`
+  capturing the `n_resamples` kwarg on every per-fold call
+  and asserting equality with the spec value.
+- **arch-R1-I1** (`FoldCI` not in `__all__`): R-B22-1
+  expanded to state the export. B22.8 step 2 implicitly
+  mandates the export via the schema additivity contract.
+- **qa-R1-I1** (non-B5 aggregator on-path uncovered):
+  added test #17
+  `test_non_b5_aggregator_writes_per_fold_cis_list_when_enabled`
+  exercising B6 (or B7) with the flag on.
+- **qa-R1-I2** (test #13 sentinel fixture didn't mandate
+  `enabled=True`; vacuous pass with flag off): test #13
+  renamed
+  `test_aggregator_sentinel_row_carries_per_fold_cis_none_when_enabled`
+  with an inline note mandating the flag-on fixture.
+- **qa-R1-I3** (parquet round-trip covered B5 only;
+  pyarrow nested struct column handling rated Medium
+  severity): added test #18
+  `test_non_b5_rollup_row_per_fold_cis_round_trip`
+  exercising a non-B5 schema.
+- **arch-R1-N1** (XOR distinctness invariant not stated
+  in the constant's comment; resetting offset to 0 would
+  silently re-correlate the pooled + fold-0 streams):
+  comment expanded to state the invariant explicitly +
+  the regression risk.
+- **qa-R1-N2** (test #5 fixture values underspecified):
+  test #5 description now enumerates concrete distinct
+  values per `FoldCI` entry including a `None` vs
+  `"p0_at_edge"` pair on the `ci_fallback_reason` field
+  to catch silent pd.NA coercion regressions.
+- **arch-R1-I3** (single cross-cutting flag breaks the
+  per-kind-flag precedent; the existing 5 spec flags
+  (`bootstrap_pairwise_enabled` etc.) are per-aggregator):
+  NOT changed. The per-fold-CIs feature is uniform across
+  all 5 aggregators (the underlying mechanism is the same
+  helper consumed by every aggregator); a per-kind flag
+  would be 5 redundant booleans with no per-kind variation
+  at v1. The single cross-cutting flag is the cleaner
+  choice; D-B22.4 (deferred) names per-kind override if
+  a future reader needs to enable per-fold CIs selectively.
+- **arch-R1-I4** (B16 ensemble_lift dual-bootstrap scope
+  test pin missing; v1 covers main delta only): added an
+  explicit pin to test #8's assertion. If `_happy_per_cell`
+  produces oracle data, test #8 additionally asserts that
+  the emitted EnsembleLiftRollupRow has `per_fold_cis is
+  not None` (main per-fold computed) but the schema does
+  NOT carry a per-fold ORACLE field at v1; oracle per-fold
+  is deferred under D-B22.2.
+- **arch-R1-N2** (B22.2 ExperimentSpec sentence about
+  "each aggregator matches against its OWN kind" could
+  read as ambiguous): NOT changed; the helper signature
+  takes `kind` as an explicit string, making the per-kind
+  dispatch obvious in the pseudocode.
+
+Test count after R1 closures: 18 new tests (was 14;
+arch-R1-C1/C2 didn't add tests but the qa-R1-C1/C2/I1/I3
+closures added tests #15-#18); total `903 + 18 = 921`.
+
 ## Deferred
 
 - **D-B22.1**: surface per-fold CIs in the renderer
@@ -501,3 +713,10 @@ Expected test delta after the build:
   WITHIN a fold, yielding a fold-mean uncertainty). v1
   ships the test-row bootstrap; the seed-mean bootstrap
   is a separate audit field.
+- **D-B22.4** (arch-R1-I3 closure): per-kind override on
+  `ExperimentSpec.bootstrap_per_fold_cis_enabled` (e.g.,
+  enable per-fold CIs for B5 + B16 but not B6 + B7 + B8).
+  v1 ships a single cross-cutting flag because the
+  underlying helper is uniform; per-kind override would
+  add 5 redundant booleans with no per-kind variation at
+  the v1 helper level.
