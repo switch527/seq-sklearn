@@ -128,16 +128,22 @@ mode="after" execution chain. Both run on every construction
 including `model_validate`.
 
 **Backward-compat audit** (arch-R1-C1 + arch-R1-N1 +
-qa-R1-fixture-sweep closure): per-site enumeration of all
-12 EnsembleLiftRollupRow construction sites in
+arch-R2-C1 closure): per-site enumeration of all 18
+EnsembleLiftRollupRow construction sites in
 `tests/benchmarks/`:
 
 | Site | Pattern | Validator compat |
 |---|---|---|
 | `test_b17_byte_identity_pins.py:332` | non-sentinel | COMPATIBLE |
-| `test_b19_n_pair_grid.py:268, :328` | non-sentinel | COMPATIBLE |
+| `test_b19_n_pair_grid.py:268` (factory) | non-sentinel | COMPATIBLE |
+| `test_b19_n_pair_grid.py:328` | non-sentinel | COMPATIBLE |
+| `test_b19_n_pair_grid.py:363` | sentinel (all-None + reason) | COMPATIBLE |
+| `test_b19_n_pair_grid.py:397` | `pytest.raises` on `n_pair_grid=-1` | COMPATIBLE (`Field(ge=0)` fires before model_validator) |
 | `test_b20_oracle_delta_ci.py:248` (factory) | non-sentinel | COMPATIBLE |
+| `test_b20_oracle_delta_ci.py:813` | non-sentinel | COMPATIBLE |
+| `test_b20_oracle_delta_ci.py:836` | non-sentinel | COMPATIBLE |
 | `test_b21_bca_ci.py:638` | non-sentinel | COMPATIBLE |
+| `test_b21_bca_ci.py:815` | sentinel (all-None + `"test_fixture"` reason from B26 repair to `common_base`) | COMPATIBLE |
 | `test_b22_per_fold_cis.py:264` (zero-cell sentinel via `common`) | sentinel | COMPATIBLE post-B26 fixture repair |
 | `test_b22_per_fold_cis.py:1235` | non-sentinel | COMPATIBLE |
 | `test_b23_b20_nits_bundle.py:84` (factory) | non-sentinel | COMPATIBLE |
@@ -265,7 +271,7 @@ Net new logical assertions: 22 (4 new variants x 5 schemas
 
 | ID | Risk | Severity | Mitigation |
 |---|---|---|---|
-| R-B27-Risk-1 | The new EnsembleLiftRollupRow CI-sentinel validator rejects an existing test fixture. | Medium-confirmed | R1 design swarm identified one site: `test_ensemble_lift_report_b16.py:561-569` (renderer OR-guard mutation pin) constructs an `EnsembleLiftRollupRow` with populated metrics AND `bootstrap_skipped_reason="all_cells_skipped_in_manifest"`. The repair is prescribed in B27.4 step 4: rewrite as `EnsembleLiftRollupRow.model_construct(...)` to bypass the new validator. All 11 other EnsembleLift sites are CI-sentinel-compatible per the per-site enumeration in B27.2. |
+| R-B27-Risk-1 | The new EnsembleLiftRollupRow CI-sentinel validator rejects an existing test fixture. | Medium-confirmed | R1 design swarm identified one site: `test_ensemble_lift_report_b16.py:561-569` (renderer OR-guard mutation pin) constructs an `EnsembleLiftRollupRow` with populated metrics AND `bootstrap_skipped_reason="all_cells_skipped_in_manifest"`. The repair is prescribed in B27.4 step 4: rewrite as `EnsembleLiftRollupRow.model_construct(...)` to bypass the new validator. All 17 other EnsembleLift sites are CI-sentinel-compatible per the per-site enumeration in B27.2. |
 | R-B27-Risk-2 | Composing two `@model_validator(mode="after")` on the same class causes ordering issues. | Low | Pydantic v2 documents that mode="after" validators run in declaration order. The two are independent (different field sets); ordering does not affect correctness. |
 | R-B27-Risk-3 | Test rewrite drops coverage of the original 8 mixed-reject tests. | Low | The 30-way parametrize SUPERSETS the original 8 (which were mixed-1 + mixed-2 per schema). Coverage strictly increases. |
 | R-B27-Risk-4 | Header correction in B22 design doc is a historical edit. | None | Documentation accuracy only; no behavior change. |
@@ -310,6 +316,31 @@ Test count after R1 closures: 23 named (no change from
 R1 draft; the delta arithmetic was clarified, not modified);
 1059 collected.
 
+### R2 design swarm closure
+
+R2 confirming swarm on commit `7f08728`: architecture-
+reviewer (1C / 0I / 1N REQUEST_CHANGES), qa-test-coverage
+(0C / 0I / 1N APPROVE), style-reviewer (0C / 0I / 0N
+APPROVE). Deduplicated total: 1 CRITICAL, 0 IMPROVEMENT, 2
+NITPICK. Closures:
+
+- **arch-R2-C1** (per-site table claimed "all 12 sites"
+  but actually omitted 6 sites under the full grep of
+  EnsembleLiftRollupRow construction calls): table
+  expanded to all 18 sites with the 6 additional rows
+  (test_b19_n_pair_grid at :328, :363, :397;
+  test_b20_oracle_delta_ci at :813, :836;
+  test_b21_bca_ci at :815). The compatibility conclusion
+  is unchanged: only `test_ensemble_lift_report_b16.py:561`
+  needs the `model_construct` rewrite.
+- **arch-R2-N1 + qa-R2-N1** (`bootstrap_ensemble_lift.py`
+  path prefix missing in D-B27.2 citation): full path
+  prefix added (`benchmarks/report/bootstrap_ensemble_lift.py:320-321`).
+
+Test count after R2 closures: 23 named / 1059 collected
+(unchanged from R1; all R2 closures were doc accuracy
+only).
+
 ## Deferred
 
 - **D-B27.2**: extend the CI-sentinel
@@ -322,7 +353,8 @@ R1 draft; the delta arithmetic was clarified, not modified);
   `bootstrap_skipped_reason`: a row with
   `n_oracle_cells_paired == 0` has all oracle metrics None,
   and a row with `n_oracle_cells_paired > 0` has all oracle
-  metrics set (per `bootstrap_ensemble_lift.py:320-321`).
+  metrics set (per
+  `benchmarks/report/bootstrap_ensemble_lift.py:320-321`).
   A future invariant of the form `oracle_metric_* all-None
   iff n_oracle_cells_paired == 0` would close this gap.
 - **D-B27.1**: extend the mixed-reject parametrize to cover
