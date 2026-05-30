@@ -427,6 +427,26 @@ def _render_with_ci(
     if partial:
         parts.append(_render_partial_coverage_footnote(partial))
 
+    # B23 / D-B20.1: oracle CI partial-coverage footnote. Caller
+    # pre-filters affected rows (arch-R1-I3 closure: filter at the
+    # call site, mirrors the existing partial-coverage pattern).
+    affected_oracle: list[tuple[str, int, int, int]] = []
+    for r in complete:
+        rollup_row = rollup_index.get(r.dataset_name)
+        if rollup_row is None or rollup_row.bootstrap_skipped_reason is not None:
+            continue
+        if rollup_row.n_oracle_cells_paired < rollup_row.n_pair_grid and rollup_row.n_pair_grid > 0:
+            affected_oracle.append(
+                (
+                    r.dataset_name,
+                    rollup_row.n_oracle_cells_paired,
+                    rollup_row.n_pair_grid,
+                    rollup_row.n_pair_grid - rollup_row.n_oracle_cells_paired,
+                )
+            )
+    if affected_oracle:
+        parts.append(_render_oracle_partial_coverage_footnote(affected_oracle))
+
     # Source 5b: NEW all_cells_skipped_in_manifest sentinel via the
     # shared helper. The two pre-existing B11 incomplete-block
     # sentinels (no_gbm_predictions, no_seq_predictions) are
@@ -457,6 +477,27 @@ def _render_partial_coverage_footnote(rollup: list[EnsembleLiftRollupRow]) -> st
     lines.append("| --- | --- |")
     for r in rollup:
         lines.append(f"| {r.dataset_name} | {r.n_skipped_cells} / {r.n_cells_paired} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_oracle_partial_coverage_footnote(
+    affected: list[tuple[str, int, int, int]],
+) -> str:
+    """B23 / D-B20.1: markdown footnote block for the oracle CI
+    partial-coverage asterisk. Pure renderer; caller pre-filters
+    the affected rows."""
+    if not affected:
+        return ""
+    affected_sorted = sorted(affected, key=lambda t: t[0])
+    lines = [
+        "### Oracle partial-coverage footnotes",
+        "",
+        "| dataset | n_oracle_cells_paired | n_pair_grid | n_missing |",
+        "| --- | --- | --- | --- |",
+    ]
+    for dataset_name, n_oracle, n_grid, n_missing in affected_sorted:
+        lines.append(f"| {dataset_name} | {n_oracle} | {n_grid} | {n_missing} |")
     lines.append("")
     return "\n".join(lines)
 
