@@ -525,6 +525,14 @@ IMPROVEMENT, 3 NITPICK. Closures:
 Test count after R1 build-swarm closures: 26 named (was
 25; +qa-R1-build-I2 test); 1007 collected.
 
+### R2 build-swarm closure
+
+R2 confirming build swarm on commit `e2bc3d9`: code-reviewer
+(0C / 0I / 0N APPROVE), qa-test-coverage (0C / 0I / 0N
+APPROVE), architecture-reviewer (0C / 0I / 0N APPROVE),
+style-reviewer (0C / 0I / 0N APPROVE). Build consensus
+reached: zero CRITICAL, zero IMPROVEMENT, zero NITPICK.
+
 ## Deferred
 
 - **D-B25.3**: surface `FoldCI.n_seeds` and
