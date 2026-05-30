@@ -234,6 +234,7 @@ def _build_group_rollup(
     cache_dir: Path | None,
     n_resamples: int,
     manifest_fingerprint: str,
+    per_fold_enabled: bool,
 ) -> RollupRow:
     """Aggregate one (dataset, model, task_type) group to one RollupRow."""
     ok_mask = group_rows["skipped_reason"].isna()
@@ -263,6 +264,7 @@ def _build_group_rollup(
             bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
             bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
             bootstrap_ci_fallback_reason=None,
+            per_fold_cis=None,
             bootstrap_numpy_version=numpy_version(),
             bootstrap_skipped_reason="all_cells_skipped_in_manifest",
             manifest_fingerprint=manifest_fingerprint,
@@ -272,6 +274,8 @@ def _build_group_rollup(
     spec = get_dataset(dataset_name)
     losses_blocks: list[np.ndarray] = []
     entity_blocks: list[np.ndarray] = []
+    fold_blocks: list[np.ndarray] = []
+    seed_blocks: list[np.ndarray] = []
     metric_fn: Callable[[np.ndarray], float] | None = None
 
     cells_kept = 0
@@ -301,6 +305,12 @@ def _build_group_rollup(
         entity_ids = _resolve_entity_ids(panel, spec.entity_col, spec.time_col, panel_row_index)
         losses_blocks.append(per_row_losses)
         entity_blocks.append(entity_ids)
+        # B22 / D-B16.3: broadcast the cell's fold_index + seed
+        # across its per-row losses so the per-fold helper can
+        # group by fold_index and count unique seeds per fold.
+        n_cell_rows = per_row_losses.shape[0]
+        fold_blocks.append(np.full(n_cell_rows, int(row["fold_index"]), dtype=np.int64))
+        seed_blocks.append(np.full(n_cell_rows, int(row["seed"]), dtype=np.int64))
         cells_kept += 1
 
     if cells_kept == 0 or metric_fn is None:
@@ -325,6 +335,7 @@ def _build_group_rollup(
             bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
             bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
             bootstrap_ci_fallback_reason=None,
+            per_fold_cis=None,
             bootstrap_numpy_version=numpy_version(),
             bootstrap_skipped_reason="all_predictions_shards_missing_or_unloadable",
             manifest_fingerprint=manifest_fingerprint,
@@ -332,6 +343,8 @@ def _build_group_rollup(
 
     losses = np.concatenate(losses_blocks)
     entities = np.concatenate(entity_blocks)
+    fold_indices = np.concatenate(fold_blocks)
+    seeds = np.concatenate(seed_blocks)
 
     # OOM gate per R-B13-3 / Gemini-C2.
     if losses.shape[0] * n_resamples > BOOTSTRAP_ROW_COUNT_CEILING:
@@ -353,6 +366,24 @@ def _build_group_rollup(
         ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
     )
 
+    # B22 / D-B16.3: per-fold CIs (opt-in).
+    per_fold_cis = None
+    if per_fold_enabled:
+        per_fold_cis = _bootstrap_aggregate.compute_per_fold_cis(
+            losses=losses,
+            entities=entities,
+            fold_indices=fold_indices,
+            seeds=seeds,
+            n_resamples=n_resamples,
+            confidence=BOOTSTRAP_CONFIDENCE,
+            base_seed=BOOTSTRAP_DEFAULT_SEED,
+            fold_seed_offset=_bootstrap_aggregate.BOOTSTRAP_PER_FOLD_SEED_OFFSET,
+            ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
+            metric_fn=metric_fn,
+            dataset_name=dataset_name,
+            kind="raw_loss",
+        )
+
     n_unique_entities = int(np.unique(entities).shape[0])
     return RollupRow(
         dataset_name=dataset_name,
@@ -373,6 +404,7 @@ def _build_group_rollup(
         bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
         bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
         bootstrap_ci_fallback_reason=fallback_reason,
+        per_fold_cis=per_fold_cis,
         bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=None,
         manifest_fingerprint=manifest_fingerprint,
@@ -402,6 +434,9 @@ def aggregate_bootstrap_rollup(
         )
 
     n_resamples = resolve_n_resamples(config.experiments, env.profile, kind="raw_loss")
+    per_fold_enabled = _bootstrap_aggregate.spec_has_per_fold_cis_enabled(
+        config.experiments, kind="raw_loss"
+    )
     cache_dir = config.cache_dir
     manifest_fingerprint = manifest.fingerprint()
     out: list[RollupRow] = []
@@ -430,6 +465,7 @@ def aggregate_bootstrap_rollup(
             cache_dir=cache_dir,
             n_resamples=n_resamples,
             manifest_fingerprint=manifest_fingerprint,
+            per_fold_enabled=per_fold_enabled,
         )
         out.append(rollup)
     write_rollup(output_root, out)

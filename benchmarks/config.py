@@ -218,6 +218,11 @@ class ExperimentSpec(BaseModel):
     bootstrap_training_time_enabled: bool = True
     bootstrap_hpo_uplift_enabled: bool = True
     bootstrap_ensemble_lift_enabled: bool = True
+    # B22 / D-B16.3: per-fold CI opt-in (audit-only at v1).
+    # When True, the matching aggregator additionally populates
+    # `per_fold_cis` on each emitted RollupRow with one FoldCI
+    # per fold. False preserves v1 behavior (pooled CI only).
+    bootstrap_per_fold_cis_enabled: bool = False
 
 
 _ALL_SENTINEL = "all"

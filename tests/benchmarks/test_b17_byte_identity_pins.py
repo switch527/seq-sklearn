@@ -162,6 +162,8 @@ def test_render_pairwise_byte_identity_post_rename() -> None:
     # columns only and must NOT surface in the rendered markdown.
     assert "bootstrap_ci_method" not in md
     assert "bootstrap_ci_fallback_reason" not in md
+    # B22 / D-B22.1 deferral: per_fold_cis is parquet-only.
+    assert "per_fold_cis" not in md
 
 
 def _make_training_time_manifest() -> pd.DataFrame:
@@ -219,6 +221,8 @@ def test_render_training_time_byte_identity_post_rename() -> None:
     # B21 / D-B21.1 deferral: new audit fields must NOT surface in the markdown.
     assert "bootstrap_ci_method" not in md
     assert "bootstrap_ci_fallback_reason" not in md
+    # B22 / D-B22.1 deferral: per_fold_cis is parquet-only.
+    assert "per_fold_cis" not in md
 
 
 def _make_hpo_uplift_manifest() -> pd.DataFrame:
@@ -290,6 +294,8 @@ def test_render_hpo_uplift_byte_identity_post_rename() -> None:
     # B21 / D-B21.1 deferral: new audit fields must NOT surface in the markdown.
     assert "bootstrap_ci_method" not in md
     assert "bootstrap_ci_fallback_reason" not in md
+    # B22 / D-B22.1 deferral: per_fold_cis is parquet-only.
+    assert "per_fold_cis" not in md
 
 
 def _make_ensemble_lift_result() -> EnsembleLiftExperimentResult:
@@ -370,6 +376,8 @@ def test_render_ensemble_lift_byte_identity_post_rename() -> None:
     # B21 / D-B21.1 deferral: new audit fields must NOT surface in the markdown.
     assert "bootstrap_ci_method" not in md
     assert "bootstrap_ci_fallback_reason" not in md
+    # B22 / D-B22.1 deferral: per_fold_cis is parquet-only.
+    assert "per_fold_cis" not in md
     assert "bootstrap_oracle_ci_fallback_reason" not in md
 
 

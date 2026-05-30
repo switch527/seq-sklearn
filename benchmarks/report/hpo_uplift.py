@@ -667,9 +667,7 @@ def render_hpo_uplift_markdown_with_ci(
         )
         return std_body + footnote
 
-    body = _render_with_ci_hpo_uplift(
-        manifest, rollup, reference_model=reference_model
-    )
+    body = _render_with_ci_hpo_uplift(manifest, rollup, reference_model=reference_model)
     if manifest_unreadable:
         body += (
             "\n### Bootstrap freshness check skipped\n\n"
@@ -713,9 +711,7 @@ def _render_with_ci_hpo_uplift(
     ]
     for dataset_name in sorted(by_dataset):
         parts.append(
-            _render_dataset_block_with_ci(
-                dataset_name, by_dataset[dataset_name], rollup_index
-            )
+            _render_dataset_block_with_ci(dataset_name, by_dataset[dataset_name], rollup_index)
         )
 
     if report.friedman is None:
@@ -825,11 +821,7 @@ def _render_partial_coverage_footnote(rollup: list[HPOUpliftRollupRow]) -> str:
     n_skipped_cells > 0, surface a "Partial coverage" footnote
     listing per-(dataset, model) the n_skipped_cells /
     n_cells_paired ratio."""
-    partial = [
-        r
-        for r in rollup
-        if r.bootstrap_skipped_reason is None and r.n_skipped_cells > 0
-    ]
+    partial = [r for r in rollup if r.bootstrap_skipped_reason is None and r.n_skipped_cells > 0]
     if not partial:
         return ""
     lines = ["### Partial coverage", ""]
@@ -837,8 +829,7 @@ def _render_partial_coverage_footnote(rollup: list[HPOUpliftRollupRow]) -> str:
     lines.append("| --- | --- | --- |")
     for r in partial:
         lines.append(
-            f"| {r.dataset_name} | {r.model_name} | "
-            f"{r.n_skipped_cells} / {r.n_cells_paired} |"
+            f"| {r.dataset_name} | {r.model_name} | {r.n_skipped_cells} / {r.n_cells_paired} |"
         )
     lines.append("")
     return "\n".join(lines)
