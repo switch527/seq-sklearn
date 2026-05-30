@@ -161,6 +161,9 @@ def _emit_sentinel_row(
         bootstrap_n_resamples=n_resamples,
         bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
         bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
+        bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
+        bootstrap_ci_fallback_reason=None,
+        bootstrap_oracle_ci_fallback_reason=None,
         bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=bootstrap_skipped_reason,
         manifest_fingerprint=manifest_fingerprint,
@@ -260,12 +263,13 @@ def _build_dataset_rollup(
         )
 
     entity_ids = np.arange(n_cells, dtype=np.int64)
-    mean, ci_lo, ci_hi = entity_block_bootstrap_ci(
+    mean, ci_lo, ci_hi, fallback_reason = entity_block_bootstrap_ci(
         deltas,
         entity_ids,
         n_resamples=n_resamples,
         confidence=BOOTSTRAP_CONFIDENCE,
         seed=BOOTSTRAP_DEFAULT_SEED,
+        ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
     )
 
     # B20 / D-B16.1: bootstrap CI on the per-sample-best oracle delta.
@@ -289,10 +293,12 @@ def _build_dataset_rollup(
     oracle_mean: float | None
     oracle_ci_lo: float | None
     oracle_ci_hi: float | None
+    oracle_fallback_reason: str | None
     if n_oracle_cells_paired == 0:
         oracle_mean = None
         oracle_ci_lo = None
         oracle_ci_hi = None
+        oracle_fallback_reason = None
     else:
         if not np.isfinite(oracle_deltas).all():
             raise RawRollupError(
@@ -315,12 +321,18 @@ def _build_dataset_rollup(
                 "on the oracle delta"
             )
         oracle_entity_ids = np.arange(n_oracle_cells_paired, dtype=np.int64)
-        oracle_mean, oracle_ci_lo, oracle_ci_hi = entity_block_bootstrap_ci(
+        (
+            oracle_mean,
+            oracle_ci_lo,
+            oracle_ci_hi,
+            oracle_fallback_reason,
+        ) = entity_block_bootstrap_ci(
             oracle_deltas,
             oracle_entity_ids,
             n_resamples=n_resamples,
             confidence=BOOTSTRAP_CONFIDENCE,
             seed=BOOTSTRAP_DEFAULT_SEED ^ _bootstrap_aggregate.BOOTSTRAP_ORACLE_SEED_OFFSET,
+            ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
         )
 
     return EnsembleLiftRollupRow(
@@ -344,6 +356,9 @@ def _build_dataset_rollup(
         bootstrap_n_resamples=n_resamples,
         bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
         bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
+        bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
+        bootstrap_ci_fallback_reason=fallback_reason,
+        bootstrap_oracle_ci_fallback_reason=oracle_fallback_reason,
         bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=None,
         manifest_fingerprint=manifest_fingerprint,

@@ -33,8 +33,10 @@ R1-R5):
 """
 
 from collections.abc import Callable
+from typing import Literal
 
 import numpy as np
+from scipy.stats import norm  # B21 / D-B16.2: BCa transform
 
 __all__ = [
     "entity_block_bootstrap_ci",
@@ -45,6 +47,11 @@ __all__ = [
 _DEFAULT_N_RESAMPLES: int = 10_000
 _DEFAULT_SEED: int = 0xB13_5EED_B007
 _DEFAULT_CONFIDENCE: float = 0.95
+# B21 / D-B16.2: epsilon guard for the BCa acceleration transform's
+# denominator. Catches `denom <= 0` overshoot AND the near-zero
+# finite-precision saturation case. Module-private; consumed by
+# `_bca_percentile_points`.
+_BCA_DENOM_EPS: float = 1e-12
 # RNG-algorithm pin (Gemini-I2 + R-B13-2): explicit so the
 # aggregator can record the actual algorithm name on every
 # RollupRow without re-deriving it from `type(rng).__name__`.
@@ -56,6 +63,69 @@ def _default_metric_fn(x: np.ndarray) -> float:
     return float(np.nanmean(x))
 
 
+def _compute_acceleration_from_jackknife(jackknife: np.ndarray) -> float:
+    """Acceleration `a` from a leave-one-entity-out jackknife.
+
+    Returns 0.0 when the denominator is 0 (all jackknife values
+    equal); BCa reduces to BC (bias-corrected percentile).
+    """
+    m_dot = float(np.mean(jackknife))
+    deviations = m_dot - jackknife
+    num = float(np.sum(deviations**3))
+    denom = 6.0 * float(np.sum(deviations**2)) ** 1.5
+    return 0.0 if denom == 0.0 else num / denom
+
+
+def _bca_percentile_points(
+    p0: float, a: float, confidence: float
+) -> tuple[float, float, str | None]:
+    """BCa percentile points given `p0`, `a`, `confidence`.
+
+    Returns `(alpha_1, alpha_2, fallback_reason)`. The caller
+    feeds the returned percentile points to `np.percentile`.
+    `fallback_reason` is one of `None`, `"p0_at_edge"`,
+    `"a_overshoot"`.
+    """
+    alpha = (1.0 - confidence) / 2.0
+    if p0 <= 0.0 or p0 >= 1.0:
+        return alpha, 1.0 - alpha, "p0_at_edge"
+    z0 = float(norm.ppf(p0))
+    z_lo = float(norm.ppf(alpha))
+    z_hi = float(norm.ppf(1.0 - alpha))
+    denom_lo = 1.0 - a * (z0 + z_lo)
+    denom_hi = 1.0 - a * (z0 + z_hi)
+    if denom_lo <= _BCA_DENOM_EPS or denom_hi <= _BCA_DENOM_EPS:
+        return alpha, 1.0 - alpha, "a_overshoot"
+    alpha_1 = float(norm.cdf(z0 + (z0 + z_lo) / denom_lo))
+    alpha_2 = float(norm.cdf(z0 + (z0 + z_hi) / denom_hi))
+    return alpha_1, alpha_2, None
+
+
+def _bca_percentiles(
+    resampled: np.ndarray,
+    ground_truth: float,
+    rows_by_entity: list[np.ndarray],
+    losses_view: np.ndarray,
+    metric_fn: Callable[[np.ndarray], float],
+    confidence: float,
+) -> tuple[float, float, str | None]:
+    """BCa percentile points orchestrator.
+
+    Computes `p_0` (bias correction proportion) from the resampled
+    distribution, the leave-one-entity-out jackknife `a`
+    (acceleration), and delegates to `_bca_percentile_points` for
+    the BCa transform.
+    """
+    p0 = float(np.mean(resampled <= ground_truth))
+    n_entities = len(rows_by_entity)
+    jackknife = np.empty(n_entities, dtype=np.float64)
+    for i in range(n_entities):
+        leave_out_rows = np.concatenate([rows_by_entity[j] for j in range(n_entities) if j != i])
+        jackknife[i] = float(metric_fn(losses_view[leave_out_rows]))
+    a = _compute_acceleration_from_jackknife(jackknife)
+    return _bca_percentile_points(p0, a, confidence)
+
+
 def entity_block_bootstrap_ci(
     losses: np.ndarray,
     entity_ids: np.ndarray,
@@ -64,8 +134,9 @@ def entity_block_bootstrap_ci(
     confidence: float = _DEFAULT_CONFIDENCE,
     seed: int = _DEFAULT_SEED,
     metric_fn: Callable[[np.ndarray], float] = _default_metric_fn,
-) -> tuple[float, float, float]:
-    """Entity-block percentile bootstrap CI.
+    ci_method: Literal["percentile", "bca"] = "bca",
+) -> tuple[float, float, float, str | None]:
+    """Entity-block bootstrap CI (BCa default, percentile opt-in).
 
     Args:
         losses: 1-D array of per-row losses.
@@ -83,12 +154,21 @@ def entity_block_bootstrap_ci(
             `np.nanmean` (classification). For RMSE, pass
             `lambda x: float(np.sqrt(np.nanmean(x)))` so sqrt is
             applied PER RESAMPLE (per arch-C1 / qa-C2 Jensen fix).
+        ci_method: `"bca"` (default) for the bias-corrected and
+            accelerated method (Efron & Tibshirani 1993, §14.3);
+            `"percentile"` for the simple percentile method. BCa
+            falls back to percentile on degenerate cases (p_0 at
+            edge or acceleration overshoot); the `fallback_reason`
+            element of the return surfaces which path fired.
 
     Returns:
-        `(mean, ci_lo, ci_hi)` where `mean` is `metric_fn`
-        applied to the unresampled loss vector and the CI is the
-        percentile interval over the `n_resamples` resampled
-        `metric_fn` values.
+        `(mean, ci_lo, ci_hi, fallback_reason)` where `mean` is
+        `metric_fn` applied to the unresampled loss vector, the
+        CI is the percentile or BCa interval over the
+        `n_resamples` resampled `metric_fn` values, and
+        `fallback_reason` is `None` (no fallback fired or
+        `ci_method="percentile"`), `"p0_at_edge"`, or
+        `"a_overshoot"`.
 
     Raises:
         ValueError: shapes mismatch, confidence outside (0, 1),
@@ -133,7 +213,7 @@ def entity_block_bootstrap_ci(
     if n_entities <= 1:
         # Degenerate: only one entity → every resample yields the
         # same scalar; CI collapses to the ground-truth mean.
-        return ground_truth_mean, ground_truth_mean, ground_truth_mean
+        return ground_truth_mean, ground_truth_mean, ground_truth_mean, None
 
     rng = np.random.Generator(np.random.PCG64(seed))
     resampled = np.empty(n_resamples, dtype=np.float64)
@@ -147,6 +227,20 @@ def entity_block_bootstrap_ci(
         resampled[r] = float(metric_fn(losses_view[row_indices]))
 
     alpha = (1.0 - confidence) / 2.0
-    ci_lo = float(np.percentile(resampled, 100.0 * alpha, method="linear"))
-    ci_hi = float(np.percentile(resampled, 100.0 * (1.0 - alpha), method="linear"))
-    return ground_truth_mean, ci_lo, ci_hi
+    if ci_method == "percentile":
+        ci_lo = float(np.percentile(resampled, 100.0 * alpha, method="linear"))
+        ci_hi = float(np.percentile(resampled, 100.0 * (1.0 - alpha), method="linear"))
+        return ground_truth_mean, ci_lo, ci_hi, None
+
+    # ci_method == "bca"
+    alpha_1, alpha_2, fallback_reason = _bca_percentiles(
+        resampled=resampled,
+        ground_truth=ground_truth_mean,
+        rows_by_entity=rows_by_entity,
+        losses_view=losses_view,
+        metric_fn=metric_fn,
+        confidence=confidence,
+    )
+    ci_lo = float(np.percentile(resampled, 100.0 * alpha_1, method="linear"))
+    ci_hi = float(np.percentile(resampled, 100.0 * alpha_2, method="linear"))
+    return ground_truth_mean, ci_lo, ci_hi, fallback_reason

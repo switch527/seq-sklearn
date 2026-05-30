@@ -45,6 +45,7 @@ from benchmarks.metrics.bootstrap import (
     BOOTSTRAP_RNG_ALGORITHM,
     entity_block_bootstrap_ci,
 )
+from benchmarks.report import _bootstrap_aggregate
 from benchmarks.report._bootstrap_aggregate import (
     BOOTSTRAP_CONFIDENCE,
     BOOTSTRAP_DEFAULT_SEED,
@@ -73,8 +74,7 @@ def is_pairwise_rollup_enabled(config: BenchmarkConfig) -> bool:
     bootstrap_pairwise_enabled=True. Public so the CLI wrapper
     can gate the dispatch."""
     return any(
-        spec.kind == "ensemble" and spec.bootstrap_pairwise_enabled
-        for spec in config.experiments
+        spec.kind == "ensemble" and spec.bootstrap_pairwise_enabled for spec in config.experiments
     )
 
 
@@ -112,6 +112,8 @@ def _emit_sentinel_row(
         bootstrap_n_resamples=n_resamples,
         bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
         bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
+        bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
+        bootstrap_ci_fallback_reason=None,
         bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=bootstrap_skipped_reason,
         manifest_fingerprint=manifest_fingerprint,
@@ -200,12 +202,13 @@ def _build_group_rollup(
     # its own entity. The primitive degenerates to row bootstrap
     # over cells but the call site stays uniform with B5.
     entity_ids = np.arange(n_cells, dtype=np.int64)
-    mean, ci_lo, ci_hi = entity_block_bootstrap_ci(
+    mean, ci_lo, ci_hi, fallback_reason = entity_block_bootstrap_ci(
         score_values,
         entity_ids,
         n_resamples=n_resamples,
         confidence=BOOTSTRAP_CONFIDENCE,
         seed=BOOTSTRAP_DEFAULT_SEED,
+        ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
     )
 
     return PairwiseRollupRow(
@@ -224,6 +227,8 @@ def _build_group_rollup(
         bootstrap_n_resamples=n_resamples,
         bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
         bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
+        bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
+        bootstrap_ci_fallback_reason=fallback_reason,
         bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=None,
         manifest_fingerprint=manifest_fingerprint,
@@ -263,19 +268,13 @@ def aggregate_bootstrap_pairwise_rollup(
         return []
 
     profile = env.profile if hasattr(env, "profile") else "standard"
-    n_resamples = resolve_n_resamples(
-        config.experiments, str(profile), kind="ensemble"
-    )
+    n_resamples = resolve_n_resamples(config.experiments, str(profile), kind="ensemble")
     manifest_fingerprint = manifest.fingerprint()
 
     rows: list[PairwiseRollupRow] = []
-    grouped = pairwise_df.groupby(
-        ["dataset_name", "model_a", "model_b", "task_type"], sort=True
-    )
+    grouped = pairwise_df.groupby(["dataset_name", "model_a", "model_b", "task_type"], sort=True)
     for group_key, block in grouped:
-        dataset_name, model_a, model_b, task_type = cast(
-            tuple[str, str, str, str], group_key
-        )
+        dataset_name, model_a, model_b, task_type = cast(tuple[str, str, str, str], group_key)
         rows.append(
             _build_group_rollup(
                 block,

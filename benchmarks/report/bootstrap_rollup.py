@@ -54,6 +54,7 @@ from benchmarks.predictions import (
     proba_matrix,
 )
 from benchmarks.registry import get_dataset, get_loader
+from benchmarks.report import _bootstrap_aggregate
 from benchmarks.report._bootstrap_aggregate import (
     BOOTSTRAP_CONFIDENCE,
     BOOTSTRAP_DEFAULT_SEED,
@@ -260,6 +261,8 @@ def _build_group_rollup(
             bootstrap_n_resamples=n_resamples,
             bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
             bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
+            bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
+            bootstrap_ci_fallback_reason=None,
             bootstrap_numpy_version=numpy_version(),
             bootstrap_skipped_reason="all_cells_skipped_in_manifest",
             manifest_fingerprint=manifest_fingerprint,
@@ -320,6 +323,8 @@ def _build_group_rollup(
             bootstrap_n_resamples=n_resamples,
             bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
             bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
+            bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
+            bootstrap_ci_fallback_reason=None,
             bootstrap_numpy_version=numpy_version(),
             bootstrap_skipped_reason="all_predictions_shards_missing_or_unloadable",
             manifest_fingerprint=manifest_fingerprint,
@@ -338,13 +343,14 @@ def _build_group_rollup(
             "D-B13.7 (B13-followup)"
         )
 
-    mean, ci_lo, ci_hi = entity_block_bootstrap_ci(
+    mean, ci_lo, ci_hi, fallback_reason = entity_block_bootstrap_ci(
         losses,
         entities,
         n_resamples=n_resamples,
         confidence=BOOTSTRAP_CONFIDENCE,
         seed=BOOTSTRAP_DEFAULT_SEED,
         metric_fn=metric_fn,
+        ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
     )
 
     n_unique_entities = int(np.unique(entities).shape[0])
@@ -365,6 +371,8 @@ def _build_group_rollup(
         bootstrap_n_resamples=n_resamples,
         bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
         bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
+        bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
+        bootstrap_ci_fallback_reason=fallback_reason,
         bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=None,
         manifest_fingerprint=manifest_fingerprint,
@@ -393,9 +401,7 @@ def aggregate_bootstrap_rollup(
             f"empty; run --experiment=raw_loss first"
         )
 
-    n_resamples = resolve_n_resamples(
-        config.experiments, env.profile, kind="raw_loss"
-    )
+    n_resamples = resolve_n_resamples(config.experiments, env.profile, kind="raw_loss")
     cache_dir = config.cache_dir
     manifest_fingerprint = manifest.fingerprint()
     out: list[RollupRow] = []

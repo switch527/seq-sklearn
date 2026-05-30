@@ -158,6 +158,10 @@ def test_render_pairwise_byte_identity_post_rename() -> None:
     # Sentinel: the rename must not have left a (no CI) cell on a
     # row whose rollup has a valid numeric mean.
     assert "(no CI)" not in md
+    # B21 / D-B21.1 deferral: the new audit fields are parquet-shard
+    # columns only and must NOT surface in the rendered markdown.
+    assert "bootstrap_ci_method" not in md
+    assert "bootstrap_ci_fallback_reason" not in md
 
 
 def _make_training_time_manifest() -> pd.DataFrame:
@@ -212,6 +216,9 @@ def test_render_training_time_byte_identity_post_rename() -> None:
         f"training-time renderer CI cell shape missing; output starts: {md[:400]!r}"
     )
     assert "(no CI)" not in md
+    # B21 / D-B21.1 deferral: new audit fields must NOT surface in the markdown.
+    assert "bootstrap_ci_method" not in md
+    assert "bootstrap_ci_fallback_reason" not in md
 
 
 def _make_hpo_uplift_manifest() -> pd.DataFrame:
@@ -280,6 +287,9 @@ def test_render_hpo_uplift_byte_identity_post_rename() -> None:
         f"hpo-uplift renderer CI cell shape missing; output starts: {md[:400]!r}"
     )
     assert "(no CI)" not in md
+    # B21 / D-B21.1 deferral: new audit fields must NOT surface in the markdown.
+    assert "bootstrap_ci_method" not in md
+    assert "bootstrap_ci_fallback_reason" not in md
 
 
 def _make_ensemble_lift_result() -> EnsembleLiftExperimentResult:
@@ -357,6 +367,10 @@ def test_render_ensemble_lift_byte_identity_post_rename() -> None:
         f"ensemble-lift renderer CI cell shape missing; output starts: {md[:400]!r}"
     )
     assert "(no CI)" not in md
+    # B21 / D-B21.1 deferral: new audit fields must NOT surface in the markdown.
+    assert "bootstrap_ci_method" not in md
+    assert "bootstrap_ci_fallback_reason" not in md
+    assert "bootstrap_oracle_ci_fallback_reason" not in md
 
 
 # --- Guard B: source-tree grep invariant -----------------------------------

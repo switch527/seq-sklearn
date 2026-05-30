@@ -141,6 +141,12 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_paired_cells_emit_ci(
     assert row.primary_metric == "delta"
     assert row.primary_loss_column == "log_loss"
     assert row.bootstrap_skipped_reason is None
+    # B21 R1 qa-I1 closure: pin the ci_method audit field end-to-end
+    # on the B8 happy path. The fallback reason may be None or one
+    # of the documented fallbacks on small-N fixtures with degenerate
+    # bootstrap distributions; the audit field write is the contract.
+    assert row.bootstrap_ci_method == "bca"
+    assert row.bootstrap_ci_fallback_reason in (None, "p0_at_edge", "a_overshoot")
 
 
 # --- 2. Sign convention -----------------------------------------------------
@@ -237,8 +243,12 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_default_only_emits_sentinel(
     config, output_root, manifest = _setup(tmp_path)
     rows = [
         # Group under test: default-only.
-        _manifest_row(seed=0, fold_index=0, model_name="m_default_only", variant="default", log_loss=0.40),
-        _manifest_row(seed=0, fold_index=1, model_name="m_default_only", variant="default", log_loss=0.42),
+        _manifest_row(
+            seed=0, fold_index=0, model_name="m_default_only", variant="default", log_loss=0.40
+        ),
+        _manifest_row(
+            seed=0, fold_index=1, model_name="m_default_only", variant="default", log_loss=0.42
+        ),
         # Different (model) group with a tuned row so Gate D is bypassed.
         _manifest_row(seed=0, fold_index=0, model_name="m_other", variant="default", log_loss=0.50),
         _manifest_row(seed=0, fold_index=0, model_name="m_other", variant="tuned", log_loss=0.30),
@@ -419,6 +429,7 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_records_primary_loss_column_for_r
     on regression_point cells. The aggregator's per-task-type
     dispatch was untested for the regression branch."""
     config, output_root, manifest = _setup(tmp_path)
+
     # The aggregator reads `<primary_loss_column>_default` /
     # `<primary_loss_column>_tuned` from the merged frame, so the
     # row needs an `rmse` column (not `log_loss`) for the
@@ -460,17 +471,25 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_all_cells_skipped_emits_sentinel(
     # rows without short-circuiting Gate D.
     rows = [
         # Group under test: every row skipped.
-        _manifest_row(seed=0, fold_index=0, model_name="m_all_skipped",
-                      variant="default", log_loss=None,
-                      skipped_reason="adapter_error"),
-        _manifest_row(seed=0, fold_index=0, model_name="m_all_skipped",
-                      variant="tuned", log_loss=None,
-                      skipped_reason="adapter_error"),
+        _manifest_row(
+            seed=0,
+            fold_index=0,
+            model_name="m_all_skipped",
+            variant="default",
+            log_loss=None,
+            skipped_reason="adapter_error",
+        ),
+        _manifest_row(
+            seed=0,
+            fold_index=0,
+            model_name="m_all_skipped",
+            variant="tuned",
+            log_loss=None,
+            skipped_reason="adapter_error",
+        ),
         # Different group with a valid tuned row to bypass Gate D.
-        _manifest_row(seed=0, fold_index=0, model_name="m_other",
-                      variant="default", log_loss=0.50),
-        _manifest_row(seed=0, fold_index=0, model_name="m_other",
-                      variant="tuned", log_loss=0.30),
+        _manifest_row(seed=0, fold_index=0, model_name="m_other", variant="default", log_loss=0.50),
+        _manifest_row(seed=0, fold_index=0, model_name="m_other", variant="tuned", log_loss=0.30),
     ]
     _stub_load_run(monkeypatch, rows)
 
@@ -479,10 +498,7 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_all_cells_skipped_emits_sentinel(
         config, output_root=output_root, env=env, manifest=manifest
     )
     by_model = {r.model_name: r for r in rollup}
-    assert (
-        by_model["m_all_skipped"].bootstrap_skipped_reason
-        == "all_cells_skipped_in_manifest"
-    )
+    assert by_model["m_all_skipped"].bootstrap_skipped_reason == "all_cells_skipped_in_manifest"
 
 
 # --- 13. Malformed paired cell raises (group not flagged) ------------------
@@ -611,9 +627,9 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_respects_per_spec_n_resamples_ove
         *,
         n_resamples: int,
         **_kwargs: object,
-    ) -> tuple[float, float, float]:
+    ) -> tuple[float, float, float, str | None]:
         captured["n_resamples"] = n_resamples
-        return (0.20, 0.18, 0.22)
+        return (0.20, 0.18, 0.22, None)
 
     import benchmarks.report.bootstrap_hpo_uplift as _module
 

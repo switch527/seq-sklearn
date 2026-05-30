@@ -13,6 +13,7 @@ Package-internal (`_` prefix): consumed only by the three
 from collections.abc import Iterable
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
+from typing import Literal
 
 from benchmarks.config import ExperimentSpec
 
@@ -32,6 +33,12 @@ BOOTSTRAP_DEFAULT_SEED: int = 0xB13_5EED_B007
 # where the stream depends ONLY on `seed`; sharing a seed would
 # yield identical resample indices on shared `n_entities`.
 BOOTSTRAP_ORACLE_SEED_OFFSET: int = 0xB20_07A_C7E
+# B21 / D-B16.2: default CI method for all 5 aggregators.
+# Aggregators read this via late-binding lookup so tests can
+# monkeypatch the canonical source module to verify the seam
+# end-to-end (B21 test #12). v1 default is BCa; the percentile
+# fallback is opt-in via the primitive's `ci_method` kwarg.
+BOOTSTRAP_DEFAULT_CI_METHOD: Literal["percentile", "bca"] = "bca"
 BOOTSTRAP_CONFIDENCE: float = 0.95
 
 # Defensive row-count ceiling (R-B13-3 / Gemini-C2).
@@ -78,6 +85,7 @@ def resolve_n_resamples(
 
 __all__ = [
     "BOOTSTRAP_CONFIDENCE",
+    "BOOTSTRAP_DEFAULT_CI_METHOD",
     "BOOTSTRAP_DEFAULT_SEED",
     "BOOTSTRAP_N_RESAMPLES_BY_PROFILE",
     "BOOTSTRAP_ORACLE_SEED_OFFSET",
