@@ -167,11 +167,37 @@ helpers.
    `benchmarks/bootstrap_manifest.py` per B26.1.1.
 2. **Helper guard**: add the early-return to
    `_render_partial_coverage_footnote` per B26.2.
-3. **Fixture audit**: scan existing test fixtures for any
-   row that violates the new invariant (e.g., a fixture
-   with `primary_metric_mean=0.5` + `bootstrap_skipped_reason="something"`
-   that pre-B26 was silently accepted). Repair such
-   fixtures.
+3. **Fixture audit** (arch-R1-C1 + qa-R1-C2 closure): the
+   R1 swarm identified two KNOWN sites that construct
+   "schema-default zero-cell" rows leaving
+   `primary_metric_*=None` (the schema default) AND
+   `bootstrap_skipped_reason=None`. Under the new validator
+   these raise (`all_none` + skipped=None branch). Repair
+   sites:
+   - `tests/benchmarks/test_b22_per_fold_cis.py:222-275`
+     (`test_rollup_row_per_fold_cis_schema_default_is_none`):
+     5 construction sites for the 5 schemas. Each row's
+     intent is "test the per_fold_cis default on a
+     minimal row", not "construct a valid non-sentinel".
+     Repair: add `bootstrap_skipped_reason="test_fixture"`
+     to the shared `common` dict at `:213-221` so the rows
+     are valid sentinels (all-None metrics + populated
+     reason).
+   - `tests/benchmarks/test_b22_per_fold_cis.py:283`
+     (`test_rollup_row_per_fold_cis_accepts_empty_list`):
+     1 RollupRow construction with the same pattern.
+     Repair: add `bootstrap_skipped_reason="test_fixture"`
+     to the local kwargs.
+   - `tests/benchmarks/test_b21_bca_ci.py:765-820`
+     (`test_rollup_row_schema_default_ci_method_is_percentile`):
+     5 construction sites. Same pattern, same repair:
+     add `bootstrap_skipped_reason="test_fixture"` to the
+     shared `common_base` dict.
+   In addition, run a programmatic suite-wide audit during
+   the build phase (test #22 below is the gate): if any
+   other fixture constructs a violating row, the existing
+   pytest count would regress and the build phase catches
+   it.
 4. **Tests**: add `tests/benchmarks/test_b26_cleanup_validators.py`
    per B26.4.
 5. **Verify**: ruff + pyright + scoped pytest pass at
@@ -185,59 +211,126 @@ Baseline (post-B25 main `c915015`): 1007 tests collected.
 
 For each of the 4 non-ensemble-lift schemas (RollupRow,
 PairwiseRollupRow, TrainingTimeRollupRow,
-HPOUpliftRollupRow), three tests:
+HPOUpliftRollupRow):
 - happy non-sentinel (all three metrics set, skipped=None) accepts
 - happy sentinel (all three metrics None, skipped=str) accepts
-- mixed (e.g., mean=0.5, ci_lo=None) rejects
+- mixed-A (mean set, ci_lo None, ci_hi None) rejects
+- mixed-B (mean None, ci_lo set, ci_hi None) rejects
 
-4 schemas x 3 tests = 12 tests (#1-#12).
+Per qa-R1-I1 closure: 2 mixed variants kill a mutation that
+only checks specific positions. 4 schemas x 4 tests = 16
+tests (#1-#16).
 
-13. `test_rollup_row_rejects_metrics_set_with_skipped_reason`:
-    construct a RollupRow with all metrics set AND
+Each rejection test (`mixed-A`, `mixed-B`) MUST use
+`pytest.raises(ValidationError, match=r"must be all-None or
+all-non-None")` to discriminate the first branch from the
+two skipped-reason branches (qa-R1-C1 closure).
+
+17. `test_rollup_row_rejects_metrics_set_with_skipped_reason`:
+    construct a RollupRow with all three metrics set AND
     `bootstrap_skipped_reason="some_reason"`; assert
-    `ValidationError` matching the appropriate prose.
-14. `test_rollup_row_rejects_metrics_none_with_skipped_none`:
+    `pytest.raises(ValidationError,
+    match=r"non-sentinel rows must have
+    bootstrap_skipped_reason=None")` (qa-R1-C1 closure: the
+    `match=` pin discriminates this branch from the
+    `all_none` + skipped=None branch; without it a mutation
+    that swaps the two branch bodies would survive).
+18. `test_rollup_row_rejects_metrics_none_with_skipped_none`:
     construct a RollupRow with all metrics None AND
-    `bootstrap_skipped_reason=None`; assert `ValidationError`.
-15. Same as #13 for PairwiseRollupRow.
-16. Same as #14 for PairwiseRollupRow.
-17. Same as #13 for TrainingTimeRollupRow.
-18. Same as #14 for TrainingTimeRollupRow.
-19. Same as #13 for HPOUpliftRollupRow.
-20. Same as #14 for HPOUpliftRollupRow.
+    `bootstrap_skipped_reason=None`; assert
+    `pytest.raises(ValidationError, match=r"sentinel rows
+    must populate bootstrap_skipped_reason")`.
+19. Same as #17 for PairwiseRollupRow.
+20. Same as #18 for PairwiseRollupRow.
+21. Same as #17 for TrainingTimeRollupRow.
+22. Same as #18 for TrainingTimeRollupRow.
+23. Same as #17 for HPOUpliftRollupRow.
+24. Same as #18 for HPOUpliftRollupRow.
 
 ### B26.4.2 Helper guard (R-B26-2)
 
-21. `test_render_partial_coverage_footnote_empty_input_returns_empty_string`:
+25. `test_render_partial_coverage_footnote_empty_input_returns_empty_string`:
     call `_render_partial_coverage_footnote([])` directly;
     assert the return is exactly `""`. Pins the new guard.
 
-### B26.4.3 Existing-fixture compatibility
+### B26.4.3 Suite-wide audit (qa-R1-C2 closure)
 
-22. `test_existing_fixtures_satisfy_ci_sentinel_invariant`:
-    informational test that constructs the canonical
-    fixture rows from B17's helpers (already in the test
-    suite); asserts each constructs without raising.
-    Backstops the fixture-audit step in B26.3.
+26. `test_existing_b17_byte_pin_fixtures_satisfy_ci_sentinel_invariant`:
+    construct the canonical fixture rows from B17's
+    helpers (`_make_pairwise_rollup`,
+    `_make_training_time_rollup`, `_make_hpo_uplift_rollup`,
+    `_make_ensemble_lift_rollup` in
+    `tests/benchmarks/test_b17_byte_identity_pins.py`);
+    assert each constructs without raising. Backstops the
+    B17 (non-sentinel) fixture compatibility.
+
+The b21 and b22 schema-default fixtures named in B26.3.3
+are repaired in this same commit; their repaired versions
+naturally re-pass when the suite runs as the build gate.
+No dedicated b21/b22 backstop test is needed because the
+existing tests themselves are the gate (post-repair they
+must pass; pre-repair they would fail under the new
+validator).
 
 ### B26.4.4 Expected test delta
 
 Baseline: 1007.
-- Existing tests: 1007 -> 1007 (assuming the fixture
-  audit at B26.3.3 finds no violations or repairs them).
-  If any existing test fixture violates the new invariant,
-  it MUST be repaired in this same commit; the existing
-  test count remains 1007.
-- B26-new: 22 named tests.
-- Total: 1007 + 22 = 1029.
+- Existing tests: 1007 -> 1007 (after the b21 + b22
+  schema-default fixture repairs land in the same commit;
+  the repairs only add `bootstrap_skipped_reason="test_fixture"`
+  without changing test semantics).
+- B26-new: 26 named tests (4 schemas x 4 + 8 reject pairs + 1
+  helper-guard + 1 B17 backstop = 26; was 22 in R1 draft,
+  +4 from qa-R1-I1 closure adding mixed-B variants).
+- Total: 1007 + 26 = 1033.
 
 ## B26.5 Risks
 
 | ID | Risk | Severity | Mitigation |
 |---|---|---|---|
 | R-B26-Risk-1 | The new `_validate_ci_sentinel_consistency` rejects a pre-B26 parquet shard whose data violates the invariant. | Low | Bench-run shards are short-lived (B17 R-B17-3 precedent). The aggregator emits the documented shape; only a future bug could produce a malformed row, and that is what the validator catches. |
-| R-B26-Risk-2 | Existing test fixtures may construct violating rows incidentally. | Medium | B26.3.3 mandates a fixture audit. The B17 fixtures' visible non-sentinel rows (all 4 byte-pin tests) pass non-None metrics + None skipped_reason; the existing sentinel construction sites in `test_bootstrap_manifest.py` set metrics None + populated skipped_reason. No expected violations, but the build phase verifies live. |
+| R-B26-Risk-2 | Existing test fixtures construct violating rows. | Medium-confirmed | The R1 design swarm identified KNOWN violating sites in `test_b21_bca_ci.py:765-820` (5 rows in `test_rollup_row_schema_default_ci_method_is_percentile`) and `test_b22_per_fold_cis.py:222-275` (5 rows in `test_rollup_row_per_fold_cis_schema_default_is_none`) and `test_b22_per_fold_cis.py:283-303` (1 row in `test_rollup_row_per_fold_cis_accepts_empty_list`). All 11 sites use "schema-default zero-cell" pattern that leaves metrics at the None default with `bootstrap_skipped_reason=None`. B26.3.3 enumerates the exact repair: add `bootstrap_skipped_reason="test_fixture"` to the shared `common` / `common_base` dict (or kwargs). The repair preserves test semantics since neither test asserts on metric values. The B17 byte-pin fixtures (4 helpers) pass non-None metrics + None skipped_reason: COMPATIBLE. Other 40+ row construction sites across the test suite were not enumerated; the build-phase suite run is the live gate. |
 | R-B26-Risk-3 | The `_render_partial_coverage_footnote` empty-input guard is unreachable through the public API; adding it adds dead-code surface. | Low | The guard matches the established helper pattern across `_render_oracle_partial_coverage_footnote`, `render_bca_health_footnote`, `render_per_fold_cis_footnote`. The B25 reviewers (code-R1-build-I1) explicitly endorsed the defensive pattern as "documented contract for silent-render-on-missing-attr". |
+
+## Addressed
+
+R1 design swarm on commit `b10cc10`: architecture-reviewer
+(1C / 3I / 1N REQUEST_CHANGES), qa-test-coverage (2C / 2I /
+1N REQUEST_CHANGES), style-reviewer (0C / 0I / 0N APPROVE).
+Deduplicated total: 3 CRITICAL, 5 IMPROVEMENT, 2 NITPICK.
+Closures:
+
+- **arch-R1-C1 + qa-R1-C2** (existing fixtures in
+  test_b21 + test_b22 schema-default tests construct
+  violating "all-None metrics + None skipped" rows): B26.3.3
+  rewritten to enumerate the 11 KNOWN sites and prescribe
+  the `bootstrap_skipped_reason="test_fixture"` repair.
+  R-B26-Risk-2 elevated to "Medium-confirmed" with the
+  exact sites named.
+- **qa-R1-C1** (tests #13-#20 without `match=` cannot
+  discriminate the two skipped-reason branches; swap
+  mutation survives): every rejection test now uses
+  `match=` with branch-specific message substrings
+  ("non-sentinel rows must have
+  bootstrap_skipped_reason=None" vs "sentinel rows must
+  populate bootstrap_skipped_reason"). Mixed-rejection
+  tests also pin `match=r"must be all-None or
+  all-non-None"`.
+- **qa-R1-I1** (mixed-reject tests cover only 1 of 6
+  possible mixed variants per schema): added a second
+  variant (mixed-B: `mean=None, ci_lo=set, ci_hi=None`)
+  per schema. 4 schemas x 4 tests (happy non-sentinel,
+  happy sentinel, mixed-A, mixed-B) = 16 tests instead of
+  the R1-draft 12.
+- **qa-R1-I2** (R-B26-Risk-2 + B26.3.3 didn't name b21/b22
+  sites): covered by arch-R1-C1 closure above.
+- **qa-R1-N1** (test #22 informational naming): renamed to
+  `test_existing_b17_byte_pin_fixtures_satisfy_ci_sentinel_invariant`
+  with explicit B17-helper enumeration in the test name.
+
+Test count after R1 closures: 26 named (was 22; +4 from
+qa-R1-I1's mixed-B variants per schema); 1033 collected
+(was 1029).
 
 ## Deferred
 
