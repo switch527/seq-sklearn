@@ -656,7 +656,12 @@ class EnsembleLiftRollupRow(BaseModel):
         # in turn are a subset of the intersection grid. The
         # renderer's partial-coverage flag at ensemble_lift.py:166
         # already assumes `n_cells_paired <= n_pair_grid`. Sentinel
-        # rows satisfy all three trivially (all counts == 0).
+        # rows zero `n_cells_paired` and `n_oracle_cells_paired`;
+        # `n_pair_grid` may still be non-zero on
+        # `all_cells_skipped_in_manifest` sentinels (per the
+        # schema docstring above), and the invariants still hold
+        # trivially since `0 <= n_pair_grid` for any non-negative
+        # `n_pair_grid`.
         if self.n_oracle_cells_paired > self.n_cells_paired:
             raise ValueError(
                 f"n_oracle_cells_paired ({self.n_oracle_cells_paired}) "

@@ -148,18 +148,27 @@ def test_renderer_oracle_partial_footnote_silent_on_happy_path() -> None:
 def test_renderer_oracle_partial_footnote_skips_sentinel_rows(
     sentinel_reason: str,
 ) -> None:
-    """qa-R1-I4 closure: the actual short-circuit mechanism is
-    `bootstrap_skipped_reason is not None`, NOT `n_pair_grid==0`.
-    `all_cells_skipped_in_manifest` sentinels can carry non-zero
-    `n_pair_grid`; setting n_pair_grid=4 here defeats the wrong
-    "zero-grid" rationale and proves the skip is by reason."""
+    """qa-R1-I4 + R1 build-swarm CRITICAL closure: the actual
+    short-circuit mechanism is `bootstrap_skipped_reason is not
+    None`, NOT `n_pair_grid==0`. Sentinel rows can carry non-zero
+    `n_pair_grid` (per `bootstrap_manifest.py:592-595` for
+    `all_cells_skipped_in_manifest`, and the aggregator at
+    `bootstrap_ensemble_lift.py:235` forwards the real grid for
+    the other two sentinels). Using `n_pair_grid=4` +
+    `n_oracle_cells_paired=2` here means the trigger condition
+    `n_oracle_cells_paired < n_pair_grid AND n_pair_grid > 0`
+    DOES fire, so the test now actually proves the
+    `bootstrap_skipped_reason is not None` guard at
+    `ensemble_lift.py:436` is what suppresses the footnote.
+    Without that guard the test would go RED for all three
+    sentinel reasons."""
     result = _make_lift_result(["ds_sentinel", "ds_happy"])
     rollup = [
         _make_rollup_row(
             dataset_name="ds_sentinel",
-            n_cells_paired=0,
-            n_pair_grid=0,
-            n_oracle_cells_paired=0,
+            n_cells_paired=2,
+            n_pair_grid=4,
+            n_oracle_cells_paired=2,
             bootstrap_skipped_reason=sentinel_reason,
         ),
         _make_rollup_row(
@@ -209,6 +218,34 @@ def test_renderer_oracle_partial_footnote_n_missing_column() -> None:
     rollup = [_make_rollup_row(n_oracle_cells_paired=2, n_pair_grid=5)]
     md = render_ensemble_lift_markdown_with_ci(result, rollup)
     assert "| ds_one | 2 | 5 | 3 |" in md
+
+
+# =============================================================================
+# 5b. Zero oracle cells with non-zero grid still triggers the footnote
+# =============================================================================
+
+
+def test_renderer_oracle_partial_footnote_fires_when_oracle_cells_zero_and_grid_nonzero() -> None:
+    """qa-R1-build-I2 closure: a non-sentinel row with
+    `n_oracle_cells_paired=0, n_pair_grid=4` is partial-coverage
+    by design (0 of 4 oracle cells paired). The trigger predicate
+    `n_oracle_cells_paired < n_pair_grid AND n_pair_grid > 0`
+    evaluates true; the footnote fires with `n_missing=4`. The
+    asterisk on the oracle CI cell at `ensemble_lift.py:189-192`
+    uses the identical predicate, so the two surfaces stay
+    coherent."""
+    result = _make_lift_result(["ds_zero_oracle"])
+    rollup = [
+        _make_rollup_row(
+            dataset_name="ds_zero_oracle",
+            n_cells_paired=4,
+            n_pair_grid=4,
+            n_oracle_cells_paired=0,
+        )
+    ]
+    md = render_ensemble_lift_markdown_with_ci(result, rollup)
+    assert "Oracle partial-coverage footnotes" in md
+    assert "| ds_zero_oracle | 0 | 4 | 4 |" in md
 
 
 # =============================================================================

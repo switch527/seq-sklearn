@@ -327,6 +327,11 @@ def _build_dataset_rollup(
             # B23 / D-B20.2 closure: `oracle_metric_mean:` prefix
             # is the stable discriminator that test `match=` clauses
             # pin against (replaces the prose "oracle delta" suffix).
+            # The prefix names the destination rollup column
+            # (`EnsembleLiftRollupRow.oracle_metric_mean`) that
+            # would have been written if the guard had not fired,
+            # so a future rename of the schema field naturally
+            # propagates to this message via grep.
             raise RawRollupError(
                 f"aggregate_bootstrap_ensemble_lift_rollup: oracle_metric_mean: "
                 f"dataset={dataset_name!r} has a paired cell with a "
@@ -341,6 +346,11 @@ def _build_dataset_rollup(
             # B23 / D-B20.2 closure: `n_oracle_cells_paired:` prefix
             # is the stable discriminator that test `match=` clauses
             # pin against (replaces the prose "oracle delta" suffix).
+            # The prefix names the rollup column
+            # (`EnsembleLiftRollupRow.n_oracle_cells_paired`) whose
+            # value triggered the OOM gate, so a future rename of
+            # the schema field naturally propagates to this message
+            # via grep.
             raise RawRollupError(
                 f"aggregate_bootstrap_ensemble_lift_rollup: n_oracle_cells_paired: "
                 f"dataset={dataset_name!r} with n_oracle_cells_paired="

@@ -423,7 +423,7 @@ Expected test delta after the build:
 | ID | Risk | Severity | Mitigation |
 |---|---|---|---|
 | R-B23-Risk-1 | The new `@model_validator` rejects a pre-B23 parquet shard whose data violates the structural invariants. | Low | Bench-run shards are short-lived (B17 R-B17-3 precedent). The B16 aggregator's structural guarantee from v1 means no production shard CAN violate the invariants; the validator only catches future-corrupt data. |
-| R-B23-Risk-2 | The renderer footnote block adds markdown to existing reports, changing the byte content of any report that previously had an oracle partial-coverage asterisk. | Low | The byte-pin renderer tests (B17) all use fixtures where `n_oracle_cells_paired == n_pair_grid` on the byte-pin rows, so the footnote does NOT fire. The byte-pin regex match is unchanged. Test #2 explicitly pins the silent-on-happy-path contract. |
+| R-B23-Risk-2 | The renderer footnote block adds markdown to existing reports, changing the byte content of any report that previously had an oracle partial-coverage asterisk. | Low | After the B23.4 fixture mutation the B17 ensemble-lift byte-pin fixture has `n_oracle_cells_paired=1, n_pair_grid=2`, so the new footnote block DOES fire on the byte-pin reports. The B17 byte-pin test (`tests/benchmarks/test_b17_byte_identity_pins.py`) tolerates the addition because its assertions use `_CI_CELL_RE.search(md)` and absent-substring checks, NOT full-document byte equality, so the footnote text appearing in the rendered markdown does not invalidate the pin. Test #2 in B23 pins the silent-on-happy-path contract for the renderer itself; the R1 build-swarm CRITICAL closure for test #3 strengthens the sentinel-suppression coverage. |
 | R-B23-Risk-3 | The raise-message rewrite breaks any downstream consumer that parses the message text. | Low | The B16 contract is to surface `RawRollupError` to the CLI wrapper which writes the message verbatim to a sentinel file. The sentinel file is read by humans, not parsed. No structured downstream consumer of the message text exists. |
 | R-B23-Risk-4 | The `@model_validator` runs on every load, including the large per-fold round-trip tests from B22. | Low | The validator is O(1) per row (two integer comparisons). No measurable load-time impact. |
 
@@ -557,6 +557,86 @@ Test count after R2 closures: 13 new tests; total
 `930 + 13 = 943` (unchanged; R2 was discriminator-token
 cleanup, no new tests).
 
+### R1 build-swarm closure
+
+R1 build swarm on commit `745fcf3`: code-reviewer
+(0C / 1I / 2N APPROVE), qa-test-coverage (1C / 2I / 2N
+REQUEST_CHANGES), architecture-reviewer (0C / 3I / 2N
+APPROVE), style-reviewer (0C / 0I / 0N APPROVE).
+Deduplicated total: 1 CRITICAL, 6 IMPROVEMENT, 6 NITPICK.
+Closures:
+
+- **build-R1-C1 + code-I1** (test #3's
+  `all_cells_skipped_in_manifest` arm uses `n_pair_grid=0`
+  despite the docstring claiming `n_pair_grid=4`; the
+  filter predicate `n_oracle_cells_paired < n_pair_grid
+  AND n_pair_grid > 0` evaluates false on `0 < 0`, so the
+  test passes even if the `bootstrap_skipped_reason is
+  not None` guard at `ensemble_lift.py:436` were deleted):
+  test #3 parametrized fixture now sets
+  `n_cells_paired=2, n_pair_grid=4,
+  n_oracle_cells_paired=2` for all three sentinel reasons;
+  the trigger predicate now fires; the test is a real pin
+  on the reason-guard for every sentinel arm.
+- **qa-I2** (no test pins the
+  `n_oracle_cells_paired=0, n_pair_grid>0` non-sentinel
+  case): added test #5b
+  `test_renderer_oracle_partial_footnote_fires_when_oracle_cells_zero_and_grid_nonzero`
+  constructing a row with
+  `n_cells_paired=4, n_pair_grid=4,
+  n_oracle_cells_paired=0` and asserting the footnote
+  fires with `n_missing=4`. Pins the design intent that 0
+  of N oracle cells is treated as partial coverage, not
+  as "no oracle" suppression.
+- **arch-I1** (R-B23-Risk-2 prose was stale post B23.4
+  fixture mutation): risk text rewritten to state the
+  actual safety rationale (B17 byte-pin assertions use
+  `_CI_CELL_RE.search(md)` + absent-substring checks, not
+  full-document byte equality, so the new footnote block
+  does not invalidate the pin).
+- **arch-I2** (D-B23.2 example clause self-referenced
+  `EnsembleLiftRollupRow`): deferral rewritten to scope to
+  the other 4 RollupRow schemas with peer-invariant
+  candidates (`n_cells_evaluated <= n_seeds * n_folds`,
+  etc.) and to note `n_pair_grid` is exclusive to
+  `EnsembleLiftRollupRow`.
+- **arch-I3** (closure comments at
+  `bootstrap_ensemble_lift.py:329, :343` named the
+  discriminator field but not WHY it names the destination
+  column for a defect on the input): both comments
+  extended with one sentence noting the prefix names the
+  destination rollup column so a future schema rename
+  propagates via grep.
+- **code-N1** (sentinel-row comment at
+  `bootstrap_manifest.py:657-659` said "all counts == 0",
+  factually wrong for `all_cells_skipped_in_manifest`
+  sentinels which can carry non-zero `n_pair_grid`):
+  comment rewritten to state `n_cells_paired` and
+  `n_oracle_cells_paired` are 0 while `n_pair_grid` may
+  be non-zero; the invariants still hold trivially.
+- **qa-I3** (`_render_oracle_partial_coverage_footnote`'s
+  empty-list early-return is unreachable through the
+  public API): NOT changed. The internal guard mirrors
+  the shape of other renderer helpers in the same file;
+  removing it would create asymmetry without behavior
+  change. Added to Deferred as D-B23.3.
+- **code-N2** (same dead-guard concern as qa-I3): NOT
+  changed; same rationale.
+- **qa-N1** (test #7 docstring vs monkeypatch seam): NOT
+  changed; cosmetic.
+- **qa-N2** (defensive `n_missing > n_oracle_cells_paired`
+  parametrize case): NOT changed; purely defensive.
+- **arch-N1** (test docstring wording `4*2 <= 100` vs
+  `8 <= 100`): NOT changed; cosmetic.
+- **arch-N2** (table caption ambiguity at design
+  `:413`): NOT changed; the R1 closure paragraph at
+  `:507-509` already disambiguates.
+
+Test count after R1 build-swarm closures: 14 new tests
+(was 13; build-R1-qa-I2 added test #5b); collected count
+is 16 (test #3 parametrized 3 ways). Total
+`930 + 14 = 944` named; collected `930 + 16 = 946`.
+
 ## Deferred
 
 - **D-B23.1**: extend the oracle partial-coverage footnote
@@ -565,11 +645,22 @@ cleanup, no new tests).
   intersection). v1 keeps the footnote scoped to oracle
   coverage counts; the BCa fallback surface is a separate
   audit channel.
-- **D-B23.2**: extend the model_validator coverage to the
-  other 4 RollupRow schemas (e.g., assert
-  `n_cells_paired <= n_pair_grid` on
-  `EnsembleLiftRollupRow` ALSO, and similar invariants on
-  B5 / B6 / B7 / B8 row counts). v1 of B23 is scoped to
-  the B20-named D-B20.3 invariant; broader cross-field
-  validation across all 5 schemas is a separate audit
-  pass.
+- **D-B23.2**: extend cross-field `@model_validator`
+  coverage to the other 4 RollupRow schemas (B5 raw-loss,
+  B6 holdout-loss, B7 hpo-uplift, B8 cv-uplift). Candidate
+  invariants include `n_cells_evaluated <= n_seeds *
+  n_folds` and `n_skipped_cells + n_cells_evaluated ==
+  n_seeds * n_folds`. v1 of B23 is scoped to the B20-named
+  D-B20.3 invariant on `EnsembleLiftRollupRow` only;
+  `n_pair_grid` is exclusive to that schema, so the other
+  4 invariants are structurally distinct and warrant their
+  own audit pass.
+- **D-B23.3**: remove the internal `if not affected:
+  return ""` guard at
+  `benchmarks/report/ensemble_lift.py:490-491` since the
+  caller at `:447` already gates on `if affected_oracle:`.
+  The internal guard is dead code matching the shape of
+  other renderer helpers in the same file; either both
+  helpers should keep the guard or both should drop it.
+  Deferred to a single sweep across `ensemble_lift.py`
+  helpers rather than touching one site.
