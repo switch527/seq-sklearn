@@ -37,6 +37,7 @@ from benchmarks.experiments.ensemble_lift import (
 from benchmarks.report._bootstrap_render import (
     format_ci_cell,
     render_bca_health_footnote,
+    render_per_fold_cis_footnote,
     render_rollup_skipped_footnote,
 )
 from benchmarks.run_manifest import load_run_manifest, run_manifest_path
@@ -478,6 +479,20 @@ def _render_with_ci(
         parts.append(
             render_bca_health_footnote(
                 rollup_with_fallback,
+                group_columns=("dataset_name",),
+                header_labels=("Dataset",),
+            )
+        )
+
+    # B25 / D-B22.1: per-fold CIs footnote (main delta only;
+    # oracle per-fold deferred to D-B22.2).
+    rollup_with_per_fold = [
+        r for r in rollup if r.per_fold_cis is not None and len(r.per_fold_cis) > 0
+    ]
+    if rollup_with_per_fold:
+        parts.append(
+            render_per_fold_cis_footnote(
+                rollup_with_per_fold,
                 group_columns=("dataset_name",),
                 header_labels=("Dataset",),
             )
