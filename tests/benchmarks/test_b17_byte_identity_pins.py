@@ -326,10 +326,19 @@ def _make_ensemble_lift_rollup() -> list[EnsembleLiftRollupRow]:
             # trailing-asterisk regex (B17 R2 mutation-sensitivity
             # tightening) keeps matching.
             n_pair_grid=2,
+            # B20 / D-B16.1 closure: matching n_cells_paired=1 so the
+            # main Δloss CI cell asterisk continues to fire under
+            # n_cells_paired < n_pair_grid (B19 R2 contract). The oracle
+            # CI cell on the same row is an independent column; the
+            # B17 byte-pin regex only matches the main Δloss column.
+            n_oracle_cells_paired=2,
             n_skipped_cells=1,
             primary_metric_mean=0.20,
             primary_metric_ci_lo=0.15,
             primary_metric_ci_hi=0.25,
+            oracle_metric_mean=0.10,
+            oracle_metric_ci_lo=0.08,
+            oracle_metric_ci_hi=0.12,
             bootstrap_seed=42,
             bootstrap_n_resamples=10_000,
             bootstrap_numpy_version="2.3.0",

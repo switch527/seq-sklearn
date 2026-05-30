@@ -9,9 +9,14 @@ significance call.
 The CI variant (B16) replaces the bare `Δloss` + `Δstd` columns
 with a single `Δloss [95% CI]` column when the
 `bootstrap_ensemble_lift_rollup.parquet` shard is present and
-fresh. `render_from_dir(output_root, *, lift_result)` dispatches
-between the std and CI variants following B15's five-source
-footnote precedence.
+fresh. B20 (D-B16.1) extends the CI variant: the bare
+`Δloss(oracle)` scalar column is also replaced with a
+`Δloss(oracle) [95% CI]` column reading the new
+`oracle_metric_*` rollup fields; the `loss(oracle)` absolute-loss
+column stays as a scalar. The std variant is unchanged.
+`render_from_dir(output_root, *, lift_result)` dispatches between
+the std and CI variants following B15's five-source footnote
+precedence.
 """
 
 import logging
@@ -136,7 +141,7 @@ def _render_complete_table_with_ci(
         "loss(GBM+seq)",
         "Δloss [95% CI]",
         "loss(oracle)",
-        "Δloss(oracle)",
+        "Δloss(oracle) [95% CI]",
     ]
     sep_cells = ["---"] * len(header_cells)
     lines = [
@@ -147,6 +152,7 @@ def _render_complete_table_with_ci(
         rollup_row = rollup_index.get(row.dataset_name)
         if rollup_row is None or rollup_row.bootstrap_skipped_reason is not None:
             ci_cell = "(no CI)"
+            oracle_ci_cell = "(no CI)"
         else:
             # B19 / D-B16.7: use the intersection cardinality
             # (`n_pair_grid`) as the expected paired-cell count.
@@ -164,6 +170,25 @@ def _render_complete_table_with_ci(
                 rollup_row.primary_metric_ci_hi,
                 partial=partial,
             )
+            # B20 / D-B16.1: independent CI cell on the per-sample-best
+            # oracle delta. Renders `(no CI)` when `n_oracle_cells_paired
+            # == 0` (no cell had a computable oracle_loss). The
+            # partial-coverage asterisk fires when the oracle bootstrap
+            # covered fewer cells than the intersection grid (independent
+            # from the main Δloss asterisk).
+            if rollup_row.n_oracle_cells_paired == 0:
+                oracle_ci_cell = "(no CI)"
+            else:
+                oracle_partial = (
+                    rollup_row.n_oracle_cells_paired < rollup_row.n_pair_grid
+                    and rollup_row.n_pair_grid > 0
+                )
+                oracle_ci_cell = format_ci_cell(
+                    rollup_row.oracle_metric_mean,
+                    rollup_row.oracle_metric_ci_lo,
+                    rollup_row.oracle_metric_ci_hi,
+                    partial=oracle_partial,
+                )
         row_cells = [
             row.dataset_name,
             row.task_type,
@@ -173,7 +198,7 @@ def _render_complete_table_with_ci(
             _format_value(row.loss_gbm_plus_seq_mean),
             ci_cell,
             _format_value(row.oracle_loss_mean),
-            _format_value(row.oracle_delta_loss_mean),
+            oracle_ci_cell,
         ]
         lines.append("| " + " | ".join(row_cells) + " |")
     lines.append("")

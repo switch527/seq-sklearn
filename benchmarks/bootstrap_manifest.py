@@ -488,10 +488,29 @@ class EnsembleLiftRollupRow(BaseModel):
     # computation, which may be non-zero (both family rosters had cells
     # but compute_per_cell_lift_deltas dropped all of them).
     n_pair_grid: int = Field(ge=0)
+    # B20 / D-B16.1: per-row count of cells that contributed to the
+    # oracle bootstrap (i.e., cells whose `oracle_loss` was not None).
+    # Parallel to `n_cells_paired` which counts cells that contributed
+    # to the main delta_loss bootstrap. May be less than or equal to
+    # `n_cells_paired`; the renderer fires the partial-coverage asterisk
+    # on the oracle CI cell when `n_oracle_cells_paired < n_pair_grid`.
+    # Sentinel rows carry 0 (no oracle bootstrap was attempted).
+    n_oracle_cells_paired: int = Field(ge=0)
     n_skipped_cells: int = Field(ge=0)  # paired cells dropped from the bootstrap (NaN loss)
     primary_metric_mean: float | None = None
     primary_metric_ci_lo: float | None = None
     primary_metric_ci_hi: float | None = None
+    # B20 / D-B16.1: CI on the per-sample-best oracle delta. The
+    # aggregator computes per-cell oracle delta as
+    # `loss_gbm - oracle_loss` (dropping cells where `oracle_loss`
+    # is None) and bootstraps with the same primitive but a DERIVED
+    # seed (`BOOTSTRAP_DEFAULT_SEED ^ BOOTSTRAP_ORACLE_SEED_OFFSET`)
+    # so the two PCG64 streams are independent. Sentinel rows leave
+    # these as None; happy-path rows with no computable per-cell
+    # oracle leave these as None and set `n_oracle_cells_paired=0`.
+    oracle_metric_mean: float | None = None
+    oracle_metric_ci_lo: float | None = None
+    oracle_metric_ci_hi: float | None = None
     bootstrap_seed: int
     bootstrap_n_resamples: int = Field(ge=0)
     bootstrap_confidence: float = 0.95

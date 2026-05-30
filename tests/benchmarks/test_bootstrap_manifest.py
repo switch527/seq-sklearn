@@ -543,10 +543,20 @@ def _make_ensemble_lift_row(**overrides: object) -> _EnsembleLiftRollupRow:
         # (renderer's partial-flag computation evaluates to False when
         # n_cells_paired == n_pair_grid).
         "n_pair_grid": 6,
+        # B20 / D-B16.1: factory default mirrors `n_cells_paired`
+        # (symmetric-roster happy path: every paired cell had a
+        # computable oracle_loss). Concrete oracle CI bounds chosen
+        # to be distinct from the primary metric so a cross-wire
+        # mutation that writes primary into oracle fails any direct
+        # equality assertion.
+        "n_oracle_cells_paired": 6,
         "n_skipped_cells": 0,
         "primary_metric_mean": 0.20,
         "primary_metric_ci_lo": 0.15,
         "primary_metric_ci_hi": 0.25,
+        "oracle_metric_mean": 0.10,
+        "oracle_metric_ci_lo": 0.08,
+        "oracle_metric_ci_hi": 0.12,
         "bootstrap_seed": 42,
         "bootstrap_n_resamples": 10_000,
         "bootstrap_confidence": 0.95,
