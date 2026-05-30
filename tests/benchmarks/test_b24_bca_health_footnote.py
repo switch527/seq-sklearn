@@ -1,4 +1,4 @@
-"""Phase B24 BCa health footnote bundle tests (22 named; 26 collected).
+"""Phase B24 BCa health footnote bundle tests (23 named; 27 collected).
 
 Closes the D-B21.1 (per-renderer Bootstrap CI method footnote)
 and D-B23.1 (oracle partial-coverage footnote ci_method +
@@ -11,6 +11,8 @@ Test layout:
 - B24.4.4: parametrized mixed-rollup omission (#15)
 - B24.4.5: oracle footnote extension (#16-#20)
 """
+
+from collections.abc import Callable
 
 import pandas as pd
 import pytest
@@ -402,6 +404,28 @@ def test_bca_health_footnote_cell_data_reads_correct_fields() -> None:
     assert "p0_at_edge" in md
 
 
+def test_bca_health_footnote_sorts_rows_by_group_columns_first_key() -> None:
+    """code-R1-I1 closure: the helper sorts rows
+    deterministically by `group_columns[0]` so report bytes
+    are reproducible regardless of parquet row order. Pass two
+    rows in reverse alpha order; assert the earlier dataset
+    name appears first in the rendered output."""
+    rows = [
+        _ensemble_lift_row(dataset_name="z_late", bootstrap_ci_fallback_reason="p0_at_edge"),
+        _ensemble_lift_row(dataset_name="a_early", bootstrap_ci_fallback_reason="a_overshoot"),
+    ]
+    md = render_bca_health_footnote(
+        rows,
+        group_columns=("dataset_name",),
+        header_labels=("Dataset",),
+    )
+    early_idx = md.find("| a_early |")
+    late_idx = md.find("| z_late |")
+    assert early_idx >= 0
+    assert late_idx >= 0
+    assert early_idx < late_idx
+
+
 def test_bca_health_footnote_120_char_reason_not_truncated() -> None:
     """qa-R2-N1 closure: 120-char reason passes through
     unmodified. Pins the `> 120` guard against an off-by-one
@@ -563,14 +587,14 @@ def _render_ensemble_lift_mixed() -> str:
     ],
 )
 def test_renderer_emits_only_fallback_rows_in_mixed_rollup(
-    render_fn: object, present_id: str, absent_id: str
+    render_fn: Callable[[], str], present_id: str, absent_id: str
 ) -> None:
     """qa-R1-I2 closure: a wrong-field pre-filter (e.g. on
     `bootstrap_skipped_reason` instead of
     `bootstrap_ci_fallback_reason`) would either include or
     exclude both rows; this test catches both directions per
     renderer."""
-    md = render_fn()  # type: ignore[operator]
+    md = render_fn()
     section_idx = md.find(_SECTION)
     assert section_idx >= 0, f"BCa health section missing from output: {md[:400]!r}"
     bca_block = md[section_idx:]

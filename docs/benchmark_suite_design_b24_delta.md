@@ -522,6 +522,47 @@ qa-test-coverage (0C / 1I / 1N APPROVE), style-reviewer
 Test count after R2 closures: 22 named (20 from R1 + 2 new
 in R2); 972 collected.
 
+### R1 build-swarm closure
+
+R1 build swarm on commit `dd4b96d`: code-reviewer (0C / 2I /
+1N APPROVE), qa-test-coverage (0C / 0I / 2N APPROVE),
+architecture-reviewer (0C / 0I / 1N APPROVE), style-reviewer
+(0C / 0I / 0N APPROVE). Deduplicated total: 0 CRITICAL, 2
+IMPROVEMENT, 4 NITPICK. Closures:
+
+- **code-R1-I1** (helper omits the deterministic sort the
+  design promised at B24.1.1; rows iterate in caller order):
+  added `sorted_rows = sorted(rollup_with_fallback,
+  key=lambda r: str(getattr(r, sort_key, "")))` at the helper
+  body; added new test #4c
+  `test_bca_health_footnote_sorts_rows_by_group_columns_first_key`
+  passing reversed-alpha rows and asserting alpha order in
+  output.
+- **code-R1-I2** (helper docstring dropped the
+  "silent-empty-cell warning" arch-R2-I2 explicitly required):
+  added one sentence noting `getattr(row, name, "")` returns
+  "" on missing attributes so a future row type lacking the
+  fields renders empty cells rather than raising.
+- **code-R1-N1** (test #15 typed `render_fn: object` +
+  `# type: ignore[operator]`): retyped as `Callable[[], str]`
+  and dropped the suppression.
+- **arch-R1-N1** (`_bootstrap_render.py` module docstring
+  said "three `bootstrap_*.py` and `raw_loss.py`" which is
+  stale post-B14/B23/B24): rewritten to name the five
+  `*_markdown_with_ci` renderers explicitly.
+- **qa-R1-N1** (test #15 ensemble_lift `absent_id` slicing
+  marginal): NOT changed; safe in the current rendering
+  shape (BCa section is the last section when present), and
+  test #20 already pins source-binding via the stronger
+  oracle-block isolation pattern.
+- **qa-R1-N2** (test #16 `"| bca |" in md` could false-pass
+  on unrelated section): NOT changed; test #20 covers
+  source-binding via the stronger oracle-block isolation
+  assertion.
+
+Test count after R1 build-swarm closures: 23 named (was 22;
+code-R1-I1 added test #4c); 973 collected (was 972).
+
 ## Deferred
 
 - **D-B24.1**: surface oracle BCa fallback on rollup rows
