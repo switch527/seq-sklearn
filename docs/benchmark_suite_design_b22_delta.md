@@ -622,7 +622,12 @@ Expected test delta after the build:
 R1 design swarm: architecture-reviewer (2C / 4I / 2N
 REQUEST_CHANGES), qa-test-coverage (2C / 3I / 2N
 REQUEST_CHANGES), style-reviewer (0C / 0I / 0N APPROVE).
-Deduplicated total: 4 CRITICAL, 7 IMPROVEMENT, 4 NITPICK.
+Deduplicated total: 4 CRITICAL, 6 IMPROVEMENT, 3 NITPICK
+(matches the 13 enumerated closure entries below; the
+original R1 dedup tally of 4C/7I/4N counted 1 IMP + 1 NIT
+that were merged into other entries without separate
+listings. B27 / D-B22.5 closure: header corrected to match
+the enumeration).
 Closures:
 
 - **arch-R1-C1** (pseudocode computed `n_seeds_in_fold` and

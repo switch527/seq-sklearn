@@ -790,12 +790,10 @@ class EnsembleLiftRollupRow(BaseModel):
     @model_validator(mode="after")
     def _validate_row_count_invariants(self) -> "EnsembleLiftRollupRow":
         # B23 / D-B20.3 + arch-R1-I1 closure: three structural
-        # invariants from the v1 B16 aggregator.
-        # NOTE: the CI-sentinel invariant that B26 added to the
-        # other 4 RollupRow schemas is intentionally deferred
-        # here as D-B26.2 (compose by chaining a second
-        # `@model_validator(mode="after")`); do NOT add it
-        # inline without consulting that deferral. The oracle
+        # invariants from the v1 B16 aggregator. B27 / D-B26.2
+        # closure: the CI-sentinel invariant is now composed via
+        # `_validate_ci_sentinel_consistency` below; both
+        # validators run via pydantic's mode="after" chain. The oracle
         # bootstrap operates on a subset of the paired cells, which
         # in turn are a subset of the intersection grid. The
         # renderer's partial-coverage flag at ensemble_lift.py:166
@@ -819,6 +817,41 @@ class EnsembleLiftRollupRow(BaseModel):
         if self.n_cells_paired > self.n_pair_grid:
             raise ValueError(
                 f"n_cells_paired ({self.n_cells_paired}) exceeds n_pair_grid ({self.n_pair_grid})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_ci_sentinel_consistency(self) -> "EnsembleLiftRollupRow":
+        # B27 / D-B26.2 closure: same CI-sentinel invariant as
+        # the 4 other RollupRow schemas (B26 / D-B23.2).
+        # IDENTICAL BODY TO RollupRow._validate_ci_sentinel_consistency;
+        # keep all 5 copies in sync.
+        metric_fields = (
+            self.primary_metric_mean,
+            self.primary_metric_ci_lo,
+            self.primary_metric_ci_hi,
+        )
+        all_none = all(f is None for f in metric_fields)
+        all_set = all(f is not None for f in metric_fields)
+        if not (all_none or all_set):
+            raise ValueError(
+                "primary_metric_mean, primary_metric_ci_lo, and "
+                "primary_metric_ci_hi must be all-None or all-non-None; "
+                f"got mean={self.primary_metric_mean!r}, "
+                f"ci_lo={self.primary_metric_ci_lo!r}, "
+                f"ci_hi={self.primary_metric_ci_hi!r}"
+            )
+        if all_none and self.bootstrap_skipped_reason is None:
+            raise ValueError(
+                "primary_metric_* are all None but "
+                "bootstrap_skipped_reason is None; sentinel rows must "
+                "populate bootstrap_skipped_reason"
+            )
+        if all_set and self.bootstrap_skipped_reason is not None:
+            raise ValueError(
+                "primary_metric_* are all populated but "
+                "bootstrap_skipped_reason is set; non-sentinel rows "
+                "must have bootstrap_skipped_reason=None"
             )
         return self
 
