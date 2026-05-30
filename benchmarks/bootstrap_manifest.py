@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
     "EnsembleLiftRollupRow",
@@ -647,6 +647,36 @@ class EnsembleLiftRollupRow(BaseModel):
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str
+
+    @model_validator(mode="after")
+    def _validate_row_count_invariants(self) -> "EnsembleLiftRollupRow":
+        # B23 / D-B20.3 + arch-R1-I1 closure: three structural
+        # invariants from the v1 B16 aggregator. The oracle
+        # bootstrap operates on a subset of the paired cells, which
+        # in turn are a subset of the intersection grid. The
+        # renderer's partial-coverage flag at ensemble_lift.py:166
+        # already assumes `n_cells_paired <= n_pair_grid`. Sentinel
+        # rows zero `n_cells_paired` and `n_oracle_cells_paired`;
+        # `n_pair_grid` may still be non-zero on
+        # `all_cells_skipped_in_manifest` sentinels (per the
+        # schema docstring above), and the invariants still hold
+        # trivially since `0 <= n_pair_grid` for any non-negative
+        # `n_pair_grid`.
+        if self.n_oracle_cells_paired > self.n_cells_paired:
+            raise ValueError(
+                f"n_oracle_cells_paired ({self.n_oracle_cells_paired}) "
+                f"exceeds n_cells_paired ({self.n_cells_paired})"
+            )
+        if self.n_oracle_cells_paired > self.n_pair_grid:
+            raise ValueError(
+                f"n_oracle_cells_paired ({self.n_oracle_cells_paired}) "
+                f"exceeds n_pair_grid ({self.n_pair_grid})"
+            )
+        if self.n_cells_paired > self.n_pair_grid:
+            raise ValueError(
+                f"n_cells_paired ({self.n_cells_paired}) exceeds n_pair_grid ({self.n_pair_grid})"
+            )
+        return self
 
 
 def ensemble_lift_rollup_path(root: Path) -> Path:

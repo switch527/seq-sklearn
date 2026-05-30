@@ -492,7 +492,9 @@ def test_aggregator_oracle_oom_gate_raises(
     monkeypatch.setattr(_module, "entity_block_bootstrap_ci", _bootstrap_with_side_effect)
 
     env = build_run_environment(profile="smoke")
-    with pytest.raises(RawRollupError, match=r"oracle delta"):
+    # B23 / D-B20.2 closure: pin the stable schema-field prefix
+    # `n_oracle_cells_paired:` instead of the prose body.
+    with pytest.raises(RawRollupError, match=r"n_oracle_cells_paired:"):
         aggregate_bootstrap_ensemble_lift_rollup(
             config, output_root=output_root, env=env, manifest=manifest
         )
@@ -553,7 +555,9 @@ def test_aggregator_oracle_nan_delta_raises_via_stub(
     )
 
     env = build_run_environment(profile="smoke")
-    with pytest.raises(RawRollupError, match=r"non-finite oracle delta"):
+    # B23 / D-B20.2 closure: pin the stable schema-field prefix
+    # `oracle_metric_mean:` instead of the prose body.
+    with pytest.raises(RawRollupError, match=r"oracle_metric_mean:"):
         aggregate_bootstrap_ensemble_lift_rollup(
             config, output_root=output_root, env=env, manifest=manifest
         )

@@ -423,7 +423,13 @@ def test_aggregator_per_fold_cis_each_fold_uses_distinct_seed(
 
     monkeypatch.setattr(_agg, "entity_block_bootstrap_ci", _capture)
 
-    _run_ensemble_lift(tmp_path, monkeypatch, per_fold_enabled=True, cells=_happy_cells(n_folds=3))
+    _run_ensemble_lift(
+        tmp_path,
+        monkeypatch,
+        per_fold_enabled=True,
+        cells=_happy_cells(n_folds=3),
+        n_folds=3,
+    )
 
     from benchmarks.report._bootstrap_aggregate import BOOTSTRAP_DEFAULT_SEED
 
@@ -484,7 +490,13 @@ def test_aggregator_per_fold_cis_seed_derivation_pin(
 
     monkeypatch.setattr(_agg, "entity_block_bootstrap_ci", _capture)
 
-    _run_ensemble_lift(tmp_path, monkeypatch, per_fold_enabled=True, cells=_happy_cells(n_folds=3))
+    _run_ensemble_lift(
+        tmp_path,
+        monkeypatch,
+        per_fold_enabled=True,
+        cells=_happy_cells(n_folds=3),
+        n_folds=3,
+    )
 
     for fold_index in (0, 1, 2):
         expected = BOOTSTRAP_DEFAULT_SEED ^ BOOTSTRAP_PER_FOLD_SEED_OFFSET ^ fold_index
@@ -683,6 +695,7 @@ def test_aggregator_per_fold_cis_each_fold_receives_correct_n_resamples(
         monkeypatch,
         per_fold_enabled=True,
         cells=_happy_cells(n_folds=3),
+        n_folds=3,
         bootstrap_n_resamples=137,
     )
 

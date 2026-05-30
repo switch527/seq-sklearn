@@ -324,10 +324,18 @@ def _build_dataset_rollup(
         oracle_fallback_reason = None
     else:
         if not np.isfinite(oracle_deltas).all():
+            # B23 / D-B20.2 closure: `oracle_metric_mean:` prefix
+            # is the stable discriminator that test `match=` clauses
+            # pin against (replaces the prose "oracle delta" suffix).
+            # The prefix names the destination rollup column
+            # (`EnsembleLiftRollupRow.oracle_metric_mean`) that
+            # would have been written if the guard had not fired,
+            # so a future rename of the schema field naturally
+            # propagates to this message via grep.
             raise RawRollupError(
-                f"aggregate_bootstrap_ensemble_lift_rollup: dataset="
-                f"{dataset_name!r} has a paired cell with a non-finite "
-                "oracle delta; the upstream predictions shard is corrupt"
+                f"aggregate_bootstrap_ensemble_lift_rollup: oracle_metric_mean: "
+                f"dataset={dataset_name!r} has a paired cell with a "
+                "non-finite oracle delta; the upstream predictions shard is corrupt"
             )
         # Defensive even though `n_oracle_cells_paired <= n_cells` in
         # production (the main gate above fires first on the equal-or-
@@ -335,13 +343,20 @@ def _build_dataset_rollup(
         # mutating `BOOTSTRAP_ROW_COUNT_CEILING` between the main and
         # oracle calls so the main gate is suppressed.
         if n_oracle_cells_paired * n_resamples > _bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING:
+            # B23 / D-B20.2 closure: `n_oracle_cells_paired:` prefix
+            # is the stable discriminator that test `match=` clauses
+            # pin against (replaces the prose "oracle delta" suffix).
+            # The prefix names the rollup column
+            # (`EnsembleLiftRollupRow.n_oracle_cells_paired`) whose
+            # value triggered the OOM gate, so a future rename of
+            # the schema field naturally propagates to this message
+            # via grep.
             raise RawRollupError(
-                f"aggregate_bootstrap_ensemble_lift_rollup: dataset="
-                f"{dataset_name!r} with n_oracle_cells_paired="
+                f"aggregate_bootstrap_ensemble_lift_rollup: n_oracle_cells_paired: "
+                f"dataset={dataset_name!r} with n_oracle_cells_paired="
                 f"{n_oracle_cells_paired} * n_resamples={n_resamples} "
                 f"exceeds the bootstrap-row-count ceiling "
-                f"({_bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING}) "
-                "on the oracle delta"
+                f"({_bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING})"
             )
         oracle_entity_ids = np.arange(n_oracle_cells_paired, dtype=np.int64)
         (
