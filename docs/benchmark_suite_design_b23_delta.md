@@ -56,7 +56,7 @@ one of these.
   - Update B20 tests #5 (`test_aggregator_oracle_oom_gate_raises`)
     and #6 (`test_aggregator_oracle_nan_delta_raises_via_stub`)
     to `match=r"n_oracle_cells_paired:"` and
-    `match=r"oracle_metric_\*:"` respectively. The new
+    `match=r"oracle_metric_mean:"` respectively. The new
     `match=` tokens are stable schema-field names rather than
     prose.
 - **R-B23-3** (D-B20.3 + arch-R1-I1 closure): add a
@@ -160,7 +160,7 @@ raise RawRollupError(
 
 The new prefixes are stable schema field names. Test
 `match=` clauses now grep against
-`r"oracle_metric_\*:"` and `r"n_oracle_cells_paired:"`
+`r"oracle_metric_mean:"` and `r"n_oracle_cells_paired:"`
 instead of the prose `r"oracle delta"`.
 
 ### B23.0.3 D-B20.3 cross-field validator
@@ -292,11 +292,12 @@ invariants loads cleanly.
     clause from `match=r"oracle delta"` to
     `match=r"n_oracle_cells_paired:"`.
   - Test #6 (`test_aggregator_oracle_nan_delta_raises_via_stub`):
-    update from
-    `match=r"non-finite oracle delta"` to
-    `match=r"oracle_metric_\*:.*non-finite oracle delta"`
-    (preserves the body content check + adds the new
-    discriminator prefix).
+    update from `match=r"non-finite oracle delta"` to
+    `match=r"oracle_metric_mean:"` (arch-R2-I2 closure:
+    the new prefix is the only stable discriminator; the
+    prose body `"non-finite oracle delta"` is intentionally
+    NOT anchored because D-B20.2 set out to eliminate
+    prose-drift coupling).
   - 12 fixture sites construct `EnsembleLiftRollupRow`
     directly (in `test_b17_byte_identity_pins.py`,
     `test_b19_n_pair_grid.py`, `test_b20_oracle_delta_ci.py`,
@@ -321,7 +322,7 @@ invariants loads cleanly.
 
 ## B23.5 NEW B23 tests
 
-`tests/benchmarks/test_b23_b20_nits_bundle.py` (NEW; 10
+`tests/benchmarks/test_b23_b20_nits_bundle.py` (NEW; 13
 tests).
 
 **Renderer footnote (D-B20.1)**:
@@ -361,7 +362,7 @@ tests).
 
 6. `test_aggregator_oracle_nan_raise_message_contains_oracle_metric_token`:
    re-uses the B20 test #6 setup. Assert
-   `pytest.raises(RawRollupError, match=r"oracle_metric_\*:")`.
+   `pytest.raises(RawRollupError, match=r"oracle_metric_mean:")`.
 7. `test_aggregator_oracle_oom_raise_message_contains_n_oracle_cells_paired_token`:
    re-uses the B20 test #5 setup. Assert
    `pytest.raises(RawRollupError, match=r"n_oracle_cells_paired:")`.
@@ -519,6 +520,42 @@ qa), 6 IMPROVEMENT, 3 NITPICK. Closures:
 Test count after R1 closures: 13 new tests (was 10;
 arch-R1-I1 added #13, qa-R1-I1 added #11, qa-R1-I3 added
 #12); total `930 + 13 = 943`.
+
+### R2 confirming swarm closure
+
+R2 confirming swarm on commit `dcf11eb`: architecture-
+reviewer (1C / 2I / 1N REQUEST_CHANGES), qa-test-coverage
+(1C / 0I / 0N REQUEST_CHANGES), style-reviewer (0C / 0I /
+0N APPROVE). Deduplicated total: 1 CRITICAL (raised by
+both arch and qa), 2 IMPROVEMENT, 1 NITPICK. Closures:
+
+- **arch-R2-C1 + qa-R2-C1** (the R1 arch-R1-I2 closure
+  changed the raise-message prefix to `oracle_metric_mean:`
+  in the pseudocode AND in the arch-R1-I2 closure
+  narrative, but FOUR `match=` regex sites still held the
+  pre-closure `r"oracle_metric_\*:"` glob token; the
+  `replace_all` edit caught only the standalone form
+  `r"oracle_metric_*:"` and missed the regex-escaped
+  `r"oracle_metric_\*:"` forms): updated all 4 sites
+  (R-B23-2 at :59, B23.0.2 summary at :163, B23.4 at :297,
+  B23.5 test #6 at :364) to read `r"oracle_metric_mean:"`.
+- **arch-R2-I1** (B23.5 section header still said "NEW; 10
+  tests" after R1 closures grew the count to 13):
+  updated to "NEW; 13 tests".
+- **arch-R2-I2** (test #6 `match=` clause still anchored
+  on the prose body `"non-finite oracle delta"`, re-
+  introducing the prose-drift coupling that D-B20.2
+  explicitly rejects): dropped the body anchor; test #6
+  now pins ONLY the prefix token
+  `match=r"oracle_metric_mean:"`. The body content is no
+  longer load-bearing for the discriminator pin.
+- **arch-R2-N1** (section header lists three closure tags
+  in the order I1, I3, arch-I1; tests #11/#12/#13 align):
+  NOT changed; the ordering already matches.
+
+Test count after R2 closures: 13 new tests; total
+`930 + 13 = 943` (unchanged; R2 was discriminator-token
+cleanup, no new tests).
 
 ## Deferred
 
