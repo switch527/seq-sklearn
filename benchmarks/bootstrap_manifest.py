@@ -88,6 +88,18 @@ class RollupRow(BaseModel):
     bootstrap_n_resamples: int = Field(ge=0)
     bootstrap_confidence: float = 0.95
     bootstrap_rng_algorithm: str = "PCG64"
+    # B21 / D-B16.2: CI method audit. The schema default
+    # "percentile" is a backward-compat marker for pre-B21
+    # parquet shards (which used the percentile method);
+    # B21+ aggregators always pass "bca" explicitly via the
+    # late-bound BOOTSTRAP_DEFAULT_CI_METHOD constant.
+    bootstrap_ci_method: str = "percentile"
+    # B21 / D-B16.2: BCa fallback reason. None on the happy
+    # path; "p0_at_edge" if the bias correction proportion
+    # reached 0 or 1 (BCa fell back to percentile);
+    # "a_overshoot" if the acceleration transform's
+    # denominator saturated (BCa fell back to percentile).
+    bootstrap_ci_fallback_reason: str | None = None
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     # B13.4 Gemini-C3 freshness: the manifest fingerprint at
@@ -242,6 +254,18 @@ class PairwiseRollupRow(BaseModel):
     bootstrap_n_resamples: int = Field(ge=0)
     bootstrap_confidence: float = 0.95
     bootstrap_rng_algorithm: str = "PCG64"
+    # B21 / D-B16.2: CI method audit. The schema default
+    # "percentile" is a backward-compat marker for pre-B21
+    # parquet shards (which used the percentile method);
+    # B21+ aggregators always pass "bca" explicitly via the
+    # late-bound BOOTSTRAP_DEFAULT_CI_METHOD constant.
+    bootstrap_ci_method: str = "percentile"
+    # B21 / D-B16.2: BCa fallback reason. None on the happy
+    # path; "p0_at_edge" if the bias correction proportion
+    # reached 0 or 1 (BCa fell back to percentile);
+    # "a_overshoot" if the acceleration transform's
+    # denominator saturated (BCa fell back to percentile).
+    bootstrap_ci_fallback_reason: str | None = None
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str
@@ -274,6 +298,18 @@ class TrainingTimeRollupRow(BaseModel):
     bootstrap_n_resamples: int = Field(ge=0)
     bootstrap_confidence: float = 0.95
     bootstrap_rng_algorithm: str = "PCG64"
+    # B21 / D-B16.2: CI method audit. The schema default
+    # "percentile" is a backward-compat marker for pre-B21
+    # parquet shards (which used the percentile method);
+    # B21+ aggregators always pass "bca" explicitly via the
+    # late-bound BOOTSTRAP_DEFAULT_CI_METHOD constant.
+    bootstrap_ci_method: str = "percentile"
+    # B21 / D-B16.2: BCa fallback reason. None on the happy
+    # path; "p0_at_edge" if the bias correction proportion
+    # reached 0 or 1 (BCa fell back to percentile);
+    # "a_overshoot" if the acceleration transform's
+    # denominator saturated (BCa fell back to percentile).
+    bootstrap_ci_fallback_reason: str | None = None
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str
@@ -399,6 +435,18 @@ class HPOUpliftRollupRow(BaseModel):
     bootstrap_n_resamples: int = Field(ge=0)
     bootstrap_confidence: float = 0.95
     bootstrap_rng_algorithm: str = "PCG64"
+    # B21 / D-B16.2: CI method audit. The schema default
+    # "percentile" is a backward-compat marker for pre-B21
+    # parquet shards (which used the percentile method);
+    # B21+ aggregators always pass "bca" explicitly via the
+    # late-bound BOOTSTRAP_DEFAULT_CI_METHOD constant.
+    bootstrap_ci_method: str = "percentile"
+    # B21 / D-B16.2: BCa fallback reason. None on the happy
+    # path; "p0_at_edge" if the bias correction proportion
+    # reached 0 or 1 (BCa fell back to percentile);
+    # "a_overshoot" if the acceleration transform's
+    # denominator saturated (BCa fell back to percentile).
+    bootstrap_ci_fallback_reason: str | None = None
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str
@@ -515,6 +563,25 @@ class EnsembleLiftRollupRow(BaseModel):
     bootstrap_n_resamples: int = Field(ge=0)
     bootstrap_confidence: float = 0.95
     bootstrap_rng_algorithm: str = "PCG64"
+    # B21 / D-B16.2: CI method audit. The schema default
+    # "percentile" is a backward-compat marker for pre-B21
+    # parquet shards (which used the percentile method);
+    # B21+ aggregators always pass "bca" explicitly via the
+    # late-bound BOOTSTRAP_DEFAULT_CI_METHOD constant.
+    bootstrap_ci_method: str = "percentile"
+    # B21 / D-B16.2: BCa fallback reason. None on the happy
+    # path; "p0_at_edge" if the bias correction proportion
+    # reached 0 or 1 (BCa fell back to percentile);
+    # "a_overshoot" if the acceleration transform's
+    # denominator saturated (BCa fell back to percentile).
+    bootstrap_ci_fallback_reason: str | None = None
+    # B21 / D-B16.2: independent oracle BCa fallback reason
+    # (R-B21-7). The oracle bootstrap is run with the XOR-
+    # derived seed (R-B20-2a) and may fall back independently
+    # from the main bootstrap. None when n_oracle_cells_paired
+    # == 0 OR when the oracle path produced BCa bounds without
+    # fallback.
+    bootstrap_oracle_ci_fallback_reason: str | None = None
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str

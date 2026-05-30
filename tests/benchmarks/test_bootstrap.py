@@ -19,7 +19,7 @@ def test_entity_block_bootstrap_ci_mean_matches_ground_truth() -> None:
     """`mean` in the returned triple equals `np.nanmean(losses)`."""
     losses = np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float64)
     entities = np.array(["a", "a", "b", "b", "c"])
-    mean, _, _ = entity_block_bootstrap_ci(losses, entities, n_resamples=200, seed=42)
+    mean, _, _, _ = entity_block_bootstrap_ci(losses, entities, n_resamples=200, seed=42)
     np.testing.assert_allclose(mean, float(losses.mean()), atol=1e-12)
 
 
@@ -38,12 +38,12 @@ def test_entity_block_bootstrap_ci_entity_vs_row_ci_width_zero_within_variance()
     losses = np.repeat(base, k)
     entities = np.repeat(np.arange(e), k)
     # Entity bootstrap on the real entity labels.
-    _, e_lo, e_hi = entity_block_bootstrap_ci(losses, entities, n_resamples=2000, seed=0)
+    _, e_lo, e_hi, _ = entity_block_bootstrap_ci(losses, entities, n_resamples=2000, seed=0)
     e_width = e_hi - e_lo
     # "Row bootstrap" simulated via per-row entity ids (each row is
     # its own entity), which collapses to a row bootstrap.
     row_entities = np.arange(e * k)
-    _, r_lo, r_hi = entity_block_bootstrap_ci(losses, row_entities, n_resamples=2000, seed=0)
+    _, r_lo, r_hi, _ = entity_block_bootstrap_ci(losses, row_entities, n_resamples=2000, seed=0)
     r_width = r_hi - r_lo
     # Entity bootstrap CI should be materially WIDER than row
     # bootstrap (factor ~ sqrt(K) analytically; test asserts at
@@ -69,8 +69,17 @@ def test_entity_block_bootstrap_ci_deterministic_at_fixed_seed() -> None:
 def test_entity_block_bootstrap_ci_different_seeds_diverge() -> None:
     losses = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6], dtype=np.float64)
     entities = np.array([0, 0, 1, 1, 2, 2])
-    out_a = entity_block_bootstrap_ci(losses, entities, n_resamples=500, seed=1)
-    out_b = entity_block_bootstrap_ci(losses, entities, n_resamples=500, seed=2)
+    # B21 / D-B16.2: pin via the percentile path; with only 3
+    # entities BCa's small resample space + percentile rounding
+    # can produce identical bounds across seeds, while the
+    # percentile path's bounds depend directly on the PCG64
+    # stream and reliably diverge.
+    out_a = entity_block_bootstrap_ci(
+        losses, entities, n_resamples=500, seed=1, ci_method="percentile"
+    )
+    out_b = entity_block_bootstrap_ci(
+        losses, entities, n_resamples=500, seed=2, ci_method="percentile"
+    )
     assert out_a != out_b
 
 
@@ -84,7 +93,13 @@ def test_entity_block_bootstrap_ci_output_is_stable_at_pinned_pcg64() -> None:
     assert expected_numpy  # canary that the env is queryable
     losses = np.array([0.10, 0.20, 0.40, 0.50, 0.30, 0.60], dtype=np.float64)
     entities = np.array([0, 0, 1, 1, 2, 2])
-    mean, ci_lo, ci_hi = entity_block_bootstrap_ci(losses, entities, n_resamples=100, seed=0)
+    # B21 / D-B16.2: this canary pins the PCG64 bit-stream via the
+    # percentile path; BCa adds a bias correction + jackknife
+    # acceleration on top of the same stream, which would shift the
+    # bounds. The PCG64 drift signal lives in the percentile path.
+    mean, ci_lo, ci_hi, _ = entity_block_bootstrap_ci(
+        losses, entities, n_resamples=100, seed=0, ci_method="percentile"
+    )
     # Pin the values byte-for-byte. A swap from PCG64 to another
     # generator would break this test; a future numpy major
     # release that drifts the PCG64 bit-stream would also break it.
@@ -183,7 +198,7 @@ def test_entity_block_bootstrap_ci_single_entity_returns_degenerate_ci() -> None
     CI collapses to the ground-truth mean."""
     losses = np.array([0.1, 0.2, 0.3], dtype=np.float64)
     entities = np.array([0, 0, 0])
-    mean, lo, hi = entity_block_bootstrap_ci(losses, entities, n_resamples=10)
+    mean, lo, hi, _ = entity_block_bootstrap_ci(losses, entities, n_resamples=10)
     assert mean == lo == hi
     np.testing.assert_allclose(mean, float(losses.mean()), atol=1e-12)
 
@@ -197,7 +212,7 @@ def test_entity_block_bootstrap_ci_partial_nan_does_not_propagate() -> None:
     reduces entity A's NaN inside the per-resample aggregation."""
     losses = np.array([np.nan, 0.2, 0.4, 0.5, 0.3, 0.6], dtype=np.float64)
     entities = np.array([0, 0, 1, 1, 2, 2])
-    mean, lo, hi = entity_block_bootstrap_ci(losses, entities, n_resamples=200, seed=0)
+    mean, lo, hi, _ = entity_block_bootstrap_ci(losses, entities, n_resamples=200, seed=0)
     assert np.isfinite(mean)
     assert np.isfinite(lo)
     assert np.isfinite(hi)
@@ -227,8 +242,15 @@ def test_entity_block_bootstrap_ci_metric_fn_sqrt_applies_per_resample() -> None
     def _rmse(x: np.ndarray) -> float:
         return float(np.sqrt(np.nanmean(x)))
 
-    mean_p, lo_p, hi_p = entity_block_bootstrap_ci(
-        squared_errors, entities, n_resamples=300, seed=7, metric_fn=_rmse
+    # B21: BCa shifts the percentile points via z0/a; this oracle
+    # pins the percentile-path math, so request percentile here.
+    mean_p, lo_p, hi_p, _ = entity_block_bootstrap_ci(
+        squared_errors,
+        entities,
+        n_resamples=300,
+        seed=7,
+        metric_fn=_rmse,
+        ci_method="percentile",
     )
 
     # Independent re-implementation of the per-resample path.
@@ -258,7 +280,7 @@ def test_entity_block_bootstrap_ci_custom_metric_fn_is_called_per_resample() -> 
         del x
         return sentinel
 
-    mean, lo, hi = entity_block_bootstrap_ci(losses, entities, n_resamples=20, metric_fn=_const)
+    mean, lo, hi, _ = entity_block_bootstrap_ci(losses, entities, n_resamples=20, metric_fn=_const)
     assert mean == sentinel
     assert lo == sentinel
     assert hi == sentinel

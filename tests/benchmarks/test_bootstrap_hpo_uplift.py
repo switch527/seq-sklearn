@@ -611,9 +611,9 @@ def test_aggregate_bootstrap_hpo_uplift_rollup_respects_per_spec_n_resamples_ove
         *,
         n_resamples: int,
         **_kwargs: object,
-    ) -> tuple[float, float, float]:
+    ) -> tuple[float, float, float, str | None]:
         captured["n_resamples"] = n_resamples
-        return (0.20, 0.18, 0.22)
+        return (0.20, 0.18, 0.22, None)
 
     import benchmarks.report.bootstrap_hpo_uplift as _module
 

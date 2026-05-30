@@ -680,10 +680,11 @@ def test_aggregate_bootstrap_ensemble_lift_rollup_respects_per_spec_n_resamples_
         n_resamples: int,
         confidence: float,
         seed: int,
-    ) -> tuple[float, float, float]:
-        del deltas, entity_ids, confidence, seed
+        ci_method: str = "bca",
+    ) -> tuple[float, float, float, str | None]:
+        del deltas, entity_ids, confidence, seed, ci_method
         captured["n_resamples"] = n_resamples
-        return (0.20, 0.15, 0.25)
+        return (0.20, 0.15, 0.25, None)
 
     import benchmarks.report.bootstrap_ensemble_lift as _module
 

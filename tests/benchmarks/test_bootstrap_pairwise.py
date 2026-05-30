@@ -436,9 +436,9 @@ def test_aggregate_bootstrap_pairwise_rollup_respects_per_spec_n_resamples_overr
         confidence: float,
         seed: int,
         **_kwargs: object,
-    ) -> tuple[float, float, float]:
+    ) -> tuple[float, float, float, str | None]:
         captured["n_resamples"] = n_resamples
-        return (0.5, 0.4, 0.6)
+        return (0.5, 0.4, 0.6, None)
 
     import benchmarks.report.bootstrap_pairwise as _module
 

@@ -205,12 +205,12 @@ def test_aggregate_bootstrap_training_time_rollup_zero_wall_seconds_produces_zer
         losses: np.ndarray,
         entity_ids: np.ndarray,
         **kwargs: object,
-    ) -> tuple[float, float, float]:
+    ) -> tuple[float, float, float, str | None]:
         # Force all losses to zero so the bootstrap collapses to (0, 0, 0).
         zero_losses = np.zeros_like(losses)
         captured["n_entities"] = int(np.unique(entity_ids).shape[0])
         captured["n_cells"] = int(zero_losses.shape[0])
-        return (0.0, 0.0, 0.0)
+        return (0.0, 0.0, 0.0, None)
 
     import benchmarks.report.bootstrap_training_time as _module
 
@@ -359,9 +359,9 @@ def test_aggregate_bootstrap_training_time_rollup_respects_per_spec_n_resamples_
 
     def _capturing_primitive(
         losses: object, entity_ids: object, *, n_resamples: int, **_kwargs: object
-    ) -> tuple[float, float, float]:
+    ) -> tuple[float, float, float, str | None]:
         captured["n_resamples"] = n_resamples
-        return (1.0, 0.9, 1.1)
+        return (1.0, 0.9, 1.1, None)
 
     import benchmarks.report.bootstrap_training_time as _module
 

@@ -479,13 +479,15 @@ def test_aggregator_oracle_oom_gate_raises(
 
     def _bootstrap_with_side_effect(
         *_args: object, **_kwargs: object
-    ) -> tuple[float, float, float]:
+    ) -> tuple[float, float, float, str | None]:
         # The aggregator re-reads `_bootstrap_aggregate.
         # BOOTSTRAP_ROW_COUNT_CEILING` on each oracle-gate check;
         # mutating the attribute after the main bootstrap completes
         # flips the gate for the oracle call only.
         _agg.BOOTSTRAP_ROW_COUNT_CEILING = 0
-        return (0.20, 0.15, 0.25)
+        # B21 / D-B16.2: the primitive widened to a 4-tuple
+        # (mean, lo, hi, fallback_reason); the stub follows suit.
+        return (0.20, 0.15, 0.25, None)
 
     monkeypatch.setattr(_module, "entity_block_bootstrap_ci", _bootstrap_with_side_effect)
 
