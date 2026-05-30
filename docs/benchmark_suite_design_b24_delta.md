@@ -128,11 +128,11 @@ inserted):
 
 | Renderer | Insert after |
 |---|---|
-| `raw_loss.py` | the `render_rollup_skipped_footnote` call near `:457` |
-| `ensemble.py` (pairwise) | the `render_rollup_skipped_footnote` call near `:380` |
-| `training_time.py` | the `render_rollup_skipped_footnote` call near `:387` |
-| `hpo_uplift.py` | the `no_paired` block after `_render_partial_coverage_footnote` near `:752` |
-| `ensemble_lift.py` | the `render_rollup_skipped_footnote` call at `:462-467` (i.e., AFTER `_render_oracle_partial_coverage_footnote`) |
+| `raw_loss.py` | the `render_rollup_skipped_footnote` call at `:452` |
+| `ensemble.py` (pairwise) | the `render_rollup_skipped_footnote` call at `:375` |
+| `training_time.py` | the `render_rollup_skipped_footnote` call at `:382` |
+| `hpo_uplift.py` | the `render_rollup_skipped_footnote` call at `:747` (which itself follows `_render_partial_coverage_footnote` at `:734`) |
+| `ensemble_lift.py` | the `render_rollup_skipped_footnote` call at `:462` (which itself follows `_render_oracle_partial_coverage_footnote` at `:448`) |
 
 Block to insert:
 
@@ -273,6 +273,20 @@ Baseline test count verified live on commit `b569528` via
    the helper docstring at B24.1.1 (mirrors
    `_render_oracle_partial_coverage_footnote`'s early-return
    at `ensemble_lift.py:490-491`).
+4a. `test_bca_health_footnote_cell_data_reads_correct_fields`
+    (qa-R2-I1 closure): call `render_bca_health_footnote`
+    with a single row whose `bootstrap_ci_method="bca"` and
+    `bootstrap_ci_fallback_reason="p0_at_edge"`; assert
+    both literal values appear in the rendered output. Kills
+    a `getattr(row, "wrong_attr", "")` bug that tests #1-#9
+    would miss (those tests pin the heading and column-label
+    strings but not the cell-data path).
+4b. `test_bca_health_footnote_120_char_reason_not_truncated`
+    (qa-R2-N1 closure): pass a row with an exactly 120-char
+    `bootstrap_ci_fallback_reason`; assert the full 120-char
+    string IS in the rendered output (no truncation). Pins
+    the `> 120` boundary against an off-by-one mutation
+    (`>= 120`) that tests #3 and #19 cannot catch alone.
 
 ### B24.4.2 Per-renderer present-fallback emission (R-B24-1 parity)
 
@@ -397,10 +411,12 @@ Baseline (commit `b569528`): 946 tests collected.
 
 - Existing tests: 946 → 946 unchanged (B23 byte-pin tests +
   B17 fixtures already absent-fallback).
-- B24-new: 20 named tests + 4 extra parametrize collected
-  on test #15 (5 renderers - 1 named = 4 extras).
-- Total named: 946 + 20 = 966.
-- Total collected: 946 + 20 + 4 = 970.
+- B24-new: 22 named tests (20 in R1 + 2 added in R2:
+  #4a cell-data reader pin, #4b 120-char non-truncation
+  boundary) + 4 extra parametrize collected on test #15
+  (5 renderers - 1 named = 4 extras).
+- Total named: 946 + 22 = 968.
+- Total collected: 946 + 22 + 4 = 972.
 
 ## B24.5 Risks
 
@@ -470,6 +486,42 @@ IMPROVEMENT, 5 NITPICK. Closures:
   field-name pin remains valid for what it tests; new tests
   #10-#14 cover the section-heading absent contract.
 
+### R2 design swarm closure
+
+R2 confirming swarm on commit `ae6abd8`:
+architecture-reviewer (0C / 2I / 1N APPROVE),
+qa-test-coverage (0C / 1I / 1N APPROVE), style-reviewer
+(0C / 0I / 0N APPROVE). Deduplicated total: 0 CRITICAL,
+3 IMPROVEMENT, 2 NITPICK. Closures:
+
+- **arch-R2-I1** (Cauchy-Schwarz attribution to "B20" is
+  wrong; the bound originates in B21 per
+  `docs/benchmark_suite_design_b21_delta.md:231, :571,
+  :1026`): D-B24.1 corrected to cite B21 with the three
+  line references.
+- **arch-R2-I2** (landing-line table at B24.1.2 cited line
+  numbers `:457, :380, :387, :752` that were 2-5 lines past
+  the actual `render_rollup_skipped_footnote` calls):
+  re-verified against the live source; table updated to
+  `:452, :375, :382, :747, :462`.
+- **qa-R2-I1** (helper has no test that asserts the actual
+  `bootstrap_ci_method` / `bootstrap_ci_fallback_reason`
+  attribute values appear in the rendered cells; a
+  getattr-wrong-attr bug would silently render empty cells
+  and pass tests #1-#9): added test #4a
+  `test_bca_health_footnote_cell_data_reads_correct_fields`
+  pinning the cell-data path.
+- **qa-R2-N1** (no test pins the `> 120` non-truncation
+  boundary at exactly 120 chars; an off-by-one `>= 120`
+  mutation would pass #3 and #19): added test #4b
+  `test_bca_health_footnote_120_char_reason_not_truncated`.
+- **arch-R2-N1** (landing-line table precision): subsumed
+  into arch-R2-I2 since the line drift WAS the precision
+  defect. Closed.
+
+Test count after R2 closures: 22 named (20 from R1 + 2 new
+in R2); 972 collected.
+
 ## Deferred
 
 - **D-B24.1**: surface oracle BCa fallback on rollup rows
@@ -482,10 +534,11 @@ IMPROVEMENT, 5 NITPICK. Closures:
   (`"p0_at_edge"`, `"a_overshoot"`) fire when the bootstrap
   bias correction or acceleration overshoots; on the oracle
   surface (small-n, per-cell) the Cauchy-Schwarz bound from
-  B20 (`|a| <= 1/(6*sqrt(n))`) makes `a_overshoot`
-  unreachable through the canonical metric_fn, and
-  `p0_at_edge` requires a degenerate distribution rarely
-  observed with full coverage. A future "Oracle BCa health"
+  B21 (`|a| <= 1/(6*sqrt(n))`; cf.
+  `docs/benchmark_suite_design_b21_delta.md:231, :571,
+  :1026`) makes `a_overshoot` unreachable through the
+  canonical metric_fn, and `p0_at_edge` requires a degenerate
+  distribution rarely observed with full coverage. A future "Oracle BCa health"
   footnote symmetric with the main `Bootstrap CI method`
   footnote would close this gap if observed in production.
 - **D-B24.2**: introduce a separate `bootstrap_oracle_ci_method`
