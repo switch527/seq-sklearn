@@ -1,4 +1,4 @@
-"""Phase B25 per-fold CIs renderer surface tests (25 named; 33 collected).
+"""Phase B25 per-fold CIs renderer surface tests (26 named; 34 collected).
 
 Closes D-B22.1: per-fold CIs footnote across all 5
 `*_markdown_with_ci` renderers. The footnote reads EXACTLY 6
@@ -403,6 +403,12 @@ def test_per_fold_cis_footnote_120_char_reason_not_truncated() -> None:
 
 
 def test_per_fold_cis_footnote_null_metric_renders_dash() -> None:
+    """qa-R1-build-I1 closure: pin the EXACT column position of
+    the three null metric cells. Splitting the fold row on
+    ' | ' and asserting cell-by-cell catches a mutation that
+    nulls a different column (e.g. ci_method instead of
+    metric_ci_lo) while still rendering three consecutive
+    dashes at a different position."""
     row = _raw_loss_row(
         per_fold_cis=[
             _fold_ci(metric_mean=None, metric_ci_lo=None, metric_ci_hi=None)
@@ -411,9 +417,48 @@ def test_per_fold_cis_footnote_null_metric_renders_dash() -> None:
     md = render_per_fold_cis_footnote(
         [row], group_columns=("dataset_name",), header_labels=("Dataset",)
     )
-    # The fold row format: | dataset | fold | mean | lo | hi | ci_method | reason |
-    # With all three metric cells -, the row should contain `| - | - | - |`.
-    assert "| - | - | - |" in md
+    # Find the fold row (the only non-header pipe-bounded line in the section).
+    section_start = md.find(_SECTION)
+    block = md[section_start:]
+    fold_line = next(
+        ln
+        for ln in block.split("\n")
+        if ln.startswith("| fake_binary |") and "| 0 |" in ln
+    )
+    cells = [c.strip() for c in fold_line.strip("| ").split(" | ")]
+    # Expected columns: dataset | fold | metric_mean | metric_ci_lo |
+    # metric_ci_hi | ci_method | ci_fallback_reason
+    assert cells == ["fake_binary", "0", "-", "-", "-", "bca", "-"]
+
+
+def test_per_fold_cis_footnote_none_fallback_reason_renders_dash_with_non_null_metrics() -> None:
+    """qa-R1-build-I2 closure: pin that ci_fallback_reason=None
+    renders as `-` independently from the null-metric path.
+    Test #6 covers both Nones together; this isolates the
+    `ci_fallback_reason is None` branch when metric values are
+    populated."""
+    row = _raw_loss_row(
+        per_fold_cis=[
+            _fold_ci(
+                metric_mean=0.215,
+                metric_ci_lo=0.200,
+                metric_ci_hi=0.230,
+                ci_fallback_reason=None,
+            )
+        ]
+    )
+    md = render_per_fold_cis_footnote(
+        [row], group_columns=("dataset_name",), header_labels=("Dataset",)
+    )
+    section_start = md.find(_SECTION)
+    block = md[section_start:]
+    fold_line = next(
+        ln
+        for ln in block.split("\n")
+        if ln.startswith("| fake_binary |") and "| 0 |" in ln
+    )
+    cells = [c.strip() for c in fold_line.strip("| ").split(" | ")]
+    assert cells == ["fake_binary", "0", "0.2150", "0.2000", "0.2300", "bca", "-"]
 
 
 def test_per_fold_cis_footnote_float_format_4_decimals() -> None:

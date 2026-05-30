@@ -480,6 +480,51 @@ Test count after R1 closures: 25 named (was 22; +#10a,
 8 parametrize extras from #21 and #22a both across 5
 renderers).
 
+### R1 build-swarm closure
+
+R1 build swarm on commit `6633027`: code-reviewer (0C / 1I /
+1N APPROVE), qa-test-coverage (0C / 2I / 1N APPROVE),
+architecture-reviewer (0C / 0I / 1N APPROVE), style-reviewer
+(0C / 0I / 0N APPROVE). Deduplicated total: 0 CRITICAL, 3
+IMPROVEMENT, 3 NITPICK. Closures:
+
+- **qa-R1-build-I1** (test #6 `"| - | - | - |"` substring
+  doesn't pin column position; a mutation that nulls a
+  different column at a different position would survive):
+  test #6 strengthened to split the fold row on ` | ` and
+  assert the cell list equals
+  `["fake_binary", "0", "-", "-", "-", "bca", "-"]`
+  position-by-position.
+- **qa-R1-build-I2** (no test for `ci_fallback_reason=None`
+  with non-null metrics; test #6's None-reason path is
+  incidental to the null-metric path): added new test
+  `test_per_fold_cis_footnote_none_fallback_reason_renders_dash_with_non_null_metrics`
+  isolating the `ci_fallback_reason is None` branch with
+  populated metric cells.
+- **code-R1-build-I1** (helper's `or []` fallback at
+  `_bootstrap_render.py:187` unreachable from real callers;
+  the pre-filter guarantees non-None non-empty
+  `per_fold_cis`): NOT changed. The fallback is documented
+  in the helper docstring as the silent-render path for a
+  future row type lacking `per_fold_cis` entirely. Removing
+  it would contradict the documented `getattr(row,
+  "per_fold_cis", []) or []` contract. Defensive-by-design.
+- **code-R1-build-N1** (pre-existing dead `rollup_skipped:
+  list[Any] = []` init at `raw_loss.py:437`): NOT changed;
+  pre-B25, out of scope for this phase.
+- **qa-R1-build-N1** (test #8 naming "group_columns_first_key"
+  uses `model_name`): NOT changed; cosmetic. The fixture
+  passes `group_columns=("model_name",)` so `model_name`
+  IS the first key for that test's call.
+- **arch-R1-build-N1** (variable name `rollup_with_per_fold`
+  reads adjective-truncated; suggest
+  `rollup_with_per_fold_cis`): NOT changed; cosmetic;
+  matches the design's prose convention (B25.1.2) and the
+  B24 `rollup_with_fallback` precedent.
+
+Test count after R1 build-swarm closures: 26 named (was
+25; +qa-R1-build-I2 test); 1007 collected.
+
 ## Deferred
 
 - **D-B25.3**: surface `FoldCI.n_seeds` and
