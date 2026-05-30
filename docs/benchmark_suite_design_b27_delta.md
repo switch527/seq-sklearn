@@ -15,9 +15,12 @@ R-B27-2 (closes D-B26.2): compose the CI-sentinel
 `@model_validator(mode="after")` into `EnsembleLiftRollupRow`
 alongside its existing `_validate_row_count_invariants`. The
 new validator has the same body as the 4 other RollupRow
-schemas' `_validate_ci_sentinel_consistency` (B26 / D-B23.2).
-EnsembleLift becomes the 5th schema with the CI-sentinel
-invariant.
+schemas' `_validate_ci_sentinel_consistency` (B26 / D-B23.2)
+and guards ONLY the `primary_metric_*` triple. The
+`oracle_metric_*` triple is a separate partially-settable
+surface unique to EnsembleLiftRollupRow (controlled by
+`n_oracle_cells_paired` rather than `bootstrap_skipped_reason`);
+v1 of B27 keeps it out of scope and captures it as D-B27.2.
 
 R-B27-3 (closes D-B26.3): extend mixed-reject test coverage
 to all 6 partially-set combinations per schema for the
@@ -124,19 +127,48 @@ The two validators compose naturally via pydantic's
 mode="after" execution chain. Both run on every construction
 including `model_validate`.
 
-**Backward-compat audit**: the new validator is strict on
-EnsembleLiftRollupRow. Existing fixtures that construct
-EnsembleLiftRollupRow rows must satisfy the invariant.
-B17 byte-pin fixtures (non-sentinel rows with populated
-metrics): COMPATIBLE. B22/B23 schema-default zero-cell
-fixtures: must be audited. The B22 fixture audit in B26
-already added `bootstrap_skipped_reason="test_fixture"` to
-the shared `common` dict at
-`test_b22_per_fold_cis.py:217-224`, which includes the
-EnsembleLiftRollupRow row at `:264-275`. So that fixture
-is already CI-sentinel-compatible.
+**Backward-compat audit** (arch-R1-C1 + arch-R1-N1 +
+qa-R1-fixture-sweep closure): per-site enumeration of all
+12 EnsembleLiftRollupRow construction sites in
+`tests/benchmarks/`:
 
-B27.3 (fixture audit) verifies live during build.
+| Site | Pattern | Validator compat |
+|---|---|---|
+| `test_b17_byte_identity_pins.py:332` | non-sentinel | COMPATIBLE |
+| `test_b19_n_pair_grid.py:268, :328` | non-sentinel | COMPATIBLE |
+| `test_b20_oracle_delta_ci.py:248` (factory) | non-sentinel | COMPATIBLE |
+| `test_b21_bca_ci.py:638` | non-sentinel | COMPATIBLE |
+| `test_b22_per_fold_cis.py:264` (zero-cell sentinel via `common`) | sentinel | COMPATIBLE post-B26 fixture repair |
+| `test_b22_per_fold_cis.py:1235` | non-sentinel | COMPATIBLE |
+| `test_b23_b20_nits_bundle.py:84` (factory) | non-sentinel | COMPATIBLE |
+| `test_b24_bca_health_footnote.py:306` (factory) | non-sentinel | COMPATIBLE |
+| `test_b25_per_fold_cis_footnote.py:330` (factory) | non-sentinel | COMPATIBLE |
+| `test_bootstrap_manifest.py:532` | non-sentinel | COMPATIBLE |
+| `test_ensemble_lift_report_b16.py:109` (factory) | non-sentinel default | COMPATIBLE |
+| `test_ensemble_lift_report_b16.py:561` (the OR-guard mutation pin) | **invalid: populated metrics + `bootstrap_skipped_reason="all_cells_skipped_in_manifest"`** | **NOT COMPATIBLE; needs `model_construct` escape hatch** |
+
+The single problem site is the renderer OR-guard mutation
+pin at `test_ensemble_lift_report_b16.py:561`. That test
+deliberately constructs a forbidden row shape (populated
+metrics + sentinel reason) to verify the renderer's
+defensive OR guard at
+`_render_complete_table_with_ci:148` correctly falls
+through to `(no CI)`. Under the new validator the row
+cannot be constructed via the normal `EnsembleLiftRollupRow(...)`
+call.
+
+**Resolution**: rewrite the test to use pydantic v2's
+`EnsembleLiftRollupRow.model_construct(...)` documented
+validation-bypass. `model_construct` skips ALL validators
+(both `_validate_row_count_invariants` and the new
+`_validate_ci_sentinel_consistency`). The test's intent is
+to verify renderer behavior on a known-bad row shape that
+SHOULDN'T exist in production but COULD be produced by a
+hypothetical buggy aggregator; `model_construct` preserves
+that intent while letting the validator work for normal
+construction paths.
+
+B27.4 step 4 (fixture audit) verifies live during build.
 
 ## B27.3 R-B27-3 design
 
@@ -179,9 +211,15 @@ all-None-without-reason). Total reject-pair tests: 10.
    `_ENSEMBLE_LIFT_BASE` fixture helper + 2 new
    EnsembleLift reject-pair tests + happy non-sentinel +
    happy sentinel + 6 mixed parametrize entries.
-4. **Fixture audit**: run the full suite; any EnsembleLift
-   construction site that violates the CI-sentinel
-   invariant must be repaired in the same commit.
+4. **Fixture repair** (arch-R1-C1 closure): replace the
+   `_make_rollup_row(...)` call at
+   `tests/benchmarks/test_ensemble_lift_report_b16.py:561-569`
+   with `EnsembleLiftRollupRow.model_construct(...)` for
+   the same field values (the helper at `:76-131` returns
+   `EnsembleLiftRollupRow(...)`; the test must bypass
+   validators to construct the deliberately-invalid row).
+   No other repairs needed per the per-site enumeration
+   in B27.2 above.
 5. **Verify**: ruff + pyright + scoped pytest pass at
    1033 + delta.
 
@@ -210,11 +248,15 @@ Baseline B26 file: 26 named, 26 collected. Delta: -3 named,
 ### B27.5.2 Expected test delta
 
 Baseline (post-B26): 1033 tests.
-- Existing B26 file: 26 -> 23 named (-3 net from
-  parametrize consolidation).
-- Collected: 26 -> 52 (+26 from 30-way parametrize - 4
-  old mixed-reject tests).
-- Total: 1033 - 4 + 30 = 1059 collected.
+- Existing B26 file: 26 -> 23 named (qa-R1-I1 closure
+  decomposes the -3 net as: -8 old mixed-reject named
+  tests (mixed-A + mixed-B x 4 schemas) + 4 new
+  EnsembleLift named tests (happy non-sentinel + happy
+  sentinel + 2 reject-pair) + 1 new mixed-reject
+  parametrized test = -8 + 4 + 1 = -3 net named).
+- Collected delta: -8 old mixed-reject + 4 new EnsembleLift
+  + 30 mixed parametrize cases = +26 net collected.
+- Total: 1033 + 26 = 1059 collected.
 
 Net new logical assertions: 22 (4 new variants x 5 schemas
 + 2 new EnsembleLift reject-pair tests).
@@ -223,13 +265,66 @@ Net new logical assertions: 22 (4 new variants x 5 schemas
 
 | ID | Risk | Severity | Mitigation |
 |---|---|---|---|
-| R-B27-Risk-1 | The new EnsembleLiftRollupRow CI-sentinel validator rejects an existing test fixture. | Low | The B26 fixture-audit already covered the b22 schema-default tests which include the EnsembleLift construction. Other EnsembleLift fixtures in B17/B19/B20/B23 byte-pin tests construct non-sentinel rows with populated metrics. Live verification via the full suite is the gate. |
+| R-B27-Risk-1 | The new EnsembleLiftRollupRow CI-sentinel validator rejects an existing test fixture. | Medium-confirmed | R1 design swarm identified one site: `test_ensemble_lift_report_b16.py:561-569` (renderer OR-guard mutation pin) constructs an `EnsembleLiftRollupRow` with populated metrics AND `bootstrap_skipped_reason="all_cells_skipped_in_manifest"`. The repair is prescribed in B27.4 step 4: rewrite as `EnsembleLiftRollupRow.model_construct(...)` to bypass the new validator. All 11 other EnsembleLift sites are CI-sentinel-compatible per the per-site enumeration in B27.2. |
 | R-B27-Risk-2 | Composing two `@model_validator(mode="after")` on the same class causes ordering issues. | Low | Pydantic v2 documents that mode="after" validators run in declaration order. The two are independent (different field sets); ordering does not affect correctness. |
 | R-B27-Risk-3 | Test rewrite drops coverage of the original 8 mixed-reject tests. | Low | The 30-way parametrize SUPERSETS the original 8 (which were mixed-1 + mixed-2 per schema). Coverage strictly increases. |
 | R-B27-Risk-4 | Header correction in B22 design doc is a historical edit. | None | Documentation accuracy only; no behavior change. |
 
+## Addressed
+
+R1 design swarm on commit `f617ada`: architecture-reviewer
+(1C / 1I / 1N REQUEST_CHANGES), qa-test-coverage (0C / 2I /
+1N APPROVE), style-reviewer (0C / 0I / 0N APPROVE).
+Deduplicated total: 1 CRITICAL, 3 IMPROVEMENT, 2 NITPICK.
+Closures:
+
+- **arch-R1-C1** (`test_ensemble_lift_report_b16.py:561-569`
+  constructs invalid row that the new validator would
+  reject): R-B27-2 backward-compat audit rewritten with the
+  per-site enumeration; R-B27-Risk-1 elevated to
+  "Medium-confirmed" with the b16 site named; B27.4 step 4
+  prescribes the `EnsembleLiftRollupRow.model_construct(...)`
+  rewrite to bypass validators for the deliberate
+  invalid-row mutation pin.
+- **arch-R1-I1 + qa-R1-I1** (test-count delta math
+  attribution wrong: "-4 old mixed-reject" should be "-8
+  old + 4 new EnsembleLift named"): B27.5.2 rewritten with
+  the correct decomposition (-8 + 4 + 1 = -3 net named;
+  -8 + 4 + 30 = +26 net collected).
+- **qa-R1-I2** (oracle_metric_* triple on
+  EnsembleLiftRollupRow not covered by the new validator):
+  R-B27-2 scope clarified to explicitly state oracle_metric_*
+  is out of scope and controlled by n_oracle_cells_paired
+  rather than bootstrap_skipped_reason. Added deferral
+  D-B27.2 for the oracle triple's separate CI-sentinel
+  surface.
+- **arch-R1-N1** (backward-compat audit names only 3
+  fixture families): subsumed into the arch-R1-C1 closure
+  above; the per-site enumeration table now covers all 12
+  EnsembleLift construction sites.
+- **qa-R1-N1** (R-B27-Risk-3 superset claim correct as
+  written): NOT changed; reviewer confirmed the claim
+  holds.
+
+Test count after R1 closures: 23 named (no change from
+R1 draft; the delta arithmetic was clarified, not modified);
+1059 collected.
+
 ## Deferred
 
+- **D-B27.2**: extend the CI-sentinel
+  `@model_validator(mode="after")` on
+  `EnsembleLiftRollupRow` to ALSO guard the
+  `oracle_metric_*` triple. v1 of B27 scopes the new
+  validator to the `primary_metric_*` triple (matches the
+  4 other RollupRow schemas). The oracle triple is
+  controlled by `n_oracle_cells_paired` rather than
+  `bootstrap_skipped_reason`: a row with
+  `n_oracle_cells_paired == 0` has all oracle metrics None,
+  and a row with `n_oracle_cells_paired > 0` has all oracle
+  metrics set (per `bootstrap_ensemble_lift.py:320-321`).
+  A future invariant of the form `oracle_metric_* all-None
+  iff n_oracle_cells_paired == 0` would close this gap.
 - **D-B27.1**: extend the mixed-reject parametrize to cover
   ALL invalid (metric_*, bootstrap_skipped_reason) combos
   including the cross-field rejects (#17-#24). Would
