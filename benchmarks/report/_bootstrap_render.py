@@ -73,6 +73,46 @@ def render_rollup_skipped_footnote(
     return "\n".join(lines)
 
 
+def render_bca_health_footnote(
+    rollup_with_fallback: Sequence[Any],
+    *,
+    group_columns: Sequence[str] = ("dataset_name", "model_name"),
+    header_labels: Sequence[str] = ("Dataset", "Model"),
+) -> str:
+    """B24 / D-B21.1: render the 'Bootstrap CI method' footnote.
+
+    Caller pre-filters: pass only rows whose
+    `bootstrap_ci_fallback_reason` is non-None. Empty input
+    returns "" (mirrors `_render_oracle_partial_coverage_footnote`).
+
+    Each row must carry `bootstrap_ci_method: str` and
+    `bootstrap_ci_fallback_reason: str | None`. The 120-char
+    truncation matches `render_rollup_skipped_footnote`.
+    """
+    if len(group_columns) != len(header_labels):
+        raise ValueError(
+            f"group_columns and header_labels must have equal length; "
+            f"got {len(group_columns)} vs {len(header_labels)}"
+        )
+    if not rollup_with_fallback:
+        return ""
+    lines = ["### Bootstrap CI method", ""]
+    header = "| " + " | ".join([*header_labels, "ci_method", "fallback_reason"]) + " |"
+    sep = "| " + " | ".join(["---"] * (len(group_columns) + 2)) + " |"
+    lines.append(header)
+    lines.append(sep)
+    for row in rollup_with_fallback:
+        ci_method = str(getattr(row, "bootstrap_ci_method", ""))
+        reason = str(getattr(row, "bootstrap_ci_fallback_reason", None) or "")
+        if len(reason) > 120:
+            reason = reason[:117] + "..."
+        cells = [str(getattr(row, col, "")) for col in group_columns]
+        cells.extend([ci_method, reason])
+        lines.append("| " + " | ".join(cells) + " |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def folds_per_group(
     manifest: pd.DataFrame,
     *,
@@ -103,5 +143,6 @@ def folds_per_group(
 __all__ = [
     "folds_per_group",
     "format_ci_cell",
+    "render_bca_health_footnote",
     "render_rollup_skipped_footnote",
 ]

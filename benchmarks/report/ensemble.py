@@ -34,6 +34,7 @@ from benchmarks.experiments.ensemble import load_pairwise
 from benchmarks.report._bootstrap_render import (
     folds_per_group,
     format_ci_cell,
+    render_bca_health_footnote,
     render_rollup_skipped_footnote,
 )
 from benchmarks.run_manifest import load_run_manifest, run_manifest_path
@@ -374,6 +375,17 @@ def _render_with_ci_pairwise(manifest: pd.DataFrame, rollup: list[PairwiseRollup
         parts.append(
             render_rollup_skipped_footnote(
                 rollup_skipped,
+                group_columns=("dataset_name", "model_a", "model_b"),
+                header_labels=("Dataset", "Model A", "Model B"),
+            )
+        )
+
+    # B24 / D-B21.1: BCa health footnote.
+    rollup_with_fallback = [r for r in rollup if r.bootstrap_ci_fallback_reason is not None]
+    if rollup_with_fallback:
+        parts.append(
+            render_bca_health_footnote(
+                rollup_with_fallback,
                 group_columns=("dataset_name", "model_a", "model_b"),
                 header_labels=("Dataset", "Model A", "Model B"),
             )
