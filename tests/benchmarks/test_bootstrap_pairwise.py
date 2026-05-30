@@ -98,9 +98,7 @@ def _pairwise_row(
     }
 
 
-def _write_pairwise_manifest(
-    output_root: Path, rows: list[dict[str, object]]
-) -> None:
+def _write_pairwise_manifest(output_root: Path, rows: list[dict[str, object]]) -> None:
     """Persist a list of pairwise rows under {output_root}/pairwise/
     using the same shard layout as run_ensemble."""
     target_dir = pairwise_dir(output_root)
@@ -176,10 +174,21 @@ def test_aggregate_bootstrap_pairwise_rollup_classification_cells_emit_ci(
     assert row.n_cells_evaluated == 6
     assert row.n_seeds == 2
     assert row.bootstrap_skipped_reason is None
+    # B21 R1 qa-I1 closure: pin ci_method end-to-end on B6 happy path.
+    # The fallback reason is type-checked (small-N fixtures may
+    # legitimately trigger a BCa fallback to percentile).
+    assert row.bootstrap_ci_method == "bca"
+    assert row.bootstrap_ci_fallback_reason in (None, "p0_at_edge", "a_overshoot")
     # The unresampled complementarity_score values:
     expected_scores = np.array(
-        [(1.0 - 0.25) + 0.20, (1.0 - 0.30) + 0.20, (1.0 - 0.35) + 0.20,
-         (1.0 - 0.25) + 0.21, (1.0 - 0.30) + 0.21, (1.0 - 0.35) + 0.21]
+        [
+            (1.0 - 0.25) + 0.20,
+            (1.0 - 0.30) + 0.20,
+            (1.0 - 0.35) + 0.20,
+            (1.0 - 0.25) + 0.21,
+            (1.0 - 0.30) + 0.21,
+            (1.0 - 0.35) + 0.21,
+        ]
     )
     assert row.primary_metric_mean is not None
     assert row.primary_metric_ci_lo is not None
@@ -445,9 +454,7 @@ def test_aggregate_bootstrap_pairwise_rollup_respects_per_spec_n_resamples_overr
     monkeypatch.setattr(_module, "entity_block_bootstrap_ci", _capturing_primitive)
 
     env = build_run_environment(profile="smoke")
-    aggregate_bootstrap_pairwise_rollup(
-        config, output_root=output_root, env=env, manifest=manifest
-    )
+    aggregate_bootstrap_pairwise_rollup(config, output_root=output_root, env=env, manifest=manifest)
     assert captured["n_resamples"] == 137
 
 
@@ -476,5 +483,3 @@ def test_aggregate_bootstrap_pairwise_rollup_oom_gate_raises(
         aggregate_bootstrap_pairwise_rollup(
             config, output_root=output_root, env=env, manifest=manifest
         )
-
-

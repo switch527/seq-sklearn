@@ -98,6 +98,15 @@ def test_aggregate_bootstrap_rollup_classification_emits_rollup_row(
     assert row.primary_metric_ci_hi is not None
     assert row.bootstrap_rng_algorithm == "PCG64"
     assert row.bootstrap_skipped_reason is None
+    # B21 R1 qa-I1 closure: pin the audit fields end-to-end so a
+    # mutation that replaces the late-bound constant reference with
+    # a hardcoded string in the aggregator fails immediately. The
+    # fallback reason is type-checked against the documented values
+    # so a small-N happy-path fixture that triggers `p0_at_edge`
+    # (BCa fallback to percentile on concentrated distributions)
+    # still passes.
+    assert row.bootstrap_ci_method == "bca"
+    assert row.bootstrap_ci_fallback_reason in (None, "p0_at_edge", "a_overshoot")
 
 
 # --- regression path ------------------------------------------------------

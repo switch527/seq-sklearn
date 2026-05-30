@@ -134,6 +134,11 @@ def test_aggregate_bootstrap_training_time_rollup_happy_path_emits_ci(
     assert row.primary_metric_ci_hi is not None
     assert row.primary_metric_mean >= 0.0
     assert row.primary_metric_ci_lo <= row.primary_metric_mean <= row.primary_metric_ci_hi
+    # B21 R1 qa-I1 closure: pin ci_method end-to-end on B7 happy path.
+    # The fallback reason is type-checked (small-N fixtures may
+    # legitimately trigger a BCa fallback to percentile).
+    assert row.bootstrap_ci_method == "bca"
+    assert row.bootstrap_ci_fallback_reason in (None, "p0_at_edge", "a_overshoot")
 
 
 def test_aggregate_bootstrap_training_time_rollup_ci_width_nonzero_with_multiple_cells(

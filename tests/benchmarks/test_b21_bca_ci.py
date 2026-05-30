@@ -260,6 +260,23 @@ def test_bca_percentile_points_returns_a_overshoot_when_denom_at_or_below_epsilo
 
 
 # =============================================================================
+# 5b. _bca_percentile_points a_overshoot when denom_lo arm fires alone
+# =============================================================================
+
+
+def test_bca_percentile_points_returns_a_overshoot_when_denom_lo_fires_alone() -> None:
+    """R1 qa-I2 closure: pin the denom_lo arm of the OR independently.
+    With `a=-10.0`, `denom_lo = 1 - (-10) * (0 + (-1.96)) = -18.6 <=
+    eps` fires while `denom_hi = 1 - (-10) * (0 + 1.96) = 20.6` is
+    safely positive. A mutation that swapped the OR for AND would
+    survive test #5 (denom_hi fires alone) but fail here.
+    """
+    alpha_1, alpha_2, fallback = _bca_percentile_points(p0=0.5, a=-10.0, confidence=0.95)
+    assert (alpha_1, alpha_2) == pytest.approx((0.025, 0.975), abs=1e-12)
+    assert fallback == "a_overshoot"
+
+
+# =============================================================================
 # 6. _compute_acceleration_from_jackknife returns 0 on equal jackknife
 # =============================================================================
 
@@ -371,7 +388,13 @@ def test_aggregator_writes_bootstrap_ci_method_bca(
     assert len(rollup) == 1
     row = rollup[0]
     assert row.bootstrap_ci_method == "bca"
-    assert row.bootstrap_ci_fallback_reason is None
+    # B21 R1 code-I2 closure: pin BOTH main + oracle fallback reasons
+    # as type-checked audit values. Small-N happy-path fixtures may
+    # degenerate to a known fallback (e.g., `p0_at_edge` when the
+    # bootstrap distribution concentrates at the mean); the audit
+    # field write is the contract.
+    assert row.bootstrap_ci_fallback_reason in (None, "p0_at_edge", "a_overshoot")
+    assert row.bootstrap_oracle_ci_fallback_reason in (None, "p0_at_edge", "a_overshoot")
 
 
 # =============================================================================
@@ -572,7 +595,7 @@ def _make_training_time_row(*, ci_method: str, fallback: str | None) -> Training
         model_name="m",
         hardware_tier="cpu",
         task_type="binary",
-        primary_metric="train_seconds",
+        primary_metric="wall_seconds",
         n_seeds=2,
         n_cells_evaluated=4,
         n_skipped_cells=0,
@@ -658,7 +681,7 @@ def test_b21_audit_fields_survive_parquet_round_trip(tmp_path: Path) -> None:
         _make_b5_row(ci_method="bca", fallback="p0_at_edge"),
         _make_b5_row(ci_method="percentile", fallback=None),
     ]
-    write_rollup(rollup_path(b5_root), b5_rows)
+    write_rollup(b5_root, b5_rows)
     b5_loaded = load_rollup(b5_root)
     assert b5_loaded[0].bootstrap_ci_method == "bca"
     assert b5_loaded[0].bootstrap_ci_fallback_reason == "p0_at_edge"
@@ -672,7 +695,7 @@ def test_b21_audit_fields_survive_parquet_round_trip(tmp_path: Path) -> None:
         _make_pairwise_row(ci_method="bca", fallback="a_overshoot"),
         _make_pairwise_row(ci_method="percentile", fallback=None),
     ]
-    write_pairwise_rollup(pairwise_rollup_path(b6_root), b6_rows)
+    write_pairwise_rollup(b6_root, b6_rows)
     b6_loaded = load_pairwise_rollup(b6_root)
     assert b6_loaded[0].bootstrap_ci_method == "bca"
     assert b6_loaded[0].bootstrap_ci_fallback_reason == "a_overshoot"
@@ -686,7 +709,7 @@ def test_b21_audit_fields_survive_parquet_round_trip(tmp_path: Path) -> None:
         _make_training_time_row(ci_method="bca", fallback="p0_at_edge"),
         _make_training_time_row(ci_method="percentile", fallback=None),
     ]
-    write_training_time_rollup(training_time_rollup_path(b7_root), b7_rows)
+    write_training_time_rollup(b7_root, b7_rows)
     b7_loaded = load_training_time_rollup(b7_root)
     assert b7_loaded[0].bootstrap_ci_method == "bca"
     assert b7_loaded[0].bootstrap_ci_fallback_reason == "p0_at_edge"
@@ -699,7 +722,7 @@ def test_b21_audit_fields_survive_parquet_round_trip(tmp_path: Path) -> None:
         _make_hpo_uplift_row(ci_method="bca", fallback="p0_at_edge"),
         _make_hpo_uplift_row(ci_method="percentile", fallback=None),
     ]
-    write_hpo_uplift_rollup(hpo_uplift_rollup_path(b8_root), b8_rows)
+    write_hpo_uplift_rollup(b8_root, b8_rows)
     b8_loaded = load_hpo_uplift_rollup(b8_root)
     assert b8_loaded[0].bootstrap_ci_method == "bca"
     assert b8_loaded[0].bootstrap_ci_fallback_reason == "p0_at_edge"
@@ -714,7 +737,7 @@ def test_b21_audit_fields_survive_parquet_round_trip(tmp_path: Path) -> None:
         ),
         _make_ensemble_lift_row(ci_method="percentile", fallback=None, oracle_fallback=None),
     ]
-    write_ensemble_lift_rollup(ensemble_lift_rollup_path(b16_root).parent, b16_rows)
+    write_ensemble_lift_rollup(b16_root, b16_rows)
     b16_loaded = load_ensemble_lift_rollup(b16_root)
     assert b16_loaded[0].bootstrap_ci_method == "bca"
     assert b16_loaded[0].bootstrap_ci_fallback_reason == "p0_at_edge"
@@ -770,7 +793,7 @@ def test_rollup_row_schema_default_ci_method_is_percentile() -> None:
     b7 = TrainingTimeRollupRow(
         model_name="m",
         hardware_tier="cpu",
-        primary_metric="train_seconds",
+        primary_metric="wall_seconds",
         n_seeds=2,
         n_cells_evaluated=0,
         n_skipped_cells=0,
