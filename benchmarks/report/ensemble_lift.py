@@ -179,6 +179,13 @@ def _render_complete_table_with_ci(
             if rollup_row.n_oracle_cells_paired == 0:
                 oracle_ci_cell = "(no CI)"
             else:
+                # `n_pair_grid > 0` is unreachable-False under the elif
+                # branch (n_oracle_cells_paired >= 1 implies n_pair_grid
+                # >= 1 by R-B20-6), but the clause is kept parallel to
+                # the main `partial` calculation at line 166 so a future
+                # n_oracle_cells_paired=0 / n_pair_grid=0 edge does not
+                # silently fire the asterisk (R1 code-N2 closure: kept
+                # for shape consistency, documented as defensive).
                 oracle_partial = (
                     rollup_row.n_oracle_cells_paired < rollup_row.n_pair_grid
                     and rollup_row.n_pair_grid > 0

@@ -16,6 +16,11 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from benchmarks.bootstrap_manifest import (
+    EnsembleLiftRollupRow,
+    load_ensemble_lift_rollup,
+    write_ensemble_lift_rollup,
+)
 from benchmarks.config import BenchmarkConfig, ExperimentSpec
 from benchmarks.experiments import build_run_environment
 from benchmarks.experiments.ensemble_lift import (
@@ -232,9 +237,7 @@ def _make_rollup_row(
     oracle_metric_ci_lo: float | None = 0.08,
     oracle_metric_ci_hi: float | None = 0.12,
     bootstrap_skipped_reason: str | None = None,
-):
-    from benchmarks.bootstrap_manifest import EnsembleLiftRollupRow
-
+) -> EnsembleLiftRollupRow:
     return EnsembleLiftRollupRow(
         dataset_name=dataset_name,
         task_type="binary",
@@ -440,11 +443,13 @@ def test_aggregator_oracle_oom_gate_raises(
     """Pin the oracle bootstrap's defensive OOM ceiling. In production
     the main gate fires first on the equal-or-larger main array, so
     this test forces the oracle gate by stubbing
-    `entity_block_bootstrap_ci` with a side effect that drops
-    `BOOTSTRAP_ROW_COUNT_CEILING` to 0 between the main and oracle
-    bootstrap invocations. The oracle gate condition then becomes
-    `n_oracle_cells * n_resamples > 0`, which always fires for
-    positive counts."""
+    `entity_block_bootstrap_ci` with a side effect that mutates
+    `_bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING` to 0 between
+    the main and oracle invocations. The aggregator re-reads the
+    ceiling from the source module on every call (R1 arch-I1 closure:
+    late-binding seam), so the post-stub mutation flips the gate for
+    the oracle call only; `n_oracle_cells_paired * n_resamples > 0`
+    then always fires for positive counts."""
     config, output_root, manifest = _setup(tmp_path, bootstrap_n_resamples=2)
     _stub_load_run(monkeypatch, _ok_rows_both_families())
     _stub_families(monkeypatch)
@@ -457,20 +462,22 @@ def test_aggregator_oracle_oom_gate_raises(
         },
     )
 
+    import benchmarks.report._bootstrap_aggregate as _agg
     import benchmarks.report.bootstrap_ensemble_lift as _module
 
-    # Establish a monkeypatch-tracked baseline for the ceiling so the
-    # post-test revert restores it even after the side-effecting stub
-    # mutates the module attribute.
-    monkeypatch.setattr(_module, "BOOTSTRAP_ROW_COUNT_CEILING", 100)
+    # Establish a monkeypatch-tracked baseline for the source-module
+    # ceiling so the post-test revert restores it even after the
+    # side-effecting stub mutates the attribute.
+    monkeypatch.setattr(_agg, "BOOTSTRAP_ROW_COUNT_CEILING", 100)
 
     def _bootstrap_with_side_effect(
         *_args: object, **_kwargs: object
     ) -> tuple[float, float, float]:
-        # The aggregator's oracle gate reads the ceiling AFTER the
-        # main bootstrap returns; lowering it here ensures the gate
-        # fires on the oracle invocation that has not yet been called.
-        _module.BOOTSTRAP_ROW_COUNT_CEILING = 0
+        # The aggregator re-reads `_bootstrap_aggregate.
+        # BOOTSTRAP_ROW_COUNT_CEILING` on each oracle-gate check;
+        # mutating the attribute after the main bootstrap completes
+        # flips the gate for the oracle call only.
+        _agg.BOOTSTRAP_ROW_COUNT_CEILING = 0
         return (0.20, 0.15, 0.25)
 
     monkeypatch.setattr(_module, "entity_block_bootstrap_ci", _bootstrap_with_side_effect)
@@ -492,16 +499,18 @@ def test_aggregator_oracle_nan_delta_raises_via_stub(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Stub `compute_per_cell_lift_deltas` (the same monkeypatch seam
-    used by the B16 aggregator tests) to return a single
-    `PerCellLiftDelta` record whose `loss_gbm` is NaN while
-    `oracle_loss=0.30` and `delta_loss=0.20` (finite). The main
-    bootstrap's `np.isfinite(deltas).all()` guard fires FIRST in
-    production. To exercise the new oracle `np.isfinite` guard
-    structurally, the test stubs `entity_block_bootstrap_ci` to a
-    no-op so the main `delta_loss` array (finite) passes its gate
-    and runs; the oracle `loss_gbm - oracle_loss` value (NaN - 0.30
-    = NaN) trips the new oracle guard. Pins the guard message via
-    `match=` so a guard rename is caught."""
+    used by the B16 aggregator tests) to return two `PerCellLiftDelta`
+    records: the first carries `loss_gbm=NaN, oracle_loss=0.30,
+    delta_loss=0.20` (delta_loss finite; oracle delta `NaN - 0.30 =
+    NaN`); the second carries finite everything. The main
+    bootstrap's `np.isfinite(deltas).all()` guard sees `[0.20, 0.20]`
+    (finite) and passes, the real `entity_block_bootstrap_ci` runs
+    and returns a CI, and only THEN the new oracle isfinite guard
+    sees the NaN in the per-cell oracle delta array and raises. No
+    function stub is needed because the upstream-finite `delta_loss`
+    field decouples the two guards. Pins the guard message via
+    `match=` so a guard rename is caught (R1 code-I1 closure:
+    docstring corrected to match the actual injection mechanism)."""
     config, output_root, manifest = _setup(tmp_path)
     _stub_load_run(monkeypatch, _ok_rows_both_families(n_seeds=1, n_folds=1))
     _stub_families(monkeypatch)
@@ -773,3 +782,113 @@ def test_aggregator_oracle_and_main_ci_differ_under_xor_seed_offset(
         collapsed_main_lo,
         collapsed_main_hi,
     )
+
+
+# =============================================================================
+# 14. Parquet round-trip for the 4 new oracle fields (R1 qa-I1 closure)
+# =============================================================================
+
+
+def test_ensemble_lift_rollup_oracle_fields_survive_parquet_round_trip(
+    tmp_path: Path,
+) -> None:
+    """qa-I1 closure: write + load an `EnsembleLiftRollupRow` with the
+    4 new oracle fields and assert the values survive the parquet
+    round-trip. Covers a finite-CI row (happy path) and a None-CI row
+    (all-None oracle fallback) so the pd.NA -> None coercion path is
+    exercised on each nullable field independently."""
+    finite_row = EnsembleLiftRollupRow(
+        dataset_name="ds_finite",
+        task_type="binary",
+        primary_metric="delta_loss",
+        primary_loss_column="log_loss",
+        n_seeds=2,
+        n_folds=2,
+        n_cells_paired=4,
+        n_pair_grid=4,
+        n_oracle_cells_paired=3,
+        n_skipped_cells=0,
+        primary_metric_mean=0.20,
+        primary_metric_ci_lo=0.15,
+        primary_metric_ci_hi=0.25,
+        oracle_metric_mean=0.10,
+        oracle_metric_ci_lo=0.08,
+        oracle_metric_ci_hi=0.12,
+        bootstrap_seed=42,
+        bootstrap_n_resamples=10_000,
+        bootstrap_numpy_version="2.3.0",
+        bootstrap_skipped_reason=None,
+        manifest_fingerprint="f" * 64,
+    )
+    none_row = EnsembleLiftRollupRow(
+        dataset_name="ds_none",
+        task_type="binary",
+        primary_metric="delta_loss",
+        primary_loss_column="log_loss",
+        n_seeds=2,
+        n_folds=2,
+        n_cells_paired=4,
+        n_pair_grid=4,
+        n_oracle_cells_paired=0,
+        n_skipped_cells=0,
+        primary_metric_mean=0.20,
+        primary_metric_ci_lo=0.15,
+        primary_metric_ci_hi=0.25,
+        oracle_metric_mean=None,
+        oracle_metric_ci_lo=None,
+        oracle_metric_ci_hi=None,
+        bootstrap_seed=42,
+        bootstrap_n_resamples=10_000,
+        bootstrap_numpy_version="2.3.0",
+        bootstrap_skipped_reason=None,
+        manifest_fingerprint="f" * 64,
+    )
+
+    write_ensemble_lift_rollup(tmp_path, [finite_row, none_row])
+    loaded = load_ensemble_lift_rollup(tmp_path)
+
+    by_name = {row.dataset_name: row for row in loaded}
+    assert by_name["ds_finite"].n_oracle_cells_paired == 3
+    assert by_name["ds_finite"].oracle_metric_mean == pytest.approx(0.10, abs=1e-9)
+    assert by_name["ds_finite"].oracle_metric_ci_lo == pytest.approx(0.08, abs=1e-9)
+    assert by_name["ds_finite"].oracle_metric_ci_hi == pytest.approx(0.12, abs=1e-9)
+    assert by_name["ds_none"].n_oracle_cells_paired == 0
+    assert by_name["ds_none"].oracle_metric_mean is None
+    assert by_name["ds_none"].oracle_metric_ci_lo is None
+    assert by_name["ds_none"].oracle_metric_ci_hi is None
+
+
+# =============================================================================
+# 15. Renderer oracle column on rollup_row=None branch (R1 qa-I2 closure)
+# =============================================================================
+
+
+def test_renderer_oracle_ci_cell_renders_no_ci_when_rollup_row_absent_from_index() -> None:
+    """qa-I2 closure: when a dataset appears in `result.rows` but is
+    absent from the `rollup_index` (e.g., a partial parquet shard
+    after an aggregator crash), the renderer's outer branch
+    `rollup_row is None or rollup_row.bootstrap_skipped_reason is
+    not None` collapses BOTH the main Δloss CI cell AND the oracle
+    CI cell to `(no CI)`. Test #10 covers the
+    `bootstrap_skipped_reason is not None` half; this test covers
+    the `rollup_row is None` half (dataset name mismatch between
+    `result.rows` and the rollup list). A regression that moved the
+    oracle `(no CI)` emission inside the sentinel sub-branch would
+    fail this test because the main column would still render the
+    numeric interval (which is also driven by `rollup_row is None`),
+    while the oracle column would fall through to the
+    `n_oracle_cells_paired == 0` branch and miss the index-absent
+    case."""
+    result = _make_lift_result(dataset_name="ds_one")
+    # Build a rollup whose only row targets a different dataset; the
+    # renderer's `rollup_index.get("ds_one")` returns None.
+    other_row = _make_rollup_row(dataset_name="ds_other")
+    md = render_ensemble_lift_markdown_with_ci(result, [other_row])
+
+    table_row = next(line for line in md.splitlines() if "| ds_one |" in line)
+    # Both the main Δloss CI cell and the oracle CI cell render as
+    # `(no CI)` because the outer-branch short-circuit fires.
+    assert table_row.count("(no CI)") == 2
+    # Sanity: no numeric interval leaks through on either column.
+    assert "0.2000 [0.1500, 0.2500]" not in table_row
+    assert "0.1000 [0.0800, 0.1200]" not in table_row

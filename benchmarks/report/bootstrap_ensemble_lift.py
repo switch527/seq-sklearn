@@ -57,7 +57,6 @@ from benchmarks.report import _bootstrap_aggregate
 from benchmarks.report._bootstrap_aggregate import (
     BOOTSTRAP_CONFIDENCE,
     BOOTSTRAP_DEFAULT_SEED,
-    BOOTSTRAP_ROW_COUNT_CEILING,
     numpy_version,
     resolve_n_resamples,
 )
@@ -135,11 +134,12 @@ def _emit_sentinel_row(
     n_resamples: int,
     manifest_fingerprint: str,
     n_pair_grid: int,
-    n_oracle_cells_paired: int = 0,
-    oracle_metric_mean: float | None = None,
-    oracle_metric_ci_lo: float | None = None,
-    oracle_metric_ci_hi: float | None = None,
 ) -> EnsembleLiftRollupRow:
+    # B20 / D-B16.1: sentinel rows hardcode `n_oracle_cells_paired=0`
+    # and `oracle_metric_*=None`. The renderer's oracle column
+    # short-circuits to `(no CI)` on `bootstrap_skipped_reason is not
+    # None`, so these are documentary defaults; no production path
+    # emits a sentinel row with non-default oracle fields.
     return EnsembleLiftRollupRow(
         dataset_name=dataset_name,
         task_type=task_type,
@@ -149,14 +149,14 @@ def _emit_sentinel_row(
         n_folds=n_folds,
         n_cells_paired=n_cells_paired,
         n_pair_grid=n_pair_grid,
-        n_oracle_cells_paired=n_oracle_cells_paired,
+        n_oracle_cells_paired=0,
         n_skipped_cells=n_skipped_cells,
         primary_metric_mean=None,
         primary_metric_ci_lo=None,
         primary_metric_ci_hi=None,
-        oracle_metric_mean=oracle_metric_mean,
-        oracle_metric_ci_lo=oracle_metric_ci_lo,
-        oracle_metric_ci_hi=oracle_metric_ci_hi,
+        oracle_metric_mean=None,
+        oracle_metric_ci_lo=None,
+        oracle_metric_ci_hi=None,
         bootstrap_seed=BOOTSTRAP_DEFAULT_SEED,
         bootstrap_n_resamples=n_resamples,
         bootstrap_rng_algorithm=BOOTSTRAP_RNG_ALGORITHM,
@@ -248,12 +248,15 @@ def _build_dataset_rollup(
             "delta_loss; the upstream predictions shard is corrupt"
         )
 
-    if n_cells * n_resamples > BOOTSTRAP_ROW_COUNT_CEILING:
+    # Late-binding lookup via `_bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING`
+    # so tests can monkeypatch the canonical source module (mirrors the
+    # `BOOTSTRAP_ORACLE_SEED_OFFSET` seam below, B20 R1 arch-I1 closure).
+    if n_cells * n_resamples > _bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING:
         raise RawRollupError(
             f"aggregate_bootstrap_ensemble_lift_rollup: dataset="
             f"{dataset_name!r} with n_cells={n_cells} * n_resamples="
             f"{n_resamples} exceeds the bootstrap-row-count ceiling "
-            f"({BOOTSTRAP_ROW_COUNT_CEILING})"
+            f"({_bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING})"
         )
 
     entity_ids = np.arange(n_cells, dtype=np.int64)
@@ -271,13 +274,18 @@ def _build_dataset_rollup(
     # (BOOTSTRAP_DEFAULT_SEED ^ BOOTSTRAP_ORACLE_SEED_OFFSET) is mandated
     # by R-B20-2a: the PCG64 stream depends ONLY on `seed`, so sharing
     # `BOOTSTRAP_DEFAULT_SEED` with the main bootstrap would correlate
-    # the two CIs on shared cells. Late-binding lookup via
-    # `_bootstrap_aggregate.BOOTSTRAP_ORACLE_SEED_OFFSET` so the
-    # constant is monkeypatchable at the canonical source module.
-    oracle_deltas_list = [
-        cell.loss_gbm - cell.oracle_loss for cell in computed.cells if cell.oracle_loss is not None
-    ]
-    n_oracle_cells_paired = len(oracle_deltas_list)
+    # the two CIs on shared cells. Late-binding lookups via the source
+    # module so tests monkeypatch the canonical constants (R1 arch-I1
+    # closure: same seam pattern for the ceiling at line 250).
+    oracle_deltas = np.array(
+        [
+            cell.loss_gbm - cell.oracle_loss
+            for cell in computed.cells
+            if cell.oracle_loss is not None
+        ],
+        dtype=float,
+    )
+    n_oracle_cells_paired = int(oracle_deltas.shape[0])
     oracle_mean: float | None
     oracle_ci_lo: float | None
     oracle_ci_hi: float | None
@@ -286,7 +294,6 @@ def _build_dataset_rollup(
         oracle_ci_lo = None
         oracle_ci_hi = None
     else:
-        oracle_deltas = np.array(oracle_deltas_list, dtype=float)
         if not np.isfinite(oracle_deltas).all():
             raise RawRollupError(
                 f"aggregate_bootstrap_ensemble_lift_rollup: dataset="
@@ -295,15 +302,17 @@ def _build_dataset_rollup(
             )
         # Defensive even though `n_oracle_cells_paired <= n_cells` in
         # production (the main gate above fires first on the equal-or-
-        # larger main array). B20 test #5 forces this branch by stubbing
-        # the main delta path so the main gate is suppressed.
-        if n_oracle_cells_paired * n_resamples > BOOTSTRAP_ROW_COUNT_CEILING:
+        # larger main array). B20 test #5 forces this branch by
+        # mutating `BOOTSTRAP_ROW_COUNT_CEILING` between the main and
+        # oracle calls so the main gate is suppressed.
+        if n_oracle_cells_paired * n_resamples > _bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING:
             raise RawRollupError(
                 f"aggregate_bootstrap_ensemble_lift_rollup: dataset="
                 f"{dataset_name!r} with n_oracle_cells_paired="
                 f"{n_oracle_cells_paired} * n_resamples={n_resamples} "
                 f"exceeds the bootstrap-row-count ceiling "
-                f"({BOOTSTRAP_ROW_COUNT_CEILING}) on the oracle delta"
+                f"({_bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING}) "
+                "on the oracle delta"
             )
         oracle_entity_ids = np.arange(n_oracle_cells_paired, dtype=np.int64)
         oracle_mean, oracle_ci_lo, oracle_ci_hi = entity_block_bootstrap_ci(

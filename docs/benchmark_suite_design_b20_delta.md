@@ -769,9 +769,134 @@ Closures:
 - **style-R3-N1** (Title Case headings accepted as house
   style; carried unchanged from R1/R2): NOT changed.
 
+### Build R1 swarm closure
+
+Build R1 swarm on commit `b6c6496` (the initial build):
+code-reviewer (0C / 1I / 2N APPROVE), architecture-reviewer
+(0C / 3I / 2N APPROVE), qa-test-coverage (0C / 2I / 1N
+APPROVE), style-reviewer (0C / 0I / 1N APPROVE accepted
+house style). Deduplicated total: 0 CRITICAL, 6 IMPROVEMENT,
+6 NITPICK. Closures:
+
+- **arch-R1-build-I1** (asymmetric monkeypatch seam between
+  `BOOTSTRAP_ROW_COUNT_CEILING` by-name import and
+  `BOOTSTRAP_ORACLE_SEED_OFFSET` late-bound via
+  `_bootstrap_aggregate.<NAME>`; tests that monkeypatch the
+  ceiling must target the consumer module while tests that
+  monkeypatch the offset target the source module, which is
+  a future-bug shape): converted the ceiling reads at
+  `bootstrap_ensemble_lift.py:250` and `:299` to late-binding
+  `_bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING`. Both
+  constants now share the same canonical-source monkeypatch
+  seam; test #5 updated to monkeypatch
+  `_bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING` (not the
+  consumer module).
+- **arch-R1-build-I2** (`_emit_sentinel_row` widened its
+  keyword surface with 4 oracle params that have only the
+  default values exercised by any caller; production never
+  passes non-default oracle values to a sentinel row and the
+  renderer's `bootstrap_skipped_reason is not None`
+  short-circuit would discard them anyway): dropped the 4
+  new oracle keyword params; the sentinel emit now hardcodes
+  `n_oracle_cells_paired=0` and `oracle_metric_*=None`
+  inline. Test #12 still pins the contract because it
+  exercises the aggregator end-to-end through
+  `aggregate_bootstrap_ensemble_lift_rollup` (not the
+  helper directly).
+- **arch-R1-build-I3** (oracle delta materialised twice as a
+  Python list + a numpy array, where the main bootstrap path
+  materialises once): collapsed the oracle delta computation
+  to a single `np.array([...], dtype=float)` matching the
+  main path's idiom at `:241`. `n_oracle_cells_paired` is
+  read from `oracle_deltas.shape[0]`.
+- **code-R1-build-I1** (test #6 docstring claimed the test
+  stubs `entity_block_bootstrap_ci` to a no-op when the body
+  has no such stub; the test works because both injected
+  cells have `delta_loss=0.20` finite so the real main
+  bootstrap passes its `isfinite` guard, but a future
+  reader following the docstring would be misled): rewrote
+  the docstring to describe the actual mechanism (main
+  guard sees finite `delta_loss` array and passes; oracle
+  guard sees a NaN in the per-cell oracle delta array
+  derived from the NaN `loss_gbm`).
+- **qa-R1-build-I1** (parquet round-trip for the 4 new
+  oracle fields never exercised end-to-end through
+  `write_ensemble_lift_rollup` + `load_ensemble_lift_rollup`;
+  a silent schema change or pd.NA -> None coercion break on
+  the new nullable float fields would not be caught): added
+  test #14
+  `test_ensemble_lift_rollup_oracle_fields_survive_parquet_round_trip`
+  covering both a finite-CI row and an all-None oracle row.
+- **qa-R1-build-I2** (renderer `rollup_row is None` outer-
+  branch arm never tested in isolation; test #10 covers only
+  the `bootstrap_skipped_reason is not None` arm of the same
+  outer branch, so a regression that moved the oracle `(no
+  CI)` emission inside the sentinel sub-branch would be
+  masked): added test #15
+  `test_renderer_oracle_ci_cell_renders_no_ci_when_rollup_row_absent_from_index`
+  asserting BOTH the main Δloss CI cell AND the oracle CI
+  cell render as `(no CI)` when the dataset is missing from
+  the rollup index.
+- **code-R1-build-N1** (missing return annotation on
+  `_make_rollup_row` helper in test_b20): added `->
+  EnsembleLiftRollupRow` and hoisted the import to the top
+  of the file.
+- **code-R1-build-N2** (`and rollup_row.n_pair_grid > 0`
+  clause in the oracle partial-flag computation is dead
+  inside the `else` arm because the outer
+  `n_oracle_cells_paired == 0` short-circuit guarantees
+  `n_oracle_cells_paired >= 1`, which implies `n_pair_grid
+  >= 1` by R-B20-6): clause kept for shape parallelism with
+  the main `partial` calculation at line 166, with an inline
+  comment documenting why it's defensive even though
+  currently unreachable-False.
+- **arch-R1-build-N1** (test #5's "AFTER the main bootstrap
+  returns" comment overstates temporal sequencing; the
+  actual mechanism is that the gate re-reads
+  `BOOTSTRAP_ROW_COUNT_CEILING` on each invocation):
+  rephrased the comment to describe the re-read mechanism
+  explicitly.
+- **arch-R1-build-N2** (oracle vs main raise messages
+  distinguish via the "oracle delta" suffix tag which is
+  load-bearing for test #5/#6's `match=`): NOT changed. The
+  tag is consistent across both oracle raise sites
+  (isfinite + OOM) and the design's qa-R2-I1 closure
+  already mandates the explicit `match=` clause; deferred
+  under D-B20.2 below.
+- **qa-R1-build-N1** (schema does not validate the cross-
+  field invariant `n_oracle_cells_paired <= n_cells_paired`;
+  the aggregator enforces it structurally but no schema
+  backstop exists): NOT changed. The aggregator's
+  list-comprehension derives `oracle_deltas` from a subset
+  of the same `computed.cells` that drives `n_cells_paired`,
+  so the invariant is structural; adding a model validator
+  would be redundant with the aggregator-side guarantee.
+  Deferred under D-B20.3 below.
+- **style-R1-build-N1** (`# Note:` substantive comment in
+  test #6 fixture explaining direct construction of the
+  NaN-injected `PerCellLiftDelta`): NOT changed; accepted
+  as house style. The comment carries real explanatory
+  weight and is not an AI-flavored placeholder.
+
+Test count after R1 build closures: 15 tests (was 13;
+qa-R1-build-I1 added test #14, qa-R1-build-I2 added test
+#15); total `871 + 15 = 886`.
+
 ## Deferred
 
 - **D-B20.1**: explicit footnote table block for the
   oracle CI partial-coverage asterisk (coordinated with
   the existing partial-coverage footnote infrastructure).
   V1 surfaces this as the trailing asterisk only.
+- **D-B20.2** (arch-R1-build-N2): tighten the oracle vs
+  main raise-message discriminator to a stable token
+  (e.g., the literal field name `oracle_metric_*` or
+  `n_oracle_cells_paired`) instead of the prose "oracle
+  delta" suffix. Carries to a future style/contract sweep
+  on the bootstrap aggregators.
+- **D-B20.3** (qa-R1-build-N1): pydantic-level model
+  validator enforcing `n_oracle_cells_paired <=
+  n_cells_paired` on `EnsembleLiftRollupRow`. Redundant
+  with the aggregator's structural guarantee at v1; would
+  add defense-in-depth for a future refactor that drops the
+  list-comprehension shape.
