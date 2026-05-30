@@ -162,6 +162,8 @@ def test_render_pairwise_byte_identity_post_rename() -> None:
     # columns only and must NOT surface in the rendered markdown.
     assert "bootstrap_ci_method" not in md
     assert "bootstrap_ci_fallback_reason" not in md
+    # B22 / D-B22.1 deferral: per_fold_cis is also parquet-only.
+    assert "per_fold_cis" not in md
 
 
 def _make_training_time_manifest() -> pd.DataFrame:

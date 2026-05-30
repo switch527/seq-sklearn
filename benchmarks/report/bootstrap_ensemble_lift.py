@@ -164,6 +164,7 @@ def _emit_sentinel_row(
         bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
         bootstrap_ci_fallback_reason=None,
         bootstrap_oracle_ci_fallback_reason=None,
+        per_fold_cis=None,
         bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=bootstrap_skipped_reason,
         manifest_fingerprint=manifest_fingerprint,
@@ -181,6 +182,7 @@ def _build_dataset_rollup(
     n_resamples: int,
     manifest_fingerprint: str,
     n_pair_grid: int,
+    per_fold_enabled: bool,
 ) -> EnsembleLiftRollupRow:
     """One ensemble-lift rollup row per dataset.
 
@@ -272,6 +274,27 @@ def _build_dataset_rollup(
         ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
     )
 
+    # B22 / D-B16.3: per-fold CIs for the MAIN delta (oracle
+    # per-fold deferred under D-B22.2). Each PerCellLiftDelta
+    # carries `seed` and `fold_index` directly; gather them via
+    # comprehension parallel to `deltas`.
+    per_fold_cis = None
+    if per_fold_enabled:
+        per_fold_cis = _bootstrap_aggregate.compute_per_fold_cis(
+            losses=deltas,
+            entities=entity_ids,
+            fold_indices=np.array([c.fold_index for c in computed.cells], dtype=np.int64),
+            seeds=np.array([c.seed for c in computed.cells], dtype=np.int64),
+            n_resamples=n_resamples,
+            confidence=BOOTSTRAP_CONFIDENCE,
+            base_seed=BOOTSTRAP_DEFAULT_SEED,
+            fold_seed_offset=_bootstrap_aggregate.BOOTSTRAP_PER_FOLD_SEED_OFFSET,
+            ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
+            metric_fn=lambda x: float(np.nanmean(x)),
+            dataset_name=dataset_name,
+            kind="ensemble_lift",
+        )
+
     # B20 / D-B16.1: bootstrap CI on the per-sample-best oracle delta.
     # Per-cell oracle delta = `loss_gbm - oracle_loss`; drop cells where
     # `oracle_loss is None`. The DERIVED seed
@@ -359,6 +382,7 @@ def _build_dataset_rollup(
         bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
         bootstrap_ci_fallback_reason=fallback_reason,
         bootstrap_oracle_ci_fallback_reason=oracle_fallback_reason,
+        per_fold_cis=per_fold_cis,
         bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=None,
         manifest_fingerprint=manifest_fingerprint,
@@ -399,6 +423,9 @@ def aggregate_bootstrap_ensemble_lift_rollup(
         return []
 
     n_resamples = resolve_n_resamples(config.experiments, env.profile, kind="ensemble_lift")
+    per_fold_enabled = _bootstrap_aggregate.spec_has_per_fold_cis_enabled(
+        config.experiments, kind="ensemble_lift"
+    )
     manifest_fingerprint = manifest.fingerprint()
 
     rows: list[EnsembleLiftRollupRow] = []
@@ -455,6 +482,7 @@ def aggregate_bootstrap_ensemble_lift_rollup(
                 n_resamples=n_resamples,
                 manifest_fingerprint=manifest_fingerprint,
                 n_pair_grid=n_pair_grid,
+                per_fold_enabled=per_fold_enabled,
             )
         )
 

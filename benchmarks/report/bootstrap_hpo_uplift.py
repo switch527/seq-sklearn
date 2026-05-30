@@ -146,6 +146,7 @@ def _emit_sentinel_row(
         bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
         bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
         bootstrap_ci_fallback_reason=None,
+        per_fold_cis=None,
         bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=bootstrap_skipped_reason,
         manifest_fingerprint=manifest_fingerprint,
@@ -160,6 +161,7 @@ def _build_group_rollup(
     task_type: str,
     n_resamples: int,
     manifest_fingerprint: str,
+    per_fold_enabled: bool,
 ) -> HPOUpliftRollupRow:
     """One HPO-uplift rollup row per (dataset, model, task_type) group."""
     primary_loss_column = _PRIMARY_LOSS_COLUMN_BY_TASK.get(task_type, "log_loss")
@@ -294,6 +296,24 @@ def _build_group_rollup(
         ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
     )
 
+    # B22 / D-B16.3: per-fold CIs (opt-in).
+    per_fold_cis = None
+    if per_fold_enabled:
+        per_fold_cis = _bootstrap_aggregate.compute_per_fold_cis(
+            losses=deltas,
+            entities=entity_ids,
+            fold_indices=paired["fold_index"].to_numpy().astype(np.int64),
+            seeds=paired["seed"].to_numpy().astype(np.int64),
+            n_resamples=n_resamples,
+            confidence=BOOTSTRAP_CONFIDENCE,
+            base_seed=BOOTSTRAP_DEFAULT_SEED,
+            fold_seed_offset=_bootstrap_aggregate.BOOTSTRAP_PER_FOLD_SEED_OFFSET,
+            ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
+            metric_fn=lambda x: float(np.nanmean(x)),
+            dataset_name=dataset_name,
+            kind="hpo_uplift",
+        )
+
     return HPOUpliftRollupRow(
         dataset_name=dataset_name,
         model_name=model_name,
@@ -313,6 +333,7 @@ def _build_group_rollup(
         bootstrap_confidence=BOOTSTRAP_CONFIDENCE,
         bootstrap_ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
         bootstrap_ci_fallback_reason=fallback_reason,
+        per_fold_cis=per_fold_cis,
         bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=None,
         manifest_fingerprint=manifest_fingerprint,
@@ -344,6 +365,9 @@ def aggregate_bootstrap_hpo_uplift_rollup(
         return []
 
     n_resamples = resolve_n_resamples(config.experiments, env.profile, kind="hpo_uplift")
+    per_fold_enabled = _bootstrap_aggregate.spec_has_per_fold_cis_enabled(
+        config.experiments, kind="hpo_uplift"
+    )
     manifest_fingerprint = manifest.fingerprint()
 
     rows: list[HPOUpliftRollupRow] = []
@@ -363,6 +387,7 @@ def aggregate_bootstrap_hpo_uplift_rollup(
                 model_name=model_name,
                 task_type=task_type,
                 n_resamples=n_resamples,
+                per_fold_enabled=per_fold_enabled,
                 manifest_fingerprint=manifest_fingerprint,
             )
         )

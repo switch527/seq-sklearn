@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "EnsembleLiftRollupRow",
+    "FoldCI",
     "HPOUpliftRollupRow",
     "PairwiseRollupRow",
     "RollupRow",
@@ -58,6 +59,35 @@ _HPO_UPLIFT_ROLLUP_FILENAME = "bootstrap_hpo_uplift_rollup.parquet"
 _HPO_UPLIFT_AGGREGATOR_FAILED_SENTINEL_FILENAME = "bootstrap_hpo_uplift_aggregator_failed.txt"
 _ENSEMBLE_LIFT_ROLLUP_FILENAME = "bootstrap_ensemble_lift_rollup.parquet"
 _ENSEMBLE_LIFT_AGGREGATOR_FAILED_SENTINEL_FILENAME = "bootstrap_ensemble_lift_aggregator_failed.txt"
+
+
+class FoldCI(BaseModel):
+    """One per-fold bootstrap CI entry (B22 / D-B16.3).
+
+    Populated by the per-fold bootstrap helper when an aggregator
+    is run with `ExperimentSpec.bootstrap_per_fold_cis_enabled=True`.
+    `n_seeds` is the count of UNIQUE `seed` values contributing to
+    this fold; `n_entities` is the count of UNIQUE entity_ids (the
+    primitive's entity-block resample axis). The two answer
+    different questions and must be tracked independently.
+
+    `metric_mean / metric_ci_lo / metric_ci_hi` are nullable so a
+    fold with insufficient data can surface as (None, None, None)
+    rather than raising. `ci_method` + `ci_fallback_reason` parallel
+    the parent row's audit fields, surfacing BCa fallbacks per-fold
+    independently from the pooled CI's fallback state.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    fold_index: int = Field(ge=0)
+    n_seeds: int = Field(ge=0)
+    n_entities: int = Field(ge=0)
+    metric_mean: float | None = None
+    metric_ci_lo: float | None = None
+    metric_ci_hi: float | None = None
+    ci_method: str
+    ci_fallback_reason: str | None = None
 
 
 class RollupRow(BaseModel):
@@ -100,6 +130,13 @@ class RollupRow(BaseModel):
     # "a_overshoot" if the acceleration transform's
     # denominator saturated (BCa fell back to percentile).
     bootstrap_ci_fallback_reason: str | None = None
+    # B22 / D-B16.3: per-fold CIs (opt-in). None when
+    # `ExperimentSpec.bootstrap_per_fold_cis_enabled=False` OR
+    # when this row is a sentinel. A non-None list carries one
+    # FoldCI per fold with computable data (folds with zero
+    # rows are omitted). At v1 the renderer does NOT surface
+    # this field; consumers read it via load_*_rollup.
+    per_fold_cis: list[FoldCI] | None = None
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     # B13.4 Gemini-C3 freshness: the manifest fingerprint at
@@ -266,6 +303,13 @@ class PairwiseRollupRow(BaseModel):
     # "a_overshoot" if the acceleration transform's
     # denominator saturated (BCa fell back to percentile).
     bootstrap_ci_fallback_reason: str | None = None
+    # B22 / D-B16.3: per-fold CIs (opt-in). None when
+    # `ExperimentSpec.bootstrap_per_fold_cis_enabled=False` OR
+    # when this row is a sentinel. A non-None list carries one
+    # FoldCI per fold with computable data (folds with zero
+    # rows are omitted). At v1 the renderer does NOT surface
+    # this field; consumers read it via load_*_rollup.
+    per_fold_cis: list[FoldCI] | None = None
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str
@@ -310,6 +354,13 @@ class TrainingTimeRollupRow(BaseModel):
     # "a_overshoot" if the acceleration transform's
     # denominator saturated (BCa fell back to percentile).
     bootstrap_ci_fallback_reason: str | None = None
+    # B22 / D-B16.3: per-fold CIs (opt-in). None when
+    # `ExperimentSpec.bootstrap_per_fold_cis_enabled=False` OR
+    # when this row is a sentinel. A non-None list carries one
+    # FoldCI per fold with computable data (folds with zero
+    # rows are omitted). At v1 the renderer does NOT surface
+    # this field; consumers read it via load_*_rollup.
+    per_fold_cis: list[FoldCI] | None = None
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str
@@ -447,6 +498,13 @@ class HPOUpliftRollupRow(BaseModel):
     # "a_overshoot" if the acceleration transform's
     # denominator saturated (BCa fell back to percentile).
     bootstrap_ci_fallback_reason: str | None = None
+    # B22 / D-B16.3: per-fold CIs (opt-in). None when
+    # `ExperimentSpec.bootstrap_per_fold_cis_enabled=False` OR
+    # when this row is a sentinel. A non-None list carries one
+    # FoldCI per fold with computable data (folds with zero
+    # rows are omitted). At v1 the renderer does NOT surface
+    # this field; consumers read it via load_*_rollup.
+    per_fold_cis: list[FoldCI] | None = None
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str
@@ -582,6 +640,10 @@ class EnsembleLiftRollupRow(BaseModel):
     # == 0 OR when the oracle path produced BCa bounds without
     # fallback.
     bootstrap_oracle_ci_fallback_reason: str | None = None
+    # B22 / D-B16.3: per-fold CIs (opt-in). Same contract as the
+    # other 4 RollupRow schemas; surfaced for the MAIN delta only
+    # at v1 (oracle per-fold deferred under D-B22.2).
+    per_fold_cis: list[FoldCI] | None = None
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str

@@ -335,9 +335,7 @@ def render_pairwise_markdown_with_ci(
     return body
 
 
-def _render_with_ci_pairwise(
-    manifest: pd.DataFrame, rollup: list[PairwiseRollupRow]
-) -> str:
+def _render_with_ci_pairwise(manifest: pd.DataFrame, rollup: list[PairwiseRollupRow]) -> str:
     """B14.4 pairwise CI body: joins manifest + rollup and emits
     the per-dataset table with the CI column replacing the bare
     complementarity_score."""
@@ -420,9 +418,7 @@ def _render_dataset_block_with_ci(
         if rollup_row is None or rollup_row.bootstrap_skipped_reason is not None:
             ci_cell = "(no CI)"
         else:
-            n_folds = folds_index.get(
-                (summary.dataset_name, summary.model_a, summary.model_b), 0
-            )
+            n_folds = folds_index.get((summary.dataset_name, summary.model_a, summary.model_b), 0)
             expected = rollup_row.n_seeds * n_folds
             partial = rollup_row.n_cells_evaluated < expected and expected > 0
             ci_cell = format_ci_cell(
@@ -442,9 +438,7 @@ def _render_dataset_block_with_ci(
             if col == "n_samples":
                 if col in ok_block.columns:
                     total = ok_block["n_samples"].dropna()
-                    row_cells.append(
-                        str(int(total.astype(int).sum())) if not total.empty else ""
-                    )
+                    row_cells.append(str(int(total.astype(int).sum())) if not total.empty else "")
                 else:
                     row_cells.append("")
                 continue
@@ -476,9 +470,7 @@ def render_from_dir(output_root: Path) -> str:
     failure_sentinel = pairwise_aggregator_failed_sentinel_path(output_root)
     if failure_sentinel.exists():
         error_class = failure_sentinel.read_text(encoding="utf-8").strip()
-        return render_pairwise_markdown_with_ci(
-            manifest, [], aggregator_error_class=error_class
-        )
+        return render_pairwise_markdown_with_ci(manifest, [], aggregator_error_class=error_class)
 
     if pairwise_rollup_path(output_root).exists():
         rollup = load_pairwise_rollup(output_root)
