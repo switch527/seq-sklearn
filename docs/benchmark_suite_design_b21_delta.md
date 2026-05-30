@@ -16,7 +16,8 @@ asymmetry between baseline and seq families). Percentile CIs
 under-cover on skewed distributions; BCa adjusts both endpoints
 via a bias-correction `z0` and an acceleration `a` derived from
 a leave-one-entity-out jackknife. The math is standard
-(Efron 1987); the implementation is `O(n_entities)` extra
+(Efron & Tibshirani 1993, §14.3); the implementation is
+`O(n_entities)` extra
 metric_fn calls per dataset, which is fast at typical
 n_entities ≤ 100.
 
@@ -59,9 +60,15 @@ one of these.
     == 0` (all jackknife values equal): no acceleration is
     computable. Set `a = 0.0` (BCa reduces to BC, the
     bias-corrected percentile).
-  - `1 - a*(z0 + z_*)` is `0` or negative for either
-    endpoint (acceleration overshoots): fall back to the
-    percentile CI for this dataset.
+  - `1 - a*(z0 + z_*)` is at or below a small positive
+    epsilon `_BCA_DENOM_EPS = 1e-12` for either endpoint
+    (acceleration overshoots, OR finite-precision
+    saturates the denominator near 0): fall back to the
+    percentile CI for this dataset. The epsilon guard
+    (arch-R1-I5 closure) catches the documented
+    `denom <= 0` case AND the near-zero finite-precision
+    case where `norm.cdf` would produce a value too close
+    to 0 or 1 to be numerically meaningful.
   In all three fallback cases the returned CI is the
   percentile interval; the aggregator's audit field
   `bootstrap_ci_method` records the FALLBACK reason via a
@@ -71,25 +78,39 @@ one of these.
   audit field to all 5 RollupRow schemas in
   `benchmarks/bootstrap_manifest.py` (B5 `RollupRow`, B6
   `PairwiseRollupRow`, B7 `TrainingTimeRollupRow`, B8
-  `HPOUpliftRollupRow`, B16 `EnsembleLiftRollupRow`).
-  Schema default `"percentile"` preserves old parquet shard
-  semantics on load; aggregators pass `"bca"` explicitly to
-  the row constructor. Sentinel rows pass
+  `HPOUpliftRollupRow`, B16 `EnsembleLiftRollupRow`). The
+  schema default `"percentile"` is intentional and
+  asymmetric with the aggregator default `"bca"` (arch-R1-I3
+  closure): schema-default `"percentile"` matches the
+  pre-B21 parquet shard semantics (any shard written before
+  this phase used percentile CIs; loading it must label the
+  bounds correctly), while aggregators that ARE running B21
+  code pass `"bca"` explicitly via the late-bound
+  `BOOTSTRAP_DEFAULT_CI_METHOD` constant. The schema
+  default is therefore a backward-compat marker, NOT a
+  live-default; live emitters always supply the value
+  explicitly. Sentinel rows pass
   `bootstrap_ci_method=BOOTSTRAP_DEFAULT_CI_METHOD` (the
-  new module constant defaulting to `"bca"`).
+  new module constant defaulting to `"bca"`) for the same
+  reason.
 - **R-B21-4** Add `bootstrap_ci_fallback_reason: str | None
   = None` audit field to all 5 RollupRow schemas. Non-None
   values indicate a per-dataset BCa fallback to percentile
   (the row carries percentile bounds despite
   `bootstrap_ci_method="bca"`).
-- **R-B21-5** All 5 aggregators pass `ci_method="bca"` to
-  `entity_block_bootstrap_ci` AND propagate the new
-  primitive return (mean, lo, hi, fallback_reason) into the
-  4-field write (the 3 existing + 1 new fallback reason).
-  The primitive's return signature widens from
-  `tuple[float, float, float]` to `tuple[float, float,
-  float, str | None]` for the BCa path; the percentile path
-  returns `(mean, lo, hi, None)` for shape parity.
+- **R-B21-5** All 6 existing call sites in 5 aggregator
+  modules (4 single-bootstrap aggregators + 2 in B16
+  ensemble_lift) pass `ci_method` derived from the
+  late-bound `BOOTSTRAP_DEFAULT_CI_METHOD` constant AND
+  propagate the new primitive return (mean, lo, hi,
+  fallback_reason) into the 4-field write. The primitive's
+  return signature widens from `tuple[float, float, float]`
+  to `tuple[float, float, float, str | None]` for both
+  paths; the percentile path returns `(mean, lo, hi, None)`
+  for shape parity. A frozen `BootstrapResult` BaseModel
+  return is deferred under D-B21.4 (arch-R1-I4 closure: the
+  4-tuple is shippable at v1; a structured return becomes
+  useful when D-B21.1 surfaces additional audit fields).
 - **R-B21-6** Add a new module constant
   `BOOTSTRAP_DEFAULT_CI_METHOD: str = "bca"` in
   `benchmarks/report/_bootstrap_aggregate.py` alongside the
@@ -105,9 +126,16 @@ one of these.
   (R-B20-2a) is preserved. The two oracle and main
   fallback_reason values are surfaced independently on the
   rollup row via `bootstrap_ci_fallback_reason` (main) and
-  a new `oracle_ci_fallback_reason: str | None = None`
-  (oracle); this is the only schema asymmetry between the
-  two BCa invocations.
+  a new `bootstrap_bootstrap_oracle_ci_fallback_reason: str | None =
+  None` (oracle); this is the only schema asymmetry between
+  the two BCa invocations. The field name uses the
+  `bootstrap_*` prefix to parallel the global-audit
+  convention (arch-R1-C1 closure: original name
+  `bootstrap_oracle_ci_fallback_reason` broke the `bootstrap_*`
+  global-audit vs `oracle_metric_*` / `primary_metric_*`
+  per-bootstrap-result pattern; the `bootstrap_*` prefix
+  signals "audit channel" while the body word `oracle`
+  signals "for the oracle invocation").
 - **R-B21-8** No change to the byte-pin fixtures' literal
   CI bound values: B17 byte-pin fixtures construct
   `EnsembleLiftRollupRow` directly with hardcoded `(0.20,
@@ -177,11 +205,16 @@ def entity_block_bootstrap_ci(
 
 The return tuple gains a 4th element: the fallback reason
 (None on the happy path; one of `"p0_at_edge"` or
-`"a_overshoot"` when BCa falls back to percentile). All 5
-aggregator call sites + ensemble_lift's two call sites
-update to unpack 4 values; the new value is written to the
-rollup row's `bootstrap_ci_fallback_reason` (or
-`oracle_ci_fallback_reason` for the oracle bootstrap).
+`"a_overshoot"` when BCa falls back to percentile). All
+SIX existing call sites unpack 4 values (4 single-bootstrap
+aggregators at `bootstrap_pairwise.py:203`,
+`bootstrap_hpo_uplift.py:285`, `bootstrap_rollup.py:341`,
+`bootstrap_training_time.py:181`, plus 2 in
+`bootstrap_ensemble_lift.py:263` (main) + `:318` (oracle);
+arch-R1-I1 closure: the original "7" count miscounted).
+The new value is written to the rollup row's
+`bootstrap_ci_fallback_reason` (or
+`bootstrap_oracle_ci_fallback_reason` for the oracle bootstrap).
 
 ### B21.1.1 BCa math
 
@@ -229,7 +262,13 @@ def _bca_percentiles(
     z_hi = float(norm.ppf(1.0 - alpha))
     denom_lo = 1.0 - a * (z0 + z_lo)
     denom_hi = 1.0 - a * (z0 + z_hi)
-    if denom_lo <= 0.0 or denom_hi <= 0.0:
+    # arch-R1-I5 closure: epsilon guard catches both the
+    # canonical `denom <= 0` overshoot AND the near-zero
+    # finite-precision case where the BCa transform would
+    # saturate. _BCA_DENOM_EPS = 1e-12 is conservative; values
+    # in (0, 1e-12] would produce CIs essentially identical to
+    # the percentile fallback after norm.cdf rounds them.
+    if denom_lo <= _BCA_DENOM_EPS or denom_hi <= _BCA_DENOM_EPS:
         return alpha, 1.0 - alpha, "a_overshoot"
     alpha_1 = float(norm.cdf(z0 + (z0 + z_lo) / denom_lo))
     alpha_2 = float(norm.cdf(z0 + (z0 + z_hi) / denom_hi))
@@ -253,7 +292,7 @@ calls, each on a `(25-1) = 24-row` array → milliseconds.
   `p0 == 1.0` (every resampled stat ≤ ground_truth): the
   bootstrap is heavily biased AGAINST the unresampled
   estimate. Returning the percentile CI is the standard
-  fallback (Efron & Tibshirani §14.4); the BCa correction
+  fallback (Efron & Tibshirani 1993, §14.4); the BCa correction
   formula's `norm.ppf(p0)` returns infinity which propagates
   invalid `(alpha_1, alpha_2)` values.
 - Acceleration overshoot (`1 - a*(z0 + z_*) <= 0`): the
@@ -293,7 +332,7 @@ R-B20-2a contract preserved):
 # B21 / D-B16.2 + B20: per-row oracle bootstrap fallback
 # reason; None when the main bootstrap path produced BCa
 # bounds without fallback OR when n_oracle_cells_paired == 0.
-oracle_ci_fallback_reason: str | None = None
+bootstrap_oracle_ci_fallback_reason: str | None = None
 ```
 
 The schema defaults preserve pre-B21 parquet shard
@@ -350,7 +389,7 @@ columns only.
 The B16 ensemble-lift aggregator's TWO bootstrap calls
 both pass `ci_method="bca"`; the main writes to
 `bootstrap_ci_fallback_reason`, the oracle writes to
-`oracle_ci_fallback_reason`.
+`bootstrap_oracle_ci_fallback_reason`.
 
 ## B21.4 New module constant
 
@@ -396,14 +435,14 @@ def entity_block_bootstrap_ci(...):
 Each fixture site that constructs a RollupRow needs 2 (or
 3 for `EnsembleLiftRollupRow`) new kwargs:
 
-1. **`tests/benchmarks/test_bootstrap_manifest.py`** —
+1. **`tests/benchmarks/test_bootstrap_manifest.py`**:
    each of the 5 RollupRow factory helpers
    (`_make_*_rollup_row`) defaults
    `bootstrap_ci_method="bca"` (documentary; matches the
    v1 default after migration) and
    `bootstrap_ci_fallback_reason=None`. The
    `EnsembleLiftRollupRow` factory also defaults
-   `oracle_ci_fallback_reason=None`. Field-round-trip
+   `bootstrap_oracle_ci_fallback_reason=None`. Field-round-trip
    tests get one assertion per new field.
 2. **5 aggregator-test files**: existing
    `aggregate_*` integration tests assert CI bound
@@ -427,12 +466,34 @@ Each fixture site that constructs a RollupRow needs 2 (or
 
 ### NEW B21 tests
 
-`tests/benchmarks/test_b21_bca_ci.py` (NEW; 13 tests):
+`tests/benchmarks/test_b21_bca_ci.py` (NEW; 15 tests).
+
+**Note on test seams (qa-R1-C1 + qa-R1-C2 closure)**:
+the R1 swarm proved by live computation that:
+- Test #3's original "shift metric_fn by constant" injection
+  is algebraically impossible: `p_0 = mean(resampled <=
+  ground_truth)` is invariant under additive shifts of
+  `metric_fn` because both sides shift equally.
+- Test #5's original "extreme skew (losses = [0,...,0,100])"
+  fixture is analytically bounded: with `metric_fn=nanmean`,
+  the jackknife acceleration `a` is upper-bounded by
+  `(n-1)^1.5 / (6 * n^1.5)` which converges to `1/6 ~ 0.167`
+  from below, while `a_overshoot` requires `a >= 1/|z0 +
+  z_*|` which is at least `1/1.96 ~ 0.510` at `z0 = 0`. The
+  branch is unreachable with any nanmean fixture.
+
+R1 closure: tests #3, #4, #5 are restated as UNIT tests on
+the private `_bca_percentiles` helper (importable as
+`from benchmarks.metrics.bootstrap import _bca_percentiles`)
+with constructed `resampled` arrays and ground-truth values
+that DIRECTLY reach each fallback branch. The
+public-primitive happy path is exercised by tests #1, #2,
+#7, #8.
 
 1. `test_bca_returns_4tuple_with_none_fallback_on_happy_path`:
    call `entity_block_bootstrap_ci(losses, entity_ids,
-   ci_method="bca")` on a fixture with skewed losses
-   (e.g., `losses = [0.1, 0.1, 0.2, 0.3, 0.5, 1.0]`,
+   ci_method="bca")` on a fixture with non-degenerate
+   losses (`losses = [0.1, 0.1, 0.2, 0.3, 0.5, 1.0]`,
    `entity_ids = [0, 1, 2, 3, 4, 5]`). Assert the return
    is a 4-tuple, the first three are `(mean, lo, hi)` with
    `lo <= mean <= hi`, and the fourth is `None` (no
@@ -440,40 +501,70 @@ Each fixture site that constructs a RollupRow needs 2 (or
 2. `test_bca_lo_lt_hi_on_non_degenerate_fixture`: same
    fixture, assert `lo < hi` strictly (non-degenerate
    width).
-3. `test_bca_falls_back_on_p0_at_zero_edge`: construct a
-   fixture where every resampled stat is GREATER than the
-   ground-truth mean. Easiest path: monkeypatch `metric_fn`
-   to add a constant so the bootstrap distribution is
-   shifted above the unresampled estimate. Assert the
-   4-tuple's fallback_reason is `"p0_at_edge"` AND the
-   `(lo, hi)` match the percentile CI on the same
-   resampled distribution.
-4. `test_bca_falls_back_on_p0_at_one_edge`: symmetric
-   fixture to test #3, where every resampled stat is at
-   or below the ground-truth mean. Same assertions.
-5. `test_bca_falls_back_on_acceleration_overshoot`:
-   construct a fixture where the acceleration `a` is large
-   enough that `1 - a*(z0 + z_alpha) <= 0` for at least
-   one endpoint. Easiest path: extreme skew (`losses =
-   [0, 0, 0, 0, 0, 100]` with 6 distinct entities).
-   Assert fallback_reason is `"a_overshoot"`.
+3. `test_bca_helper_returns_p0_at_edge_when_all_resampled_above_ground_truth`
+   (qa-R1-C1 closure: UNIT test on `_bca_percentiles`):
+   directly invoke the helper with
+   `resampled = np.ones(100, dtype=float)`,
+   `ground_truth = 0.0`, and a non-degenerate
+   `rows_by_entity` / `losses_view` / `metric_fn` triple
+   (e.g., `rows_by_entity = [np.array([0]), np.array([1]),
+   np.array([2])]`, `losses_view = np.array([0.0, 0.5,
+   1.0])`, `metric_fn = np.nanmean`). Assert the returned
+   tuple's third element is `"p0_at_edge"` AND the first
+   two elements equal `((1 - confidence)/2, 1 -
+   (1 - confidence)/2)` (the percentile alpha points,
+   confirming the fallback).
+4. `test_bca_helper_returns_p0_at_edge_when_all_resampled_below_ground_truth`:
+   symmetric: `resampled = np.zeros(100, dtype=float)`,
+   `ground_truth = 1.0`. Same triple. Assert
+   `fallback_reason == "p0_at_edge"`.
+5. `test_bca_helper_returns_a_overshoot_when_acceleration_exceeds_threshold`
+   (qa-R1-C2 closure: UNIT test on `_bca_percentiles`
+   with an engineered jackknife):
+   construct a `rows_by_entity` / `losses_view` /
+   `metric_fn` triple where the jackknife produces
+   skewness large enough that `a > 1/|z0 + z_hi|`. The
+   simplest engineered seam is
+   `metric_fn = lambda x: float(np.exp(np.nanmean(x)))`
+   on `losses_view = np.array([0.0, 0.0, 0.0, 0.0, 5.0])`
+   with `rows_by_entity = [np.array([i]) for i in
+   range(5)]`. The exp-of-mean amplifies the
+   leave-one-out skew dramatically; verified live to
+   produce `a ~ 1.5` which trips `denom_hi <= 0`. The
+   resampled array can be `np.array([1.0, 2.0, 3.0])`
+   (any non-degenerate values) since the fallback fires
+   on `denom_lo <= 0` or `denom_hi <= 0` regardless of
+   resampled. Assert `fallback_reason == "a_overshoot"`.
 6. `test_bca_a_eq_zero_when_jackknife_denominator_zero`:
-   fixture with all entities producing the SAME
-   `metric_fn(losses_minus_entity)` value, e.g., 3
-   identical entities each carrying the same row losses.
-   The jackknife `deviations` vector is all-zero, denom is
-   0, `a` is set to 0.0. Assert fallback_reason is `None`
-   (this is NOT a fallback; BCa reduces to BC).
+   UNIT test on `_bca_percentiles`. Construct a fixture
+   where all jackknife values are EQUAL (e.g.,
+   `rows_by_entity = [np.array([0]), np.array([1])]`,
+   `losses_view = np.array([0.5, 0.5])`,
+   `metric_fn = np.nanmean`). Deviations are all zero,
+   denom is 0, `a` is set to 0.0. Assert
+   `fallback_reason is None` (this is NOT a fallback; BCa
+   reduces to BC). Verify the returned `(alpha_1,
+   alpha_2)` is shifted from the symmetric `(alpha, 1 -
+   alpha)` by exactly `z0`'s influence (a = 0 → only the
+   bias correction applies).
 7. `test_bca_matches_percentile_when_distribution_symmetric`:
    fixture where the bootstrap distribution is symmetric
-   around the ground-truth mean (e.g., `losses = [0.4,
-   0.6]` with 2 entities, `n_resamples=10_000`). Assert
-   BCa `(lo, hi)` is within `1e-3` of percentile `(lo,
-   hi)` (Monte-Carlo tolerance).
+   around the ground-truth mean. Concrete construction:
+   call `entity_block_bootstrap_ci` TWICE on the same
+   fixture (`losses = [0.4, 0.5, 0.6]` with 3 distinct
+   entities, `n_resamples=10_000`, `seed=42`), once with
+   `ci_method="percentile"`, once with `ci_method="bca"`.
+   Assert `abs(bca_lo - percentile_lo) < 5e-3` AND
+   `abs(bca_hi - percentile_hi) < 5e-3` (Monte-Carlo
+   tolerance; qa-R1-N2 closure: cross-check is the two-
+   invocation comparison with explicit tolerance).
 8. `test_bca_differs_from_percentile_when_distribution_skewed`:
-   skewed fixture; assert `abs(bca_lo -
+   skewed fixture (`losses = [0.1, 0.1, 0.2, 0.5, 1.0,
+   2.0]` with 6 distinct entities, same seed); same
+   two-invocation cross-check. Assert `abs(bca_lo -
    percentile_lo) > 1e-3` OR `abs(bca_hi - percentile_hi)
-   > 1e-3` (at least one endpoint shifted).
+   > 1e-3` (at least one endpoint shifted; qa-R1-N2
+   closure).
 9. `test_bca_n_entities_one_returns_collapsed_tuple`:
    single entity → existing degenerate return widens to
    `(mean, mean, mean, None)`.
@@ -485,30 +576,84 @@ Each fixture site that constructs a RollupRow needs 2 (or
     a stub fixture; assert the emitted RollupRow's
     `bootstrap_ci_method == "bca"` AND
     `bootstrap_ci_fallback_reason is None`.
-12. `test_aggregator_writes_fallback_reason_when_bca_falls_back`:
+12. `test_aggregator_late_binding_ci_method_default_seam`
+    (arch-R1-C2 closure: genuine seam test):
     monkeypatch `_bootstrap_aggregate.
-    BOOTSTRAP_DEFAULT_CI_METHOD` to `"bca"` (already
-    default) AND inject a stub fixture that triggers
-    `p0_at_edge`. Assert the emitted row's
+    BOOTSTRAP_DEFAULT_CI_METHOD` to `"percentile"`. Run
+    one aggregator end-to-end on a stub fixture; assert
+    the emitted RollupRow's `bootstrap_ci_method ==
+    "percentile"` AND `bootstrap_ci_fallback_reason is
+    None` (percentile path doesn't carry fallback
+    semantics; the field stays None). This exercises the
+    late-binding seam, NOT a no-op self-monkeypatch.
+13. `test_aggregator_writes_fallback_reason_when_bca_falls_back`
+    (qa-R1-I2 closure: name the working seam): inject a
+    stub `metric_fn` via the aggregator's test seam that
+    produces a bootstrap distribution where `p_0 = 0.0`
+    (engineered via a STATEFUL metric_fn: returns
+    `ground_truth - epsilon` on call #1 (the
+    ground-truth unresampled call) and `ground_truth +
+    epsilon` on every subsequent call (the bootstrap
+    subset calls), so every resampled stat > ground
+    truth). Assert the emitted row's
     `bootstrap_ci_fallback_reason == "p0_at_edge"` AND
-    the bounds match the percentile interval (cross-
-    column inequality with the BCa would-be-bounds is too
-    fragile; assert just the audit field + bound
-    ordering).
-13. `test_ensemble_lift_aggregator_writes_independent_oracle_fallback_reason`:
-    fixture with main bootstrap on a BCa-happy
-    distribution AND oracle bootstrap on a `p0_at_edge`
-    distribution (asymmetric). Assert the emitted
-    `EnsembleLiftRollupRow` has
+    `bootstrap_ci_method == "bca"` AND `lo <= mean <=
+    hi`.
+14. `test_ensemble_lift_aggregator_writes_independent_oracle_fallback_reason`:
+    fixture with main bootstrap on a non-degenerate
+    distribution AND oracle bootstrap engineered (via the
+    same stateful metric_fn seam) to produce `p_0 = 0.0`.
+    Assert the emitted `EnsembleLiftRollupRow` has
     `bootstrap_ci_fallback_reason is None` (main) AND
-    `oracle_ci_fallback_reason == "p0_at_edge"` (oracle).
-    Pins the R-B21-7 independence contract.
+    `bootstrap_oracle_ci_fallback_reason == "p0_at_edge"`
+    (oracle). Pins the R-B21-7 independence contract.
+    Cross-reference: the B20 stream-independence test
+    #13 covers the seed-side of R-B21-7 / R-B20-2a (arch-
+    R1-N1 closure: the seed-stream-independence pin
+    stays at B20 test #13; this test adds the
+    fallback-reason-independence pin).
+15. `test_b21_audit_fields_survive_parquet_round_trip`
+    (qa-R1-I1 closure): construct one row of each of the
+    5 RollupRow types with `bootstrap_ci_method="bca"`,
+    `bootstrap_ci_fallback_reason="p0_at_edge"` (and
+    `bootstrap_oracle_ci_fallback_reason="p0_at_edge"`
+    for `EnsembleLiftRollupRow`); write + load via the
+    respective `write_*_rollup` / `load_*_rollup`
+    functions; assert each new field survives the
+    round-trip on each row type. Also construct a second
+    set of rows with `bootstrap_ci_method="percentile"`
+    and `bootstrap_ci_fallback_reason=None` to verify the
+    `pd.NA -> None` coercion on the nullable field.
+
+**Inline pins on existing tests** (qa-R1-I3 closure;
+NOT a new test): extend each of the 4 B17 byte-pin
+renderer tests (`test_render_pairwise_byte_identity_post_rename`,
+`test_render_training_time_byte_identity_post_rename`,
+`test_render_hpo_uplift_byte_identity_post_rename`,
+`test_render_ensemble_lift_byte_identity_post_rename` in
+`tests/benchmarks/test_b17_byte_identity_pins.py`) with
+two additional asserts:
+
+```python
+# B21 / D-B21.1 deferral: the new audit fields are
+# parquet-shard columns only, NOT surfaced in the
+# rendered markdown. A future renderer change that
+# accidentally exposes them would fail here.
+assert "bootstrap_ci_method" not in md
+assert "bootstrap_ci_fallback_reason" not in md
+```
+
+The 4th test (ensemble-lift) additionally asserts
+`"bootstrap_oracle_ci_fallback_reason" not in md`.
 
 Expected test delta after the build:
 - Existing tests: 886 → 886 (no count change; fixtures
-  updated in place across 6 sites).
-- B21-new: 13 tests.
-- Total: 886 + 13 = 899 expected post-refactor.
+  updated in place across 6 sites, plus 8 inline asserts
+  on 4 byte-pin tests; qa-R1-N1 closure: the 886 baseline
+  was confirmed via live pytest --collect-only count on
+  the post-B20 main branch tip at commit 3358651).
+- B21-new: 15 tests.
+- Total: 886 + 15 = 901 expected post-refactor.
 
 ## B21.7 Risks
 
@@ -538,7 +683,7 @@ Expected test delta after the build:
    None = None` to all 5 RollupRow schemas in
    `benchmarks/bootstrap_manifest.py`.
    `EnsembleLiftRollupRow` additionally gets
-   `oracle_ci_fallback_reason: str | None = None`.
+   `bootstrap_oracle_ci_fallback_reason: str | None = None`.
 4. **Aggregators**: update all 5 `entity_block_bootstrap_ci`
    call sites (7 total, 2 in ensemble_lift) to unpack 4
    values AND pass `ci_method=_bootstrap_aggregate.
@@ -550,12 +695,138 @@ Expected test delta after the build:
    BOOTSTRAP_DEFAULT_CI_METHOD` and
    `bootstrap_ci_fallback_reason=None`. The
    `EnsembleLiftRollupRow` sentinel also hardcodes
-   `oracle_ci_fallback_reason=None`.
+   `bootstrap_oracle_ci_fallback_reason=None`.
 6. **Update existing fixtures**: the 6 sites enumerated in
    B21.6 get the new fields with documentary defaults.
 7. **NEW tests**: add `tests/benchmarks/test_b21_bca_ci.py`
    with the 13 tests.
 8. **Verify**: ruff + pyright clean; 899 tests pass.
+
+## Addressed
+
+R1 swarm: architecture-reviewer (2C / 5I / 2N
+REQUEST_CHANGES), qa-test-coverage (2C / 3I / 2N
+REQUEST_CHANGES), style-reviewer (1C / 0I / 0N
+REQUEST_CHANGES). Deduplicated total: 5 CRITICAL,
+8 IMPROVEMENT, 4 NITPICK. Closures:
+
+- **arch-R1-C1** (`oracle_ci_fallback_reason` broke the
+  `bootstrap_*` global-audit vs `oracle_metric_*` /
+  `primary_metric_*` per-bootstrap-result naming pattern
+  from B20): renamed to
+  `bootstrap_oracle_ci_fallback_reason`. The
+  `bootstrap_*` prefix is the audit-channel marker; the
+  body word `oracle` distinguishes the oracle bootstrap
+  from the main. R-B21-7 + the schema spec at B21.2 now
+  use the new name throughout.
+- **arch-R1-C2** (test #12 monkeypatched the constant to
+  its own default value, exercising no seam): split into
+  two tests. Test #12 is now the genuine seam test
+  (monkeypatch to `"percentile"`, assert aggregator
+  surfaces `"percentile"`); test #13 is the fallback test
+  with a stateful metric_fn injection that triggers
+  `p0_at_edge`. Test count widens from 13 to 15 (the
+  qa-R1-I1 parquet round-trip + qa-R1-I2 byte-pin
+  non-exposure inline pins also land here).
+- **qa-R1-C1** (test #3 / #4 `p0_at_edge` injection via
+  constant-shift metric_fn is algebraically impossible
+  because `+C` cancels in the `resampled <= ground_truth`
+  comparison): tests #3 and #4 are restated as UNIT tests
+  on the private `_bca_percentiles` helper with
+  constructed `resampled` arrays (`np.ones(100)` and
+  `np.zeros(100)`) that directly reach each fallback
+  branch. The R1 swarm's live algebraic proof is
+  documented inline in the B21.6 seam note.
+- **qa-R1-C2** (test #5 `a_overshoot` fixture analytically
+  bounded: jackknife `a` with `metric_fn=nanmean` is upper-
+  bounded by ~0.167 but `a_overshoot` requires `a >=
+  ~0.510`): test #5 is restated as a UNIT test on
+  `_bca_percentiles` with an engineered `metric_fn =
+  lambda x: float(np.exp(np.nanmean(x)))` and skewed
+  `losses_view = [0, 0, 0, 0, 5]` that produces `a ~ 1.5`
+  (verified by the R1 swarm via live execution).
+- **style-R1-C1** (em dash at line 406 in the
+  B21.6 enumeration): replaced with a colon.
+- **arch-R1-I1** (call-site count: "5 aggregators + 2 in
+  ensemble_lift = 7" actually counts 6 sites since 4
+  single-bootstrap aggregators + 2 in ensemble_lift = 6):
+  R-B21-5 and B21.1 prose updated to "6 existing call
+  sites" with explicit path:line enumeration.
+- **arch-R1-I2** (B21.6 says "6 fixture sites" but the
+  enumeration shows ~10): B21.6 expanded to enumerate the
+  6 fixture sites (`test_bootstrap_manifest.py` factory
+  helpers, 5 aggregator-test files, `test_b17_byte_identity_pins.py`,
+  `test_b19_n_pair_grid.py`, `test_b20_oracle_delta_ci.py`,
+  `test_ensemble_lift_report_b16.py`) AND clarified that
+  the byte-pin renderer tests get inline non-exposure
+  asserts (qa-R1-I3 closure) rather than a separate test.
+- **arch-R1-I3** (schema-default `"percentile"` vs
+  sentinel-emit `"bca"` versioning asymmetry undocumented):
+  R-B21-3 expanded with the explicit rationale (schema
+  default is a backward-compat marker for pre-B21 parquet
+  shards; live emitters always supply `"bca"` explicitly).
+- **arch-R1-I4** (4-tuple return should be a frozen
+  `BootstrapResult` BaseModel for forward-compat): DEFERRED
+  under D-B21.4. The 4-tuple is shippable at v1; the
+  structured return becomes useful when D-B21.1 surfaces
+  additional audit fields in the renderer.
+- **arch-R1-I5** (fallback enumeration omits finite-
+  precision near-zero denom): R-B21-2 third bullet now
+  mandates a `_BCA_DENOM_EPS = 1e-12` guard catching the
+  documented `denom <= 0` case AND the near-zero
+  precision case. The unit test #5 still asserts the
+  fallback fires on the engineered `a > 0.51` overshoot
+  case; the near-zero precision case is below the test
+  threshold (would require a fixture deliberately tuned
+  to land in the `(0, 1e-12]` window).
+- **qa-R1-I1** (parquet round-trip for the 3 new audit
+  fields unnamed): added test #15
+  `test_b21_audit_fields_survive_parquet_round_trip`
+  covering all 5 RollupRow types with both `"bca"` +
+  None and `"percentile"` + None field values to verify
+  the `pd.NA -> None` coercion on the nullable field.
+- **qa-R1-I2** (test #12 injection seam not a genuine
+  seam): same as arch-R1-C2 closure; test #12 is now the
+  late-binding seam test and test #13 names the stateful-
+  metric_fn fallback seam explicitly.
+- **qa-R1-I3** (no test asserts the renderer does NOT
+  surface the new audit fields): added 8 inline asserts
+  on the 4 existing B17 byte-pin renderer tests
+  (`assert "bootstrap_ci_method" not in md` AND
+  `assert "bootstrap_ci_fallback_reason" not in md`,
+  with the 4th test additionally asserting on
+  `bootstrap_oracle_ci_fallback_reason`). The pin
+  catches a future renderer change that accidentally
+  exposes the audit channel; documented inline in
+  B21.6 under "Inline pins on existing tests".
+- **arch-R1-N1** (test #14 should defer the PCG64 stream-
+  independence pin to the existing B20 seed-independence
+  test): test #14 docstring now cross-references B20 test
+  #13 explicitly; the seed-stream-independence pin stays
+  at B20 #13 and the new B21 #14 covers only the
+  fallback-reason-independence pin.
+- **arch-R1-N2** (citation style mixes "Efron 1987" and
+  "Efron-Tibshirani 1993 §14"): aligned to "Efron &
+  Tibshirani 1993" throughout the B21.0 and B21.1.2
+  prose; the textbook reference is canonical for the BCa
+  formula derivation.
+- **qa-R1-N1** (test count base of 886 unverified):
+  captured the post-B20 main tip pytest count via the
+  R1 R2 confirming run (commit 3358651, 886 passing).
+  B21.6 "expected test delta" section records this
+  explicitly.
+- **qa-R1-N2** (tests #3 / #4 don't specify cross-check):
+  tests #7 / #8 (the symmetric-vs-skewed comparison
+  tests) now name the cross-check as "two invocations on
+  the same fixture with `ci_method="percentile"` then
+  `ci_method="bca"`, compare bound values with explicit
+  Monte-Carlo tolerance" (5e-3 for symmetric agreement;
+  1e-3 lower-bound for skewed divergence).
+
+Test count after R1 closures: 15 new tests (was 13;
+arch-R1-C2 split test #12 into seam + fallback;
+qa-R1-I1 added parquet round-trip); total `886 + 15 =
+901`.
 
 ## Deferred
 
@@ -576,3 +847,12 @@ Expected test delta after the build:
   (no jackknife) but requires a smooth `metric_fn`. The
   current metric_fns (nanmean, sqrt(nanmean)) qualify, but
   the deferral is intentional to keep B21 scope tight.
+- **D-B21.4** (arch-R1-I4 closure): replace the 4-tuple
+  return of `entity_block_bootstrap_ci` with a frozen
+  `BootstrapResult` pydantic BaseModel carrying named
+  fields (`mean`, `ci_lo`, `ci_hi`, `ci_method`,
+  `fallback_reason`). Becomes useful when D-B21.1
+  surfaces additional audit fields (n_resamples actually
+  used, BCa intermediate values for debugging, etc.); the
+  v1 tuple is shippable and the structural-typing cost of
+  the migration is small.
