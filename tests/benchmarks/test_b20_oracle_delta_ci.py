@@ -1,15 +1,22 @@
 """Phase B20 D-B16.1 oracle Δ CI tests.
 
-Covers the 13 named tests from `docs/benchmark_suite_design_b20_delta.md`
-section B20.3. Six tests exercise the aggregator's new per-cell oracle Δ
-bootstrap path (happy path, partial coverage, all-None fallback, sign
-convention vs cross-wire, OOM gate, NaN guard); five tests exercise the
-CI-variant renderer's oracle CI column (rendering, partial asterisk
-fires + suppresses, sentinel + zero-paired branches); one test pins the
-sentinel-emit helper's oracle defaults; one test pins the
-`BOOTSTRAP_DEFAULT_SEED ^ BOOTSTRAP_ORACLE_SEED_OFFSET` derived-seed
-mechanism (R-B20-2a) by re-running under offset=0 and asserting CI
-bounds collapse.
+Covers the 13 design-named tests from
+`docs/benchmark_suite_design_b20_delta.md` section B20.3, plus two
+tests added in the Build R1 swarm closure (qa-R1-build-I1 +
+qa-R1-build-I2). Total: 15 tests.
+
+Six tests exercise the aggregator's new per-cell oracle Δ bootstrap
+path (happy path, partial coverage, all-None fallback, sign
+convention vs cross-wire, OOM gate, NaN guard); five tests exercise
+the CI-variant renderer's oracle CI column (rendering, partial
+asterisk fires + suppresses, sentinel + zero-paired branches); one
+test pins the sentinel-emit helper's oracle defaults; one test pins
+the `BOOTSTRAP_DEFAULT_SEED ^ BOOTSTRAP_ORACLE_SEED_OFFSET`
+derived-seed mechanism (R-B20-2a) by re-running under offset=0 and
+asserting CI bounds collapse. Tests #14 + #15 cover the parquet
+round-trip for the 4 new oracle fields and the renderer's
+`rollup_row is None` outer-branch arm (dataset present in
+`result.rows` but absent from the rollup index).
 """
 
 from pathlib import Path

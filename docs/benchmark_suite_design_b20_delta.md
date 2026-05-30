@@ -192,39 +192,45 @@ mean, ci_lo, ci_hi = entity_block_bootstrap_ci(
     deltas, entity_ids, n_resamples=n_resamples, ...
 )
 
-# NEW B20 / D-B16.1: bootstrap on the per-cell oracle Δ
-oracle_deltas_list = [
-    cell.loss_gbm - cell.oracle_loss
-    for cell in computed.cells
-    if cell.oracle_loss is not None
-]
-n_oracle_cells_paired = len(oracle_deltas_list)
+# NEW B20 / D-B16.1 (post Build R1 arch-I3 collapse):
+# single-pass np.array materialisation matching the main path's
+# idiom; n_oracle_cells_paired = oracle_deltas.shape[0].
+oracle_deltas = np.array(
+    [
+        cell.loss_gbm - cell.oracle_loss
+        for cell in computed.cells
+        if cell.oracle_loss is not None
+    ],
+    dtype=float,
+)
+n_oracle_cells_paired = int(oracle_deltas.shape[0])
 if n_oracle_cells_paired == 0:
     oracle_mean = None
     oracle_ci_lo = None
     oracle_ci_hi = None
 else:
-    oracle_deltas = np.array(oracle_deltas_list, dtype=float)
     if not np.isfinite(oracle_deltas).all():
         raise RawRollupError(
             f"aggregate_bootstrap_ensemble_lift_rollup: dataset="
             f"{dataset_name!r} has a paired cell with a non-finite "
             "oracle delta; the upstream predictions shard is corrupt"
         )
-    if n_oracle_cells_paired * n_resamples > BOOTSTRAP_ROW_COUNT_CEILING:
-        # arch-R1-I2 closure: this guard is defensive even though
-        # n_oracle_cells_paired <= n_cells_paired in production
-        # (the main bootstrap's gate at the line above would fire
-        # first on the equal-or-larger main array). Test #5 forces
-        # it by stubbing the main delta path to <=1 record so the
-        # main gate is suppressed, leaving the oracle path the
-        # only one that can trip the ceiling.
+    # arch-R1-I2 closure: defensive even though
+    # n_oracle_cells_paired <= n_cells_paired in production (the
+    # main bootstrap's gate above fires first on the equal-or-
+    # larger main array). Test #5 forces this branch by mutating
+    # `BOOTSTRAP_ROW_COUNT_CEILING` between the main and oracle
+    # calls so the main gate is suppressed.
+    if (
+        n_oracle_cells_paired * n_resamples
+        > _bootstrap_aggregate.BOOTSTRAP_ROW_COUNT_CEILING
+    ):
         raise RawRollupError(...)
     oracle_entity_ids = np.arange(n_oracle_cells_paired, dtype=np.int64)
     oracle_mean, oracle_ci_lo, oracle_ci_hi = entity_block_bootstrap_ci(
         oracle_deltas, oracle_entity_ids,
         n_resamples=n_resamples, confidence=BOOTSTRAP_CONFIDENCE,
-        seed=BOOTSTRAP_DEFAULT_SEED ^ BOOTSTRAP_ORACLE_SEED_OFFSET,
+        seed=BOOTSTRAP_DEFAULT_SEED ^ _bootstrap_aggregate.BOOTSTRAP_ORACLE_SEED_OFFSET,
     )
 ```
 
@@ -239,11 +245,15 @@ streams because `seed` is the only parameter that
 determines the `np.random.PCG64(seed)` state and the XOR
 ensures the two seeds differ.
 
-The `_emit_sentinel_row` helper gets 4 new defaulted
-parameters: `oracle_metric_mean=None`,
-`oracle_metric_ci_lo=None`, `oracle_metric_ci_hi=None`,
-`n_oracle_cells_paired=0`. Sentinel emit sites pass nothing
-(use the defaults).
+The `_emit_sentinel_row` helper hardcodes the 4 oracle fields
+inline (`n_oracle_cells_paired=0` and `oracle_metric_*=None`)
+per Build R1 arch-I2 closure: the helper originally took the
+4 oracle fields as defaulted keyword parameters, but every
+caller used the defaults and the renderer's
+`bootstrap_skipped_reason is not None` short-circuit discards
+any non-default value, so widening the signature added no
+production value. Test #12 still pins the sentinel-emit
+contract end-to-end via `aggregate_bootstrap_ensemble_lift_rollup`.
 
 ## B20.2 Renderer changes
 
@@ -565,8 +575,10 @@ tests):
 Expected test delta after the build:
 - Existing tests: 871 to 871 (no count change; fixtures
   updated in place).
-- B20-new: 13 tests.
-- Total: 871 + 13 = 884 expected post-refactor.
+- B20-new: 13 tests (this section), plus 2 added in the
+  Build R1 swarm closure (qa-R1-build-I1 + qa-R1-build-I2;
+  see the closure block below).
+- Total: 871 + 15 = 886 actual post-build.
 
 ## B20.4 Risks
 
@@ -597,8 +609,13 @@ Expected test delta after the build:
    bootstrap, compute the per-cell oracle Δ array and run
    the second bootstrap using
    `seed=BOOTSTRAP_DEFAULT_SEED ^ BOOTSTRAP_ORACLE_SEED_OFFSET`.
-   Add the 4 new kwargs to `_emit_sentinel_row` with
-   `None` / `0` defaults.
+   The `_emit_sentinel_row` helper hardcodes the 4 oracle
+   fields inline (Build R1 arch-I2 closure: the helper was
+   originally specified to take 4 defaulted keyword params
+   but no caller ever overrode them and the renderer
+   discards any non-default value via the sentinel short-
+   circuit; widening the signature added no production
+   value).
 4. **Renderer**: in
    `benchmarks/report/ensemble_lift.py`'s
    `_render_complete_table_with_ci`, replace
@@ -612,8 +629,10 @@ Expected test delta after the build:
    the qa-R1-N2 closure values.
 6. **NEW tests**: add
    `tests/benchmarks/test_b20_oracle_delta_ci.py` with the
-   13 tests.
-7. **Verify**: ruff + pyright clean; 884 tests pass.
+   13 tests (Build R1 qa-I1 + qa-I2 closures added test #14
+   for parquet round-trip and test #15 for the renderer's
+   `rollup_row is None` outer-branch arm; 15 tests total).
+7. **Verify**: ruff + pyright clean; 886 tests pass.
 
 ## Addressed
 
@@ -881,6 +900,66 @@ house style). Deduplicated total: 0 CRITICAL, 6 IMPROVEMENT,
 Test count after R1 build closures: 15 tests (was 13;
 qa-R1-build-I1 added test #14, qa-R1-build-I2 added test
 #15); total `871 + 15 = 886`.
+
+### Build R2 swarm closure
+
+R2 confirming swarm on commit `4b44322` (post Build R1 fixes):
+code-reviewer (0C / 0I / 1N APPROVE), architecture-reviewer
+(0C / 0I / 2N APPROVE), qa-test-coverage (0C / 1I / 2N
+APPROVE), style-reviewer (0C / 0I / 1N APPROVE accepted
+house style). Deduplicated total: 0 CRITICAL, 1 IMPROVEMENT
+(re-raised carry-forward), 5 NITPICK. Closures:
+
+- **code-R2-build-N1** (test_b20_oracle_delta_ci.py module
+  docstring still reads "Covers the 13 named tests" after
+  R1 added tests #14 + #15): updated to "15 tests" with an
+  explicit note that #14 + #15 are R1 build closures.
+- **arch-R2-build-N1** (B20.1 pseudocode block at the
+  design body still showed the two-pass list +
+  np.array materialisation pattern and the bare
+  `BOOTSTRAP_ROW_COUNT_CEILING` reference, both fixed by
+  R1 arch-I3 and arch-I1): rewrote the B20.1 pseudocode to
+  match the post-R1 single-pass `np.array(..., dtype=
+  float)` shape and the `_bootstrap_aggregate.<NAME>` late-
+  binding references.
+- **arch-R2-build-N2** (B20.1 prose at "_emit_sentinel_row
+  helper gets 4 new defaulted parameters" still described
+  the pre-R1 widened signature; B20.5 step 3 + step 7 still
+  pointed at 884 tests + 13 NEW tests): rewrote to describe
+  the post-R1 hardcoded inline implementation and updated
+  step 7 to "886 tests pass" + step 6 to "15 tests total".
+- **qa-R2-build-I1** (re-raised the code-R1-build-N2
+  observation about the `and rollup_row.n_pair_grid > 0`
+  defensive clause being unreachable-False under the
+  `else` arm; the qa agent reframed it as a coverage
+  observation): the underlying clause is structurally
+  unreachable-False BY THEOREM
+  (`n_oracle_cells_paired >= 1` implies `n_pair_grid >= 1`
+  by R-B20-6), so the branch cannot be exercised by any
+  test fixture. The R1 code-R1-build-N2 closure documented
+  this in-place with a clarifying inline comment at
+  `benchmarks/report/ensemble_lift.py:182-188`; the qa
+  agent itself acknowledged "presents no silent-failure
+  risk in its current form (it evaluates to False
+  regardless)." No further action; the closure stands as
+  the durable artifact.
+- **qa-R2-build-N2** (test #15's `table_row.count("(no
+  CI)") == 2` assertion is brittle to a future column
+  injection between the main Δloss CI cell and the oracle
+  CI cell): NOT changed. The qa agent itself flagged this
+  as below the action threshold: the negative assertions
+  (`"0.2000 [0.1500, 0.2500]" not in table_row` AND
+  `"0.1000 [0.0800, 0.1200]" not in table_row`) provide
+  independent discriminators on each column's content. A
+  future column addition would require a companion test
+  update as a matter of course; the count assertion
+  remains the simpler and more readable form for the v1
+  9-column layout.
+- **style-R2-build-N1** (pre-accepted house-style `#
+  Note:` comment): unchanged.
+
+Test count after R2 closures: 15 tests; total `871 + 15 =
+886`.
 
 ## Deferred
 
