@@ -50,7 +50,7 @@ one of these.
   OOM gate) to use stable discriminator tokens that test
   `match=` clauses pin against. Specifically:
   - Replace `"on the oracle delta"` suffixes with prefixes
-    that name the schema field: `"oracle_metric_*:"` for the
+    that name the schema field: `"oracle_metric_mean:"` for the
     isfinite guard message and
     `"n_oracle_cells_paired:"` for the OOM gate message.
   - Update B20 tests #5 (`test_aggregator_oracle_oom_gate_raises`)
@@ -59,17 +59,19 @@ one of these.
     `match=r"oracle_metric_\*:"` respectively. The new
     `match=` tokens are stable schema-field names rather than
     prose.
-- **R-B23-3** (D-B20.3): add a pydantic `@model_validator`
-  on `EnsembleLiftRollupRow` enforcing
-  `n_oracle_cells_paired <= n_cells_paired` AND
-  `n_oracle_cells_paired <= n_pair_grid` (both
-  cross-field invariants are structurally true in the v1
-  aggregator). The validator raises a pydantic
-  `ValueError` (which pydantic wraps into `ValidationError`)
-  with a deterministic message naming both fields. Sentinel
-  rows are exempt because `n_cells_paired=0` AND
-  `n_oracle_cells_paired=0` AND `n_pair_grid=0` all satisfy
-  the invariants trivially.
+- **R-B23-3** (D-B20.3 + arch-R1-I1 closure): add a
+  pydantic `@model_validator` on `EnsembleLiftRollupRow`
+  enforcing THREE cross-field invariants (all
+  structurally true in the v1 aggregator + assumed by the
+  v1 renderer at `ensemble_lift.py:166`):
+  - `n_oracle_cells_paired <= n_cells_paired`
+  - `n_oracle_cells_paired <= n_pair_grid`
+  - `n_cells_paired <= n_pair_grid` (B19 peer invariant)
+  The validator raises a pydantic `ValueError` (which
+  pydantic wraps into `ValidationError`) with a
+  deterministic message naming both fields. Sentinel rows
+  are exempt because all three counts are 0 in the
+  sentinel emit, satisfying the invariants trivially.
 - **R-B23-4** No new schema fields. No new module-level
   constants. No new ExperimentSpec flags. The bundle is
   purely behavioral on existing surfaces.
@@ -140,7 +142,7 @@ Post-B23 messages (with stable schema-name tokens):
 ```python
 # isfinite guard
 raise RawRollupError(
-    f"aggregate_bootstrap_ensemble_lift_rollup: oracle_metric_*: "
+    f"aggregate_bootstrap_ensemble_lift_rollup: oracle_metric_mean: "
     f"dataset={dataset_name!r} has a paired cell with a "
     "non-finite oracle delta; the upstream predictions shard "
     "is corrupt"
@@ -176,12 +178,14 @@ class EnsembleLiftRollupRow(BaseModel):
     ...
 
     @model_validator(mode="after")
-    def _validate_oracle_cells_bounded(self) -> "EnsembleLiftRollupRow":
-        # B23 / D-B20.3: structural invariant from the B16
-        # aggregator's list-comprehension. The oracle bootstrap
-        # operates on a subset of the paired cells; the count is
-        # bounded by both n_cells_paired and n_pair_grid (the
-        # intersection cardinality from B19).
+    def _validate_row_count_invariants(self) -> "EnsembleLiftRollupRow":
+        # B23 / D-B20.3 + arch-R1-I1 closure: three structural
+        # invariants from the v1 B16 aggregator (the oracle
+        # bootstrap operates on a subset of the paired cells; the
+        # paired cells are a subset of the intersection grid).
+        # The renderer at ensemble_lift.py:166 already assumes
+        # `n_cells_paired <= n_pair_grid` (the partial-coverage
+        # flag computation).
         if self.n_oracle_cells_paired > self.n_cells_paired:
             raise ValueError(
                 f"n_oracle_cells_paired ({self.n_oracle_cells_paired}) "
@@ -192,12 +196,17 @@ class EnsembleLiftRollupRow(BaseModel):
                 f"n_oracle_cells_paired ({self.n_oracle_cells_paired}) "
                 f"exceeds n_pair_grid ({self.n_pair_grid})"
             )
+        if self.n_cells_paired > self.n_pair_grid:
+            raise ValueError(
+                f"n_cells_paired ({self.n_cells_paired}) "
+                f"exceeds n_pair_grid ({self.n_pair_grid})"
+            )
         return self
 ```
 
-Sentinel rows trivially satisfy both invariants because
-their `n_cells_paired = n_pair_grid = n_oracle_cells_paired
-= 0`.
+Sentinel rows trivially satisfy all three invariants
+because their `n_cells_paired = n_pair_grid =
+n_oracle_cells_paired = 0`.
 
 ## B23.1 Renderer changes
 
@@ -205,38 +214,23 @@ In `benchmarks/report/ensemble_lift.py`:
 
 ```python
 def _render_oracle_partial_coverage_footnote(
-    rows: list[PerDatasetLift],
-    rollup_index: dict[str, EnsembleLiftRollupRow],
+    affected: list[tuple[str, int, int, int]],
 ) -> str:
     """B23 / D-B20.1: markdown footnote block for the oracle
-    CI partial-coverage asterisk."""
-    affected: list[tuple[str, int, int, int]] = []
-    for row in rows:
-        rollup_row = rollup_index.get(row.dataset_name)
-        if rollup_row is None or rollup_row.bootstrap_skipped_reason is not None:
-            continue
-        if (
-            rollup_row.n_oracle_cells_paired < rollup_row.n_pair_grid
-            and rollup_row.n_pair_grid > 0
-        ):
-            affected.append(
-                (
-                    row.dataset_name,
-                    rollup_row.n_oracle_cells_paired,
-                    rollup_row.n_pair_grid,
-                    rollup_row.n_pair_grid - rollup_row.n_oracle_cells_paired,
-                )
-            )
+    CI partial-coverage asterisk. Pure renderer; caller
+    pre-filters the affected rows (arch-R1-I3 closure: filter
+    at the call site, mirrors the existing
+    `_render_partial_coverage_footnote` pattern)."""
     if not affected:
         return ""
-    affected.sort(key=lambda t: t[0])
+    affected_sorted = sorted(affected, key=lambda t: t[0])
     lines = [
         "### Oracle partial-coverage footnotes",
         "",
         "| dataset | n_oracle_cells_paired | n_pair_grid | n_missing |",
         "| --- | --- | --- | --- |",
     ]
-    for dataset_name, n_oracle, n_grid, n_missing in affected:
+    for dataset_name, n_oracle, n_grid, n_missing in affected_sorted:
         lines.append(
             f"| {dataset_name} | {n_oracle} | {n_grid} | {n_missing} |"
         )
@@ -244,10 +238,34 @@ def _render_oracle_partial_coverage_footnote(
     return "\n".join(lines)
 ```
 
-The new helper is called from `_render_with_ci` immediately
-after the complete-rows table is appended. The function
-returns `""` on the happy path so existing reports remain
-byte-equivalent when no oracle partial flag fires.
+The caller in `_render_with_ci` filters affected rows
+before calling the helper:
+
+```python
+# Inside _render_with_ci, after the complete-rows table:
+affected_oracle: list[tuple[str, int, int, int]] = []
+for row in complete:
+    rollup_row = rollup_index.get(row.dataset_name)
+    if rollup_row is None or rollup_row.bootstrap_skipped_reason is not None:
+        continue
+    if (
+        rollup_row.n_oracle_cells_paired < rollup_row.n_pair_grid
+        and rollup_row.n_pair_grid > 0
+    ):
+        affected_oracle.append(
+            (
+                row.dataset_name,
+                rollup_row.n_oracle_cells_paired,
+                rollup_row.n_pair_grid,
+                rollup_row.n_pair_grid - rollup_row.n_oracle_cells_paired,
+            )
+        )
+table_parts.append(_render_oracle_partial_coverage_footnote(affected_oracle))
+```
+
+The function returns `""` on the happy path so existing
+reports remain byte-equivalent when no oracle partial flag
+fires.
 
 ## B23.2 Aggregator changes
 
@@ -279,19 +297,27 @@ invariants loads cleanly.
     `match=r"oracle_metric_\*:.*non-finite oracle delta"`
     (preserves the body content check + adds the new
     discriminator prefix).
-  - 5 fixture sites that construct `EnsembleLiftRollupRow`
+  - 12 fixture sites construct `EnsembleLiftRollupRow`
     directly (in `test_b17_byte_identity_pins.py`,
     `test_b19_n_pair_grid.py`, `test_b20_oracle_delta_ci.py`,
+    `test_b21_bca_ci.py`, `test_b22_per_fold_cis.py`,
     `test_bootstrap_manifest.py`,
-    `test_ensemble_lift_report_b16.py`): no changes needed.
-    The existing default values satisfy
-    `n_oracle_cells_paired <= n_cells_paired AND <=
-    n_pair_grid` (e.g., `n_oracle_cells_paired=6,
-    n_cells_paired=6, n_pair_grid=6` in the B20 factory).
-  - Sites where a fixture sets
-    `n_oracle_cells_paired > n_cells_paired` deliberately
-    (e.g., to test the schema): NONE exist in the v1 suite
-    by audit.
+    `test_ensemble_lift_report_b16.py`). Eleven satisfy
+    the new validator. ONE site requires repair
+    (arch-R1-C1 + qa-R1-C1 closure):
+    `tests/benchmarks/test_b17_byte_identity_pins.py:339-350`
+    sets `n_cells_paired=1, n_oracle_cells_paired=2,
+    n_pair_grid=2` so the main Δloss CI cell's
+    mandatory-asterisk regex fires on `n_cells_paired <
+    n_pair_grid`. The `n_oracle_cells_paired=2 >
+    n_cells_paired=1` combination violates the new
+    validator. Fix: change to `n_oracle_cells_paired=1`
+    (matches the new floor `<= n_cells_paired=1`). The
+    B17 byte-pin regex targets the main Δloss column only
+    and is indifferent to the oracle cell content; the
+    oracle column will have its own partial asterisk
+    (because `n_oracle_cells_paired (1) < n_pair_grid (2)`)
+    but the regex still matches.
 
 ## B23.5 NEW B23 tests
 
@@ -310,12 +336,19 @@ tests).
    all rows have `n_oracle_cells_paired == n_pair_grid`.
    Assert the rendered markdown does NOT contain
    `"Oracle partial-coverage footnotes"`.
-3. `test_renderer_oracle_partial_footnote_skips_sentinel_rows`:
-   one sentinel row (`bootstrap_skipped_reason="no_gbm_predictions"`)
-   AND one happy-path row with no oracle asterisk. Assert
-   no footnote block. The sentinel row's
-   `n_pair_grid=0` so it would not satisfy
-   `n_pair_grid > 0`; the helper short-circuits.
+3. `test_renderer_oracle_partial_footnote_skips_sentinel_rows`
+   (qa-R1-I4 closure: the actual short-circuit mechanism is
+   `bootstrap_skipped_reason is not None`, NOT `n_pair_grid
+   == 0`; the `all_cells_skipped_in_manifest` sentinel can
+   carry a non-zero `n_pair_grid`. Parametrize over all
+   three sentinel reasons):
+   for each of `("no_gbm_predictions", "no_seq_predictions",
+   "all_cells_skipped_in_manifest")`, construct a fixture
+   with one sentinel row (with `n_pair_grid=4` to defeat the
+   wrong "zero-grid" rationale) AND one happy-path row with
+   no oracle asterisk. Assert the rendered markdown does NOT
+   contain `"Oracle partial-coverage footnotes"` in any of
+   the three sentinel cases.
 4. `test_renderer_oracle_partial_footnote_sorts_by_dataset_name`:
    two affected rows with dataset names `"z_alpha"` and
    `"a_beta"`. Assert the footnote table lists `"a_beta"`
@@ -349,13 +382,40 @@ tests).
     construct a sentinel row with
     `n_cells_paired=0, n_oracle_cells_paired=0,
     n_pair_grid=0`. Assert the row constructs successfully
-    (sentinel trivially satisfies both invariants).
+    (sentinel trivially satisfies all three invariants).
+
+**Additional R1 closure tests (qa-R1-I1 + qa-R1-I3 +
+arch-R1-I1)**:
+
+11. `test_renderer_oracle_partial_footnote_mixed_partial_and_full_rows`
+    (qa-R1-I1 closure): construct a fixture with three
+    rows: one fully paired (`n_oracle == n_pair_grid`),
+    one partially paired (`n_oracle < n_pair_grid`), one
+    sentinel. Assert the footnote table contains exactly
+    one row (the partially-paired dataset), NOT the
+    fully-paired or sentinel rows. Kills a filter
+    predicate mutation that would over-include the
+    fully-paired row.
+12. `test_ensemble_lift_validator_accepts_positive_equality_boundary`
+    (qa-R1-I3 closure): construct a row with
+    `n_cells_paired=5, n_oracle_cells_paired=5,
+    n_pair_grid=5`. Assert construction succeeds. Kills a
+    mutation that changes `>` to `>=` in any of the three
+    validator clauses.
+13. `test_ensemble_lift_validator_rejects_n_cells_paired_exceeds_n_pair_grid`
+    (arch-R1-I1 closure): construct a row with
+    `n_cells_paired=5, n_oracle_cells_paired=0,
+    n_pair_grid=4`. Assert
+    `pytest.raises(ValidationError, match=r"n_cells_paired.*exceeds n_pair_grid")`.
+    Pins the third invariant added by arch-R1-I1.
 
 Expected test delta after the build:
 - Existing tests: 930 → 930 (B20 tests #5 and #6 are
-  updated in place; no count change).
-- B23-new: 10 tests.
-- Total: 930 + 10 = 940 expected post-refactor.
+  updated in place; B17 byte-pin fixture's
+  `n_oracle_cells_paired` value changes from 2 to 1; no
+  count change).
+- B23-new: 13 tests.
+- Total: 930 + 13 = 943 expected post-refactor.
 
 ## B23.6 Risks
 
@@ -381,12 +441,84 @@ Expected test delta after the build:
    `_render_with_ci` immediately after the complete-rows
    table per R-B23-1.
 4. **Update existing tests**: B20 tests #5 and #6 get
-   updated `match=` clauses; no other test changes needed
-   per B23.4 audit.
+   updated `match=` clauses; the B17 byte-pin fixture at
+   `tests/benchmarks/test_b17_byte_identity_pins.py:339-350`
+   gets `n_oracle_cells_paired` changed from 2 to 1
+   (arch-R1-C1 + qa-R1-C1 closure).
 5. **NEW tests**: add
-   `tests/benchmarks/test_b23_b20_nits_bundle.py` with the
-   10 tests.
-6. **Verify**: ruff + pyright clean; 940 tests pass.
+   `tests/benchmarks/test_b23_b20_nits_bundle.py` with 13
+   tests (10 design-named + 3 R1 closures: arch-R1-I1
+   added #13, qa-R1-I1 added #11, qa-R1-I3 added #12).
+6. **Verify**: ruff + pyright clean; 943 tests pass.
+
+## Addressed
+
+R1 design swarm: architecture-reviewer (1C / 4I / 2N
+REQUEST_CHANGES), qa-test-coverage (1C / 3I / 1N
+REQUEST_CHANGES), style-reviewer (0C / 0I / 0N APPROVE).
+Deduplicated total: 1 CRITICAL (raised by both arch and
+qa), 6 IMPROVEMENT, 3 NITPICK. Closures:
+
+- **arch-R1-C1 + qa-R1-C1** (the B17 byte-pin fixture at
+  `tests/benchmarks/test_b17_byte_identity_pins.py:339-350`
+  sets `n_cells_paired=1, n_oracle_cells_paired=2,
+  n_pair_grid=2`; the new validator rejects
+  `n_oracle_cells_paired (2) > n_cells_paired (1)`. The
+  B23.4 "no changes needed" audit was wrong): B23.4
+  rewritten to enumerate 12 fixture sites and call out the
+  B17 fixture as the ONE site requiring repair. Fix: change
+  `n_oracle_cells_paired=1` (matches the new floor). The
+  byte-pin regex matches the main Δloss column only and is
+  indifferent to the oracle cell content.
+- **arch-R1-I1** (R-B23-3 omits the peer
+  `n_cells_paired <= n_pair_grid` invariant which is
+  structurally guaranteed by the aggregator and already
+  assumed by the renderer at `ensemble_lift.py:166`):
+  R-B23-3 expanded to enforce THREE cross-field
+  invariants. Added test #13 pinning the third invariant.
+- **arch-R1-I2** (`oracle_metric_*:` is a glob, not a real
+  schema field name; a grep for `oracle_metric_mean` will
+  not find it, defeating the "rename safety" claim):
+  raise-message prefix changed to `oracle_metric_mean:`
+  throughout the design + test #6 `match=` clause.
+- **arch-R1-I3** (helper folds sentinel filter inside;
+  existing `_render_partial_coverage_footnote` pattern
+  filters at the call site): B23.1 pseudocode rewritten to
+  filter at the `_render_with_ci` call site and pass
+  pre-filtered tuples to a pure-render helper.
+- **arch-R1-I4** (test #3 narrative claims sentinel rows
+  are skipped because `n_pair_grid=0`; the actual mechanism
+  is `bootstrap_skipped_reason is not None`; the
+  `all_cells_skipped_in_manifest` sentinel can carry a
+  non-zero `n_pair_grid`): test #3 rewritten as a
+  parametrize over all three sentinel reasons with
+  `n_pair_grid=4` to defeat the wrong rationale.
+- **qa-R1-I1** (no test for >2 affected rows with mixed
+  partial/full coverage): added test #11 with three rows
+  (one fully paired, one partially paired, one sentinel)
+  asserting the footnote contains exactly the partially-
+  paired row.
+- **qa-R1-I3** (positive-equality boundary at validator
+  not tested; `>` → `>=` mutation would survive): added
+  test #12 constructing a row with `n_cells_paired=5,
+  n_oracle_cells_paired=5, n_pair_grid=5` and asserting
+  construction succeeds.
+- **arch-R1-N1 + qa-R1-N1** (930 baseline + tests #6/#7
+  redundancy): the 930 baseline was confirmed via live
+  pytest on the post-B22 main tip; tests #6/#7 ARE the
+  new behavioral pin for the prefix tokens (B20 tests #5
+  / #6 still pin the body content). The two pin different
+  things: B20 tests pin the body, B23 tests #6/#7 pin the
+  new prefix.
+- **arch-R1-N2** (cosmetic bullet formatting): NOT
+  changed.
+- **qa-R1-I2** (sentinel-reason parametrize over all 3):
+  same as arch-R1-I4 closure; test #3 now covers all
+  three.
+
+Test count after R1 closures: 13 new tests (was 10;
+arch-R1-I1 added #13, qa-R1-I1 added #11, qa-R1-I3 added
+#12); total `930 + 13 = 943`.
 
 ## Deferred
 
