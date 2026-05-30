@@ -559,13 +559,36 @@ def test_render_ensemble_lift_with_ci_renders_no_ci_when_rollup_row_has_skipped_
     the bare-equality `not in md` assertion on the numeric
     string then kills the mutation."""
     result = _make_lift_result((_make_per_dataset_row(),))
+    # B27 / D-B26.2 closure: post-B27 the EnsembleLiftRollupRow
+    # CI-sentinel validator rejects "all-set metrics + populated
+    # bootstrap_skipped_reason" via normal construction. This
+    # mutation pin deliberately constructs the invalid shape to
+    # verify the renderer's defensive OR guard, so use
+    # `model_construct` to bypass both validators (also the
+    # B23 row-count validator).
     rollup = [
-        _make_rollup_row(
+        EnsembleLiftRollupRow.model_construct(
+            dataset_name="ds_one",
+            task_type="binary",
+            primary_metric="delta_loss",
+            primary_loss_column="log_loss",
+            n_seeds=2,
+            n_folds=2,
+            n_cells_paired=4,
+            n_pair_grid=4,
+            n_oracle_cells_paired=4,
+            n_skipped_cells=0,
             primary_metric_mean=0.40,
             primary_metric_ci_lo=0.35,
             primary_metric_ci_hi=0.45,
-            n_cells_paired=4,
+            oracle_metric_mean=0.10,
+            oracle_metric_ci_lo=0.08,
+            oracle_metric_ci_hi=0.12,
+            bootstrap_seed=42,
+            bootstrap_n_resamples=10_000,
+            bootstrap_numpy_version="2.3.0",
             bootstrap_skipped_reason="all_cells_skipped_in_manifest",
+            manifest_fingerprint="f" * 64,
         ),
     ]
     md = render_ensemble_lift_markdown_with_ci(result, rollup)
