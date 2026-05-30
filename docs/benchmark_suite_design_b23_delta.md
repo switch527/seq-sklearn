@@ -563,7 +563,8 @@ R1 build swarm on commit `745fcf3`: code-reviewer
 (0C / 1I / 2N APPROVE), qa-test-coverage (1C / 2I / 2N
 REQUEST_CHANGES), architecture-reviewer (0C / 3I / 2N
 APPROVE), style-reviewer (0C / 0I / 0N APPROVE).
-Deduplicated total: 1 CRITICAL, 6 IMPROVEMENT, 6 NITPICK.
+Deduplicated total: 1 CRITICAL, 5 IMPROVEMENT, 6 NITPICK
+(code-I1 dedupes into build-R1-C1).
 Closures:
 
 - **build-R1-C1 + code-I1** (test #3's
@@ -647,14 +648,17 @@ is 16 (test #3 parametrized 3 ways). Total
   audit channel.
 - **D-B23.2**: extend cross-field `@model_validator`
   coverage to the other 4 RollupRow schemas (B5 raw-loss,
-  B6 holdout-loss, B7 hpo-uplift, B8 cv-uplift). Candidate
-  invariants include `n_cells_evaluated <= n_seeds *
-  n_folds` and `n_skipped_cells + n_cells_evaluated ==
-  n_seeds * n_folds`. v1 of B23 is scoped to the B20-named
-  D-B20.3 invariant on `EnsembleLiftRollupRow` only;
-  `n_pair_grid` is exclusive to that schema, so the other
-  4 invariants are structurally distinct and warrant their
-  own audit pass.
+  B6 holdout-loss, B7 hpo-uplift, B8 cv-uplift). Only
+  `HPOUpliftRollupRow` carries an `n_folds` field, so the
+  `n_cells_evaluated <= n_seeds * n_folds` form applies
+  there; `RollupRow`, `PairwiseRollupRow`, and
+  `TrainingTimeRollupRow` need invariants designed
+  against their own field set (`n_cells_evaluated <=
+  n_seeds` is one candidate). v1 of B23 is scoped to the
+  B20-named D-B20.3 invariant on `EnsembleLiftRollupRow`
+  only; `n_pair_grid` is exclusive to that schema, so the
+  other 4 invariants are structurally distinct and warrant
+  their own audit pass.
 - **D-B23.3**: remove the internal `if not affected:
   return ""` guard at
   `benchmarks/report/ensemble_lift.py:490-491` since the

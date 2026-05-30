@@ -1,9 +1,12 @@
-"""Phase B23 D-B20 NITs bundle tests (13 tests).
+"""Phase B23 D-B20 NITs bundle tests (14 named; 16 collected).
 
 Covers the three small B20 deferrals:
-- D-B20.1: renderer oracle CI partial-coverage footnote (#1-#5 + #11)
+- D-B20.1: renderer oracle CI partial-coverage footnote (#1-#5 + #5b + #11)
 - D-B20.2: stable raise-message discriminator tokens (#6, #7)
 - D-B20.3: cross-field invariant validator (#8, #9, #10, #12, #13)
+
+Test #3 is parametrized over 3 sentinel reasons; #5b was added
+in the R1 build-swarm closure for qa-I2.
 """
 
 from pathlib import Path
@@ -231,9 +234,11 @@ def test_renderer_oracle_partial_footnote_fires_when_oracle_cells_zero_and_grid_
     by design (0 of 4 oracle cells paired). The trigger predicate
     `n_oracle_cells_paired < n_pair_grid AND n_pair_grid > 0`
     evaluates true; the footnote fires with `n_missing=4`. The
-    asterisk on the oracle CI cell at `ensemble_lift.py:189-192`
-    uses the identical predicate, so the two surfaces stay
-    coherent."""
+    footnote covers a strictly wider domain than the
+    per-cell-asterisk path: the oracle CI cell at
+    `ensemble_lift.py:179-180` short-circuits to `"(no CI)"` when
+    `n_oracle_cells_paired == 0` and never reaches the asterisk
+    branch at `:189-192`, while the footnote fires regardless."""
     result = _make_lift_result(["ds_zero_oracle"])
     rollup = [
         _make_rollup_row(
