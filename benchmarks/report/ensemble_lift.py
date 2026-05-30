@@ -503,7 +503,15 @@ def _render_with_ci(
 
 def _render_partial_coverage_footnote(rollup: list[EnsembleLiftRollupRow]) -> str:
     """Footnote listing per-dataset n_skipped_cells / n_cells_paired
-    when any non-sentinel rollup row has a positive skipped count."""
+    when any non-sentinel rollup row has a positive skipped count.
+
+    B26 / D-B23.3 + D-B24.3 closure: empty-input early return
+    matches the sibling helpers
+    (`_render_oracle_partial_coverage_footnote`,
+    `render_bca_health_footnote`, `render_per_fold_cis_footnote`).
+    """
+    if not rollup:
+        return ""
     lines = ["### Partial coverage", ""]
     lines.append("| Dataset | n_skipped_cells / n_cells_paired |")
     lines.append("| --- | --- |")

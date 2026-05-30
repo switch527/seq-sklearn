@@ -146,6 +146,43 @@ class RollupRow(BaseModel):
     # warning footnote.
     manifest_fingerprint: str
 
+    @model_validator(mode="after")
+    def _validate_ci_sentinel_consistency(self) -> "RollupRow":
+        # B26 / D-B23.2 closure: CI-sentinel invariant.
+        # Sentinel rows have all three metric fields None +
+        # bootstrap_skipped_reason populated; non-sentinel rows
+        # have all three metric fields non-None +
+        # bootstrap_skipped_reason None. Catches a future
+        # aggregator bug that emits a half-populated row.
+        metric_fields = (
+            self.primary_metric_mean,
+            self.primary_metric_ci_lo,
+            self.primary_metric_ci_hi,
+        )
+        all_none = all(f is None for f in metric_fields)
+        all_set = all(f is not None for f in metric_fields)
+        if not (all_none or all_set):
+            raise ValueError(
+                "primary_metric_mean, primary_metric_ci_lo, and "
+                "primary_metric_ci_hi must be all-None or all-non-None; "
+                f"got mean={self.primary_metric_mean!r}, "
+                f"ci_lo={self.primary_metric_ci_lo!r}, "
+                f"ci_hi={self.primary_metric_ci_hi!r}"
+            )
+        if all_none and self.bootstrap_skipped_reason is None:
+            raise ValueError(
+                "primary_metric_* are all None but "
+                "bootstrap_skipped_reason is None; sentinel rows must "
+                "populate bootstrap_skipped_reason"
+            )
+        if all_set and self.bootstrap_skipped_reason is not None:
+            raise ValueError(
+                "primary_metric_* are all populated but "
+                "bootstrap_skipped_reason is set; non-sentinel rows "
+                "must have bootstrap_skipped_reason=None"
+            )
+        return self
+
 
 def rollup_path(root: Path) -> Path:
     """`{root}/bootstrap_rollup.parquet`."""
@@ -314,6 +351,38 @@ class PairwiseRollupRow(BaseModel):
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str
 
+    @model_validator(mode="after")
+    def _validate_ci_sentinel_consistency(self) -> "PairwiseRollupRow":
+        # B26 / D-B23.2 closure: same CI-sentinel invariant as RollupRow.
+        metric_fields = (
+            self.primary_metric_mean,
+            self.primary_metric_ci_lo,
+            self.primary_metric_ci_hi,
+        )
+        all_none = all(f is None for f in metric_fields)
+        all_set = all(f is not None for f in metric_fields)
+        if not (all_none or all_set):
+            raise ValueError(
+                "primary_metric_mean, primary_metric_ci_lo, and "
+                "primary_metric_ci_hi must be all-None or all-non-None; "
+                f"got mean={self.primary_metric_mean!r}, "
+                f"ci_lo={self.primary_metric_ci_lo!r}, "
+                f"ci_hi={self.primary_metric_ci_hi!r}"
+            )
+        if all_none and self.bootstrap_skipped_reason is None:
+            raise ValueError(
+                "primary_metric_* are all None but "
+                "bootstrap_skipped_reason is None; sentinel rows must "
+                "populate bootstrap_skipped_reason"
+            )
+        if all_set and self.bootstrap_skipped_reason is not None:
+            raise ValueError(
+                "primary_metric_* are all populated but "
+                "bootstrap_skipped_reason is set; non-sentinel rows "
+                "must have bootstrap_skipped_reason=None"
+            )
+        return self
+
 
 class TrainingTimeRollupRow(BaseModel):
     """One per-(dataset, model, hardware_tier, task_type) training-time CI entry.
@@ -364,6 +433,38 @@ class TrainingTimeRollupRow(BaseModel):
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str
+
+    @model_validator(mode="after")
+    def _validate_ci_sentinel_consistency(self) -> "TrainingTimeRollupRow":
+        # B26 / D-B23.2 closure: same CI-sentinel invariant as RollupRow.
+        metric_fields = (
+            self.primary_metric_mean,
+            self.primary_metric_ci_lo,
+            self.primary_metric_ci_hi,
+        )
+        all_none = all(f is None for f in metric_fields)
+        all_set = all(f is not None for f in metric_fields)
+        if not (all_none or all_set):
+            raise ValueError(
+                "primary_metric_mean, primary_metric_ci_lo, and "
+                "primary_metric_ci_hi must be all-None or all-non-None; "
+                f"got mean={self.primary_metric_mean!r}, "
+                f"ci_lo={self.primary_metric_ci_lo!r}, "
+                f"ci_hi={self.primary_metric_ci_hi!r}"
+            )
+        if all_none and self.bootstrap_skipped_reason is None:
+            raise ValueError(
+                "primary_metric_* are all None but "
+                "bootstrap_skipped_reason is None; sentinel rows must "
+                "populate bootstrap_skipped_reason"
+            )
+        if all_set and self.bootstrap_skipped_reason is not None:
+            raise ValueError(
+                "primary_metric_* are all populated but "
+                "bootstrap_skipped_reason is set; non-sentinel rows "
+                "must have bootstrap_skipped_reason=None"
+            )
+        return self
 
 
 def _write_rows_atomic(
@@ -508,6 +609,38 @@ class HPOUpliftRollupRow(BaseModel):
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str
+
+    @model_validator(mode="after")
+    def _validate_ci_sentinel_consistency(self) -> "HPOUpliftRollupRow":
+        # B26 / D-B23.2 closure: same CI-sentinel invariant as RollupRow.
+        metric_fields = (
+            self.primary_metric_mean,
+            self.primary_metric_ci_lo,
+            self.primary_metric_ci_hi,
+        )
+        all_none = all(f is None for f in metric_fields)
+        all_set = all(f is not None for f in metric_fields)
+        if not (all_none or all_set):
+            raise ValueError(
+                "primary_metric_mean, primary_metric_ci_lo, and "
+                "primary_metric_ci_hi must be all-None or all-non-None; "
+                f"got mean={self.primary_metric_mean!r}, "
+                f"ci_lo={self.primary_metric_ci_lo!r}, "
+                f"ci_hi={self.primary_metric_ci_hi!r}"
+            )
+        if all_none and self.bootstrap_skipped_reason is None:
+            raise ValueError(
+                "primary_metric_* are all None but "
+                "bootstrap_skipped_reason is None; sentinel rows must "
+                "populate bootstrap_skipped_reason"
+            )
+        if all_set and self.bootstrap_skipped_reason is not None:
+            raise ValueError(
+                "primary_metric_* are all populated but "
+                "bootstrap_skipped_reason is set; non-sentinel rows "
+                "must have bootstrap_skipped_reason=None"
+            )
+        return self
 
 
 def write_hpo_uplift_rollup(root: Path, rows: Sequence[HPOUpliftRollupRow]) -> None:

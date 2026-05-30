@@ -211,12 +211,16 @@ def test_fold_ci_field_ge_constraints_reject_negative() -> None:
 def test_rollup_row_per_fold_cis_schema_default_is_none() -> None:
     """Constructing each of the 5 RollupRow types WITHOUT supplying
     per_fold_cis yields None (backward-compat marker)."""
+    # B26 / D-B23.2 closure: bootstrap_skipped_reason populated so
+    # the rows construct as valid sentinels under the new
+    # CI-sentinel @model_validator (all metric_* default to None).
     common = dict(
         dataset_name="ds",
         task_type="binary",
         bootstrap_seed=42,
         bootstrap_n_resamples=100,
         bootstrap_numpy_version="2.0.0",
+        bootstrap_skipped_reason="test_fixture",
         manifest_fingerprint="f" * 64,
     )
     b5 = RollupRow(
@@ -283,6 +287,9 @@ def test_rollup_row_per_fold_cis_schema_default_is_none() -> None:
 def test_rollup_row_per_fold_cis_accepts_empty_list() -> None:
     """per_fold_cis=[] is a valid state (requested but every fold
     degenerate-zero-rows). The list round-trips."""
+    # B26 / D-B23.2 closure: bootstrap_skipped_reason populated so
+    # the row is a valid sentinel under the new CI-sentinel
+    # @model_validator (all metric_* default to None).
     row = RollupRow(
         dataset_name="ds",
         model_name="m",
@@ -296,6 +303,7 @@ def test_rollup_row_per_fold_cis_accepts_empty_list() -> None:
         bootstrap_seed=42,
         bootstrap_n_resamples=100,
         bootstrap_numpy_version="2.0.0",
+        bootstrap_skipped_reason="test_fixture",
         manifest_fingerprint="f" * 64,
         per_fold_cis=[],
     )
