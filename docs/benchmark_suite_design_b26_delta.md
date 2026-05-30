@@ -376,6 +376,14 @@ IMPROVEMENT, 4 NITPICK. Closures:
 Test count after R1 build-swarm closures: 26 named (no
 change; all IMPs/NITs were comment-grade); 1033 collected.
 
+### R2 build-swarm closure
+
+R2 confirming build swarm on commit `07b28a5`: code-reviewer
+(0C / 0I / 0N APPROVE), qa-test-coverage (0C / 0I / 0N
+APPROVE), architecture-reviewer (0C / 0I / 0N APPROVE),
+style-reviewer (0C / 0I / 0N APPROVE). Build consensus
+reached: zero CRITICAL, zero IMPROVEMENT, zero NITPICK.
+
 ## Deferred
 
 - **D-B26.3**: extend mixed-reject coverage to all 6
