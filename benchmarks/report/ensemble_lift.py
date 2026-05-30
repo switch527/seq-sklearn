@@ -36,6 +36,7 @@ from benchmarks.experiments.ensemble_lift import (
 )
 from benchmarks.report._bootstrap_render import (
     format_ci_cell,
+    render_bca_health_footnote,
     render_rollup_skipped_footnote,
 )
 from benchmarks.run_manifest import load_run_manifest, run_manifest_path
@@ -427,10 +428,11 @@ def _render_with_ci(
     if partial:
         parts.append(_render_partial_coverage_footnote(partial))
 
-    # B23 / D-B20.1: oracle CI partial-coverage footnote. Caller
-    # pre-filters affected rows (arch-R1-I3 closure: filter at the
-    # call site, mirrors the existing partial-coverage pattern).
-    affected_oracle: list[tuple[str, int, int, int]] = []
+    # B23 / D-B20.1 + B24 / D-B23.1: oracle CI partial-coverage
+    # footnote. Caller pre-filters affected rows and appends
+    # bootstrap_ci_method + bootstrap_oracle_ci_fallback_reason
+    # for the two B24-added columns.
+    affected_oracle: list[tuple[str, int, int, int, str, str | None]] = []
     for r in complete:
         rollup_row = rollup_index.get(r.dataset_name)
         if rollup_row is None or rollup_row.bootstrap_skipped_reason is not None:
@@ -442,6 +444,8 @@ def _render_with_ci(
                     rollup_row.n_oracle_cells_paired,
                     rollup_row.n_pair_grid,
                     rollup_row.n_pair_grid - rollup_row.n_oracle_cells_paired,
+                    rollup_row.bootstrap_ci_method,
+                    rollup_row.bootstrap_oracle_ci_fallback_reason,
                 )
             )
     if affected_oracle:
@@ -466,6 +470,19 @@ def _render_with_ci(
             )
         )
 
+    # B24 / D-B21.1: BCa health footnote (main delta only;
+    # oracle fallback surfaces via the partial-coverage footnote
+    # per D-B23.1).
+    rollup_with_fallback = [r for r in rollup if r.bootstrap_ci_fallback_reason is not None]
+    if rollup_with_fallback:
+        parts.append(
+            render_bca_health_footnote(
+                rollup_with_fallback,
+                group_columns=("dataset_name",),
+                header_labels=("Dataset",),
+            )
+        )
+
     return "\n".join(parts)
 
 
@@ -482,22 +499,33 @@ def _render_partial_coverage_footnote(rollup: list[EnsembleLiftRollupRow]) -> st
 
 
 def _render_oracle_partial_coverage_footnote(
-    affected: list[tuple[str, int, int, int]],
+    affected: list[tuple[str, int, int, int, str, str | None]],
 ) -> str:
-    """B23 / D-B20.1: markdown footnote block for the oracle CI
-    partial-coverage asterisk. Pure renderer; caller pre-filters
-    the affected rows."""
+    """B23 / D-B20.1 + B24 / D-B23.1: markdown footnote block for
+    the oracle CI partial-coverage asterisk. Pure renderer; caller
+    pre-filters the affected rows. Each tuple is
+    `(dataset, n_oracle_cells_paired, n_pair_grid, n_missing,
+    bootstrap_ci_method, bootstrap_oracle_ci_fallback_reason)`.
+    The `oracle_fallback_reason` column reads `-` when the rollup
+    row's value is None. The 120-char truncation matches
+    `render_rollup_skipped_footnote`.
+    """
     if not affected:
         return ""
     affected_sorted = sorted(affected, key=lambda t: t[0])
     lines = [
         "### Oracle partial-coverage footnotes",
         "",
-        "| dataset | n_oracle_cells_paired | n_pair_grid | n_missing |",
-        "| --- | --- | --- | --- |",
+        "| dataset | n_oracle_cells_paired | n_pair_grid | n_missing | ci_method | oracle_fallback_reason |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
-    for dataset_name, n_oracle, n_grid, n_missing in affected_sorted:
-        lines.append(f"| {dataset_name} | {n_oracle} | {n_grid} | {n_missing} |")
+    for dataset_name, n_oracle, n_grid, n_missing, ci_method, oracle_reason in affected_sorted:
+        reason_cell = "-" if oracle_reason is None else oracle_reason
+        if len(reason_cell) > 120:
+            reason_cell = reason_cell[:117] + "..."
+        lines.append(
+            f"| {dataset_name} | {n_oracle} | {n_grid} | {n_missing} | {ci_method} | {reason_cell} |"
+        )
     lines.append("")
     return "\n".join(lines)
 
