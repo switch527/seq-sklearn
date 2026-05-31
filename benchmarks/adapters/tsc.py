@@ -48,6 +48,14 @@ from benchmarks.protocol import (
 from benchmarks.registry.models import register_adapter
 from seq_sklearn import NotFittedError
 
+# Match gbm.py's `_DEFAULT_N_JOBS = 15`: every TSC backbone caps
+# its thread budget below logical-core count so the 16-core host
+# retains one core for system / interactive work + concurrent runs
+# (a prior all-cores + parallel TFT run drove the load average
+# above 23 and SIGTERM-killed the process). Override via
+# hyperparameters when running solo.
+_DEFAULT_N_JOBS = 15
+
 
 def _check_aeon_available() -> None:
     """Lazy-import aeon; raise `OptionalDependencyMissingError` if
@@ -205,7 +213,7 @@ def _make_rocket_classifier(**hyperparameters: Any) -> Any:
         hyperparameters["n_kernels"] = hyperparameters.pop("num_kernels")
     defaults: dict[str, Any] = {
         "n_kernels": 10_000,
-        "n_jobs": -1,
+        "n_jobs": _DEFAULT_N_JOBS,
     }
     defaults.update(hyperparameters)
     return RocketClassifier(**defaults)
@@ -221,7 +229,7 @@ def _make_multirocket_classifier(**hyperparameters: Any) -> Any:
     defaults: dict[str, Any] = {
         "n_kernels": 10_000,
         "max_dilations_per_kernel": 32,
-        "n_jobs": -1,
+        "n_jobs": _DEFAULT_N_JOBS,
     }
     defaults.update(hyperparameters)
     return MultiRocketClassifier(**defaults)
@@ -235,7 +243,7 @@ def _make_catch22_classifier(**hyperparameters: Any) -> Any:
     defaults: dict[str, Any] = {
         "outlier_norm": False,
         "replace_nans": True,
-        "n_jobs": -1,
+        "n_jobs": _DEFAULT_N_JOBS,
     }
     defaults.update(hyperparameters)
     return Catch22Classifier(**defaults)

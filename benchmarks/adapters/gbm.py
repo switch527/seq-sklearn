@@ -62,6 +62,16 @@ __all__: list[str] = []
 logger = logging.getLogger(__name__)
 
 
+# Default thread budget for every GBM library (LightGBM `n_jobs`,
+# XGBoost `n_jobs`, CatBoost `thread_count`). Capped at 15 so the
+# 16-core host retains one core for system / interactive work; an
+# earlier all-cores run + concurrent TFT training drove the load
+# average above 23 and saturated the box. Per-call hyperparameter
+# overrides win when supplied (e.g., Optuna sweeps can lower it
+# further on small problems).
+_DEFAULT_N_JOBS = 15
+
+
 class _SklearnLikeEstimator(Protocol):
     """Narrow Protocol the GBM adapter consumes from each library.
 
@@ -309,6 +319,7 @@ def _make_lightgbm_classifier_estimator(**hyperparameters: Any) -> _SklearnLikeE
         "reg_lambda": 0.0,
         "random_state": 42,
         "verbose": -1,
+        "n_jobs": _DEFAULT_N_JOBS,
     }
     defaults.update(hyperparameters)
     return cast(_SklearnLikeEstimator, lgb.LGBMClassifier(**defaults))
@@ -329,6 +340,7 @@ def _make_lightgbm_regressor_estimator(**hyperparameters: Any) -> _SklearnLikeEs
         "reg_lambda": 0.0,
         "random_state": 42,
         "verbose": -1,
+        "n_jobs": _DEFAULT_N_JOBS,
     }
     defaults.update(hyperparameters)
     return cast(_SklearnLikeEstimator, lgb.LGBMRegressor(**defaults))
@@ -349,6 +361,7 @@ def _make_xgboost_classifier_estimator(**hyperparameters: Any) -> _SklearnLikeEs
         "random_state": 42,
         "verbosity": 0,
         "tree_method": "hist",
+        "n_jobs": _DEFAULT_N_JOBS,
     }
     defaults.update(hyperparameters)
     return cast(_SklearnLikeEstimator, xgb.XGBClassifier(**defaults))
@@ -369,6 +382,7 @@ def _make_xgboost_regressor_estimator(**hyperparameters: Any) -> _SklearnLikeEst
         "random_state": 42,
         "verbosity": 0,
         "tree_method": "hist",
+        "n_jobs": _DEFAULT_N_JOBS,
     }
     defaults.update(hyperparameters)
     return cast(_SklearnLikeEstimator, xgb.XGBRegressor(**defaults))
@@ -385,6 +399,7 @@ def _make_catboost_classifier_estimator(**hyperparameters: Any) -> _SklearnLikeE
         "random_seed": 42,
         "verbose": False,
         "allow_writing_files": False,
+        "thread_count": _DEFAULT_N_JOBS,
     }
     defaults.update(hyperparameters)
     return cast(_SklearnLikeEstimator, cb.CatBoostClassifier(**defaults))
@@ -401,6 +416,7 @@ def _make_catboost_regressor_estimator(**hyperparameters: Any) -> _SklearnLikeEs
         "random_seed": 42,
         "verbose": False,
         "allow_writing_files": False,
+        "thread_count": _DEFAULT_N_JOBS,
     }
     defaults.update(hyperparameters)
     return cast(_SklearnLikeEstimator, cb.CatBoostRegressor(**defaults))
