@@ -1,0 +1,27 @@
+# End-to-end accuracy smoke run on synthetic_binary_small.
+#
+# Runs all five binary-capable classifiers against the F6 DGP's
+# binary panel variant: TFT vs three GBM families vs the three
+# classical TSC classifiers (ROCKET, MultiRocket, Catch22).
+# Output lands under .cache/benchmarks/runs/synth-binary/.
+
+datasets = ["synthetic_binary_small"]
+models = [
+    "tft_classifier",
+    "lightgbm_classifier",
+    "xgboost_classifier",
+    "catboost_classifier",
+    "rocket_classifier",
+    "multirocket_classifier",
+    "catch22_classifier",
+]
+output_dir = ".cache/benchmarks/runs/synth-binary"
+cache_dir = ".cache/benchmarks"
+
+[[experiments]]
+kind = "raw_loss"
+seeds = [0, 1, 2]
+# Lower resample count so the smoke run finishes fast; the
+# per-experiment override falls through to the default
+# BOOTSTRAP_N_RESAMPLES_BY_PROFILE when omitted (10_000).
+bootstrap_n_resamples = 1000

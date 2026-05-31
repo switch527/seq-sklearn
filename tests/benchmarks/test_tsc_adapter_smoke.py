@@ -40,7 +40,7 @@ def _binary_spec() -> DatasetSpec:
         target_col="y",
         feature_real_cols=("x1",),
         feature_categorical_cols=(),
-        lookback=4,
+        lookback=10,
         positive_label=1,
         citation="tsc smoke",
     )
@@ -50,9 +50,11 @@ def _binary_panel() -> tuple[pd.DataFrame, np.ndarray]:
     rng = np.random.default_rng(0)
     rows: list[dict[str, Any]] = []
     for entity in range(6):
-        # Each entity gets 6 rows so the trailing-window clip
-        # exercises both the kept and dropped sides.
-        for t in range(6):
+        # Each entity gets 12 rows so the trailing-window clip
+        # exercises both the kept and dropped sides, and the
+        # final 10-row window is above aeon MultiRocket's
+        # n_timepoints >= 9 floor.
+        for t in range(12):
             x = float(rng.normal())
             rows.append(
                 {
