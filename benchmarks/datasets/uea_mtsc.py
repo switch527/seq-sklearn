@@ -126,7 +126,16 @@ def _build_spec(name: str, params: dict[str, object]) -> DatasetSpec:
         target_col="y",
         feature_real_cols=_channel_cols(n_channels),
         feature_categorical_cols=(),
-        lookback=int(params["n_timesteps"]),  # pyright: ignore[reportArgumentType]
+        # The expanding-window splitter's min-rows floor is
+        # `n_splits + lookback`. With the harness's default
+        # n_splits=5 a lookback equal to the full sequence
+        # length forces every entity below the floor (the train
+        # set comes back empty). Trim the lookback by a 5-fold
+        # safety margin so the splitter retains every entity;
+        # the TSC adapter clips to the trailing `lookback` rows
+        # per the F2 trailing-window convention, losing only
+        # the first ~1% of timesteps.
+        lookback=int(params["n_timesteps"]) - 5,  # pyright: ignore[reportArgumentType]
         observation_cutoff_rule=(
             "Each UEA instance is a fixed-length whole-sequence sample; "
             "the label is broadcast across every timestep row of that "

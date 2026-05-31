@@ -83,16 +83,29 @@ def _lag_categorical_column(
 ) -> pd.DataFrame:
     """Produce L lagged categorical columns for one column.
 
-    Lag k for row i is the raw value at `i - k` within the same
-    entity, or the empty string `""` if the entity has fewer than
-    `k+1` preceding rows. Caller encodes (LightGBM handles strings
-    natively; XGBoost / CatBoost require an explicit cast).
+    Categorical values are integer-encoded via pandas' category
+    codes (sorted-unique order); leading-window missing positions
+    fill with ``-1``, the standard pandas category-code sentinel
+    for NaN. The encoding is computed once on the full panel
+    column so all L lag positions share a stable label-to-code
+    map, and the resulting columns are ``int64`` — accepted by
+    LightGBM, XGBoost, and CatBoost without further casting.
+
+    Treating an integer-encoded categorical as ordinal is a
+    crude approximation; pass the categorical column names
+    through to each GBM's native categorical-feature parameter
+    (`categorical_feature=` for LightGBM, `cat_features=` for
+    CatBoost) for true categorical handling. Lag k for row i is
+    the value at `i - k` within the same entity.
     """
-    grouped = panel.groupby(entity_col, sort=False)[col]
-    lagged_columns: dict[str, object] = {}
+    codes = panel[col].astype("category").cat.codes.astype(np.int64)
+    grouped = codes.groupby(panel[entity_col], sort=False)
+    lagged_columns: dict[str, np.ndarray] = {}
     for k in range(lookback):
         shifted = grouped.shift(k)
-        lagged_columns[f"{col}_lag{k}"] = shifted.fillna("").to_numpy()
+        lagged_columns[f"{col}_lag{k}"] = (
+            shifted.fillna(-1).astype(np.int64).to_numpy()
+        )
     return pd.DataFrame(lagged_columns, index=panel.index)
 
 

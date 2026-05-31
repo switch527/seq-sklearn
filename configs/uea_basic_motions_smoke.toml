@@ -1,0 +1,19 @@
+# UEA BasicMotions multiclass (4 classes: badminton, running, standing, walking).
+# 80 instances × 100 timesteps × 6 channels.
+datasets = ["uea_basic_motions"]
+models = [
+    "tft_classifier",
+    "lightgbm_classifier",
+    "xgboost_classifier",
+    "catboost_classifier",
+    "rocket_classifier",
+    "multirocket_classifier",
+    "catch22_classifier",
+]
+output_dir = ".cache/benchmarks/runs/uea-basic-motions"
+cache_dir = ".cache/benchmarks"
+
+[[experiments]]
+kind = "raw_loss"
+seeds = [0, 1, 2]
+bootstrap_n_resamples = 1000

@@ -1,0 +1,16 @@
+# C-MAPSS FD001 turbofan engine RUL regression.
+# 100 engines × 100-360 cycles × 24 sensor channels.
+datasets = ["c_mapss_fd001"]
+models = [
+    "tft_regressor",
+    "lightgbm_regressor",
+    "xgboost_regressor",
+    "catboost_regressor",
+]
+output_dir = ".cache/benchmarks/runs/cmapss"
+cache_dir = ".cache/benchmarks"
+
+[[experiments]]
+kind = "raw_loss"
+seeds = [0, 1, 2]
+bootstrap_n_resamples = 1000

@@ -48,18 +48,23 @@ _SPEC = DatasetSpec(
     balance="balanced",
     modality="numeric",
     source_uri=(
-        "https://www.nasa.gov/intelligent-systems-division/discovery-and-systems-health/"
-        "pcoe/pcoe-data-set-repository/"
+        # PHM Society S3 mirror of NASA's Prognostics Data
+        # Repository CMAPSS archive (NASA's original DASHlink URL
+        # migrated; this mirror is the canonical public URL the
+        # PHM community now references). The mirror ships the
+        # CMAPSSData.zip inside an outer "6. Turbofan Engine
+        # Degradation Simulation Data Set/" wrapper that must be
+        # unwrapped before placing into the cache (this loader
+        # expects the inner archive at archive_basename).
+        "https://phm-datasets.s3.amazonaws.com/NASA/6.+Turbofan+Engine+Degradation+Simulation+Data+Set.zip"
     ),
     integrity_sha256=(
-        # The archive is not bundled with this code; the hash here is
-        # a placeholder that the release engineer overwrites once they
-        # have downloaded the official archive bytes and recorded the
-        # canonical SHA-256. The placeholder is structurally valid
-        # (64 lowercase hex chars) so the pydantic pattern accepts it;
-        # the integrity-check at load time will fail until the real
-        # hash is pinned.
-        "deadbeef" * 8
+        # SHA-256 of the INNER `CMAPSSData.zip` (the file the
+        # loader's `require_archive` checks). Pinned against the
+        # PHM S3 mirror's archive bytes captured 2026-05-31; the
+        # archive contents are NASA's 2008 release and have not
+        # changed since.
+        "74bef434a34db25c7bf72e668ea4cd52afe5f2cf8e44367c55a82bfd91a5a34f"
     ),
     archive_basename="CMAPSSData.zip",
     entity_col="entity_id",

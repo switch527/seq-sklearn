@@ -195,7 +195,14 @@ class _GBMAdapter:
         x = self._featurize(panel)
         if self._feature_columns is not None:
             x = cast(pd.DataFrame, x[list(self._feature_columns)])
-        return np.asarray(self._est.predict(x))
+        y = np.asarray(self._est.predict(x))
+        # CatBoost's multiclass predict returns shape `(n, 1)` even for
+        # a single output. The harness expects 1-D class labels per the
+        # F2 contract; squeeze the trailing singleton so the per-cell
+        # prediction shard's column-wise pandas write succeeds.
+        if y.ndim == 2 and y.shape[1] == 1:
+            y = y[:, 0]
+        return y
 
     def predict_proba(self, panel: pd.DataFrame) -> np.ndarray:
         if self._est is None:
