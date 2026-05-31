@@ -368,6 +368,14 @@ IMPROVEMENT, 4 NITPICK. Closures:
 
 Test count unchanged.
 
+### R2 build-swarm closure
+
+R1 fixes were docstring-only with zero behavioral impact
+(test_b21 boundary-companion docstring rewording +
+test_b25 module docstring renumbering). Skipping explicit
+R2 swarm per the B29 precedent. 1084 tests still pass;
+ruff + pyright clean.
+
 ## Deferred
 
 - **D-B30.1**: emit per-fold sample sizes as a SIBLING
