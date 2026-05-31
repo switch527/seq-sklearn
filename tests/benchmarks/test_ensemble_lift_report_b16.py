@@ -87,6 +87,10 @@ def _make_rollup_row(
     primary_metric_mean: float | None = 0.20,
     primary_metric_ci_lo: float | None = 0.15,
     primary_metric_ci_hi: float | None = 0.25,
+    # B28 / D-B27.2 closure: oracle defaults are sentinel
+    # placeholders; the body below overrides them to None when
+    # n_oracle_cells_paired == 0 so the new oracle CI-sentinel
+    # validator accepts the row.
     oracle_metric_mean: float | None = 0.10,
     oracle_metric_ci_lo: float | None = 0.08,
     oracle_metric_ci_hi: float | None = 0.12,
@@ -106,6 +110,12 @@ def _make_rollup_row(
     # default; the fallback lives in the factory body only.
     if n_oracle_cells_paired is None:
         n_oracle_cells_paired = n_cells_paired
+    # B28 / D-B27.2 closure: zero-oracle rows must carry None
+    # oracle metrics per the new CI-sentinel invariant.
+    if n_oracle_cells_paired == 0:
+        oracle_metric_mean = None
+        oracle_metric_ci_lo = None
+        oracle_metric_ci_hi = None
     return EnsembleLiftRollupRow(
         dataset_name=dataset_name,
         task_type=task_type,

@@ -355,7 +355,7 @@ class PairwiseRollupRow(BaseModel):
     def _validate_ci_sentinel_consistency(self) -> "PairwiseRollupRow":
         # B26 / D-B23.2 closure: same CI-sentinel invariant as RollupRow.
         # IDENTICAL BODY TO RollupRow._validate_ci_sentinel_consistency;
-        # keep all 4 copies in sync.
+        # keep all 4 copies in sync (EnsembleLiftRollupRow has an EXTENDED version that also guards the oracle triple; do not import this body there verbatim).
         metric_fields = (
             self.primary_metric_mean,
             self.primary_metric_ci_lo,
@@ -440,7 +440,7 @@ class TrainingTimeRollupRow(BaseModel):
     def _validate_ci_sentinel_consistency(self) -> "TrainingTimeRollupRow":
         # B26 / D-B23.2 closure: same CI-sentinel invariant as RollupRow.
         # IDENTICAL BODY TO RollupRow._validate_ci_sentinel_consistency;
-        # keep all 4 copies in sync.
+        # keep all 4 copies in sync (EnsembleLiftRollupRow has an EXTENDED version that also guards the oracle triple; do not import this body there verbatim).
         metric_fields = (
             self.primary_metric_mean,
             self.primary_metric_ci_lo,
@@ -615,10 +615,33 @@ class HPOUpliftRollupRow(BaseModel):
     manifest_fingerprint: str
 
     @model_validator(mode="after")
+    def _validate_cell_count_bounds(self) -> "HPOUpliftRollupRow":
+        # B28 / D-B26.1 closure: cell-count bounds.
+        # n_cells_paired counts inner-join cells (both default
+        # + tuned ran), bounded by n_seeds * n_folds.
+        # n_skipped_cells is a SUBSET of paired cells
+        # (paired-but-NaN-loss per
+        # `bootstrap_hpo_uplift.py:252-264`), bounded above by
+        # n_cells_paired.
+        total_possible = self.n_seeds * self.n_folds
+        if self.n_cells_paired > total_possible:
+            raise ValueError(
+                f"n_cells_paired ({self.n_cells_paired}) exceeds "
+                f"n_seeds * n_folds ({self.n_seeds} * "
+                f"{self.n_folds} = {total_possible})"
+            )
+        if self.n_skipped_cells > self.n_cells_paired:
+            raise ValueError(
+                f"n_skipped_cells ({self.n_skipped_cells}) exceeds "
+                f"n_cells_paired ({self.n_cells_paired})"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_ci_sentinel_consistency(self) -> "HPOUpliftRollupRow":
         # B26 / D-B23.2 closure: same CI-sentinel invariant as RollupRow.
         # IDENTICAL BODY TO RollupRow._validate_ci_sentinel_consistency;
-        # keep all 4 copies in sync.
+        # keep all 4 copies in sync (EnsembleLiftRollupRow has an EXTENDED version that also guards the oracle triple; do not import this body there verbatim).
         metric_fields = (
             self.primary_metric_mean,
             self.primary_metric_ci_lo,
@@ -822,10 +845,9 @@ class EnsembleLiftRollupRow(BaseModel):
 
     @model_validator(mode="after")
     def _validate_ci_sentinel_consistency(self) -> "EnsembleLiftRollupRow":
-        # B27 / D-B26.2 closure: same CI-sentinel invariant as
-        # the 4 other RollupRow schemas (B26 / D-B23.2).
-        # IDENTICAL BODY TO RollupRow._validate_ci_sentinel_consistency;
-        # keep all 5 copies in sync.
+        # B27 / D-B26.2 closure: primary_metric_* CI-sentinel
+        # invariant matches the 4 other RollupRow schemas
+        # (B26 / D-B23.2).
         metric_fields = (
             self.primary_metric_mean,
             self.primary_metric_ci_lo,
@@ -852,6 +874,35 @@ class EnsembleLiftRollupRow(BaseModel):
                 "primary_metric_* are all populated but "
                 "bootstrap_skipped_reason is set; non-sentinel rows "
                 "must have bootstrap_skipped_reason=None"
+            )
+
+        # B28 / D-B27.2 closure: oracle_metric_* triple is gated by
+        # n_oracle_cells_paired, not bootstrap_skipped_reason.
+        # All-None iff n_oracle_cells_paired == 0; all-set iff > 0.
+        oracle_fields = (
+            self.oracle_metric_mean,
+            self.oracle_metric_ci_lo,
+            self.oracle_metric_ci_hi,
+        )
+        oracle_all_none = all(f is None for f in oracle_fields)
+        oracle_all_set = all(f is not None for f in oracle_fields)
+        if not (oracle_all_none or oracle_all_set):
+            raise ValueError(
+                "oracle_metric_mean, oracle_metric_ci_lo, and "
+                "oracle_metric_ci_hi must be all-None or all-non-None; "
+                f"got mean={self.oracle_metric_mean!r}, "
+                f"ci_lo={self.oracle_metric_ci_lo!r}, "
+                f"ci_hi={self.oracle_metric_ci_hi!r}"
+            )
+        if oracle_all_none and self.n_oracle_cells_paired > 0:
+            raise ValueError(
+                "oracle_metric_* are all None but n_oracle_cells_paired > 0; "
+                f"got n_oracle_cells_paired={self.n_oracle_cells_paired}"
+            )
+        if oracle_all_set and self.n_oracle_cells_paired == 0:
+            raise ValueError(
+                "oracle_metric_* are all populated but n_oracle_cells_paired == 0; "
+                "rows with no oracle cells must leave oracle metrics None"
             )
         return self
 

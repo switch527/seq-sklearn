@@ -265,6 +265,15 @@ def _make_rollup_row_for_renderer(
     # asterisk).
     if n_oracle_cells_paired is None:
         n_oracle_cells_paired = n_cells_paired
+    # B28 / D-B27.2 closure: zero-oracle rows must carry None
+    # oracle metrics per the new CI-sentinel invariant.
+    oracle_metric_mean: float | None = 0.10
+    oracle_metric_ci_lo: float | None = 0.08
+    oracle_metric_ci_hi: float | None = 0.12
+    if n_oracle_cells_paired == 0:
+        oracle_metric_mean = None
+        oracle_metric_ci_lo = None
+        oracle_metric_ci_hi = None
     return EnsembleLiftRollupRow(
         dataset_name="ds_one",
         task_type="binary",
@@ -279,9 +288,9 @@ def _make_rollup_row_for_renderer(
         primary_metric_mean=0.20,
         primary_metric_ci_lo=0.15,
         primary_metric_ci_hi=0.25,
-        oracle_metric_mean=0.10,
-        oracle_metric_ci_lo=0.08,
-        oracle_metric_ci_hi=0.12,
+        oracle_metric_mean=oracle_metric_mean,
+        oracle_metric_ci_lo=oracle_metric_ci_lo,
+        oracle_metric_ci_hi=oracle_metric_ci_hi,
         bootstrap_seed=42,
         bootstrap_n_resamples=10_000,
         bootstrap_numpy_version="2.3.0",

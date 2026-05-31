@@ -95,9 +95,13 @@ def _make_rollup_row(
         primary_metric_mean=0.20 if bootstrap_skipped_reason is None else None,
         primary_metric_ci_lo=0.15 if bootstrap_skipped_reason is None else None,
         primary_metric_ci_hi=0.25 if bootstrap_skipped_reason is None else None,
-        oracle_metric_mean=0.10 if bootstrap_skipped_reason is None else None,
-        oracle_metric_ci_lo=0.08 if bootstrap_skipped_reason is None else None,
-        oracle_metric_ci_hi=0.12 if bootstrap_skipped_reason is None else None,
+        # B28 / D-B27.2 closure: oracle defaults gated on
+        # n_oracle_cells_paired (not bootstrap_skipped_reason)
+        # so the row satisfies the new oracle CI-sentinel
+        # invariant regardless of the main bootstrap state.
+        oracle_metric_mean=0.10 if n_oracle_cells_paired > 0 else None,
+        oracle_metric_ci_lo=0.08 if n_oracle_cells_paired > 0 else None,
+        oracle_metric_ci_hi=0.12 if n_oracle_cells_paired > 0 else None,
         bootstrap_seed=42,
         bootstrap_n_resamples=10_000,
         bootstrap_numpy_version="2.3.0",
