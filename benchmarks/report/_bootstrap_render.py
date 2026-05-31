@@ -136,12 +136,13 @@ def render_per_fold_cis_footnote(
     empty `rollup_with_per_fold`; the per-row empty check is
     the caller's responsibility.
 
-    The helper reads ONLY 6 FoldCI fields per fold:
-    `fold_index, metric_mean, metric_ci_lo, metric_ci_hi,
-    ci_method, ci_fallback_reason`. `n_seeds` and
-    `n_entities` are NOT rendered (parquet-shard-audit only;
-    D-B25.3). Rows missing `per_fold_cis` render with no
-    fold rows via `getattr(row, "per_fold_cis", []) or []`.
+    The helper reads 8 FoldCI fields per fold:
+    `fold_index, n_seeds, n_entities, metric_mean,
+    metric_ci_lo, metric_ci_hi, ci_method,
+    ci_fallback_reason` (B30 / D-B25.3 closure: n_seeds +
+    n_entities now surface between fold and metric cells).
+    Rows missing `per_fold_cis` render with no fold rows
+    via `getattr(row, "per_fold_cis", []) or []`.
 
     Rows are sorted by `group_columns[0]`; folds within each
     row are sorted defensively by `fold_index` ascending.
@@ -171,6 +172,8 @@ def render_per_fold_cis_footnote(
             [
                 *header_labels,
                 "fold",
+                "n_seeds",
+                "n_entities",
                 "metric_mean",
                 "metric_ci_lo",
                 "metric_ci_hi",
@@ -180,7 +183,7 @@ def render_per_fold_cis_footnote(
         )
         + " |"
     )
-    sep = "| " + " | ".join(["---"] * (len(group_columns) + 6)) + " |"
+    sep = "| " + " | ".join(["---"] * (len(group_columns) + 8)) + " |"
     lines.append(header)
     lines.append(sep)
     for row in sorted_rows:
@@ -204,6 +207,11 @@ def render_per_fold_cis_footnote(
             row_cells = [
                 *id_cells,
                 str(int(getattr(fci, "fold_index", 0))),
+                # B30 / D-B25.3 closure: surface the per-fold
+                # sample-size audit fields between fold and the
+                # metric cells.
+                str(int(getattr(fci, "n_seeds", 0))),
+                str(int(getattr(fci, "n_entities", 0))),
                 mean_cell,
                 lo_cell,
                 hi_cell,

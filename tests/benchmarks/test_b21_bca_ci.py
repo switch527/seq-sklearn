@@ -272,6 +272,46 @@ def test_bca_percentile_points_returns_a_overshoot_when_denom_lo_fires_alone() -
 
 
 # =============================================================================
+# 5c. _bca_percentile_points a_overshoot fires at the exact `<=` boundary
+# =============================================================================
+
+
+def test_bca_percentile_points_a_overshoot_fires_at_eps_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B30 / D-B21.5 + qa-R2-C1 closure: monkeypatch
+    `_BCA_DENOM_EPS = 1.0` and pass `a = 0.0` so
+    `denom_hi = 1.0 - 0.0 * z_hi = 1.0` exactly (integer
+    arithmetic; no float drift). The `<=` predicate at
+    `benchmarks/metrics/bootstrap.py:97` fires on
+    `1.0 <= 1.0`; a `<` mutation would NOT fire on
+    `1.0 < 1.0` and fallback would be None."""
+    import benchmarks.metrics.bootstrap as _bca
+
+    monkeypatch.setattr(_bca, "_BCA_DENOM_EPS", 1.0)
+    _, _, fallback = _bca_percentile_points(p0=0.5, a=0.0, confidence=0.95)
+    assert fallback == "a_overshoot"
+
+
+def test_bca_percentile_points_a_overshoot_does_not_fire_above_eps() -> None:
+    """B30 / D-B21.5 companion (safe-region check, not an
+    independent mutation discriminator): with the real eps
+    (1e-12), `a = (1.0 - 2e-12) / z_hi` gives `denom_hi ~ 2e-12`,
+    exactly one eps above the 1e-12 threshold. The fallback
+    must NOT fire. The boundary-fires test above carries the
+    `<=` vs `<` mutation kill; this companion confirms safe-
+    region behavior."""
+    from scipy.stats import norm
+
+    confidence = 0.95
+    alpha = (1.0 - confidence) / 2.0
+    z_hi = float(norm.ppf(1.0 - alpha))
+    a = (1.0 - 2e-12) / z_hi
+    _, _, fallback = _bca_percentile_points(p0=0.5, a=a, confidence=confidence)
+    assert fallback is None
+
+
+# =============================================================================
 # 6. _compute_acceleration_from_jackknife returns 0 on equal jackknife
 # =============================================================================
 
