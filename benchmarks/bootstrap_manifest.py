@@ -183,6 +183,22 @@ class RollupRow(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_row_count_bound(self) -> "RollupRow":
+        # B29 / D-B28.2 closure: each entity contributes at
+        # least one row, so unique entities cannot exceed
+        # total rows. The aggregator at
+        # `bootstrap_rollup.py:387,:396` derives both from the
+        # same `np.concatenate(entity_blocks)` /
+        # `np.concatenate(losses_blocks)` populated together
+        # at `:306-307`.
+        if self.n_entities > self.n_rows:
+            raise ValueError(
+                f"n_entities ({self.n_entities}) exceeds "
+                f"n_rows ({self.n_rows})"
+            )
+        return self
+
 
 def rollup_path(root: Path) -> Path:
     """`{root}/bootstrap_rollup.parquet`."""
@@ -840,6 +856,19 @@ class EnsembleLiftRollupRow(BaseModel):
         if self.n_cells_paired > self.n_pair_grid:
             raise ValueError(
                 f"n_cells_paired ({self.n_cells_paired}) exceeds n_pair_grid ({self.n_pair_grid})"
+            )
+        # B29 / D-B28.1 closure: n_pair_grid bounded by total
+        # possible (seed, fold) positions. The aggregator at
+        # `bootstrap_ensemble_lift.py:488` derives n_pair_grid
+        # as the cartesian intersection of the two family rosters,
+        # bounded above by n_seeds * n_folds where n_seeds and
+        # n_folds (`:195-198`) are union counts.
+        total_possible = self.n_seeds * self.n_folds
+        if self.n_pair_grid > total_possible:
+            raise ValueError(
+                f"n_pair_grid ({self.n_pair_grid}) exceeds "
+                f"n_seeds * n_folds ({self.n_seeds} * "
+                f"{self.n_folds} = {total_possible})"
             )
         return self
 

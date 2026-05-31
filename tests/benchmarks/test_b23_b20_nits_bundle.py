@@ -86,8 +86,12 @@ def _make_rollup_row(
         task_type="binary",
         primary_metric="delta_loss",
         primary_loss_column="log_loss",
-        n_seeds=2,
-        n_folds=2,
+        # B29 / D-B28.1 closure: n_seeds * n_folds bumped to
+        # 16 to satisfy the new `n_pair_grid <= n_seeds *
+        # n_folds` validator for the largest n_pair_grid used
+        # in B23 tests (5 in the positive-equality boundary).
+        n_seeds=4,
+        n_folds=4,
         n_cells_paired=n_cells_paired,
         n_pair_grid=n_pair_grid,
         n_oracle_cells_paired=n_oracle_cells_paired,

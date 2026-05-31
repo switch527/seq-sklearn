@@ -333,14 +333,19 @@ def test_n_pair_grid_round_trips_through_parquet_shard(tmp_path: Path) -> None:
     """qa-R1-I2 closure: 137 is an unusual prime far from any
     factory default (matches the B16 `bootstrap_n_resamples=
     137` precedent). A silent coercion to a small-integer
-    default would not match 137."""
+    default would not match 137.
+
+    B29 / D-B28.1 closure: n_seeds and n_folds bumped to
+    12 each (product 144 > 137) so the new
+    `n_pair_grid <= n_seeds * n_folds` validator accepts
+    the row; the 137 round-trip is what's pinned."""
     row = EnsembleLiftRollupRow(
         dataset_name="ds_one",
         task_type="binary",
         primary_metric="delta_loss",
         primary_loss_column="log_loss",
-        n_seeds=2,
-        n_folds=2,
+        n_seeds=12,
+        n_folds=12,
         n_cells_paired=4,
         n_pair_grid=137,
         n_oracle_cells_paired=4,
