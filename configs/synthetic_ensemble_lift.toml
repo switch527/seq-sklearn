@@ -1,0 +1,42 @@
+# TFT-as-diversity-model ensemble benchmark.
+#
+# Runs raw_loss across all GBM + TFT models on the 3 mixed-feature
+# synthetic datasets (binary / multiclass / regression), then
+# kind="ensemble_lift" computes per-(dataset, seed, fold)
+# delta_loss = loss(GBM-mean) - loss((GBM + TFT)-mean) and the
+# oracle ceiling = loss(GBM-mean) - loss(per-sample best of {GBM,
+# TFT}). Wilcoxon across datasets with Holm adjustment surfaces
+# whether the TFT contributes statistically significant diversity.
+#
+# Output: .cache/benchmarks/runs/ensemble-lift/{leaderboard.md,
+# ensemble_lift.md, report.md}.
+
+datasets = [
+    "synthetic_binary_small",
+    "synthetic_multiclass_small",
+    "synthetic_regression_small",
+]
+models = [
+    "tft_classifier",
+    "tft_regressor",
+    "lightgbm_classifier",
+    "lightgbm_regressor",
+    "xgboost_classifier",
+    "xgboost_regressor",
+    "catboost_classifier",
+    "catboost_regressor",
+]
+output_dir = ".cache/benchmarks/runs/ensemble-lift"
+cache_dir = ".cache/benchmarks"
+
+[[experiments]]
+kind = "raw_loss"
+seeds = [0, 1, 2]
+bootstrap_n_resamples = 1000
+
+[[experiments]]
+kind = "ensemble_lift"
+seeds = [0]  # the ensemble driver derives (seed, fold) from the
+             # raw_loss manifest, not from this tuple; the field is
+             # required but unused at this kind.
+bootstrap_n_resamples = 1000
