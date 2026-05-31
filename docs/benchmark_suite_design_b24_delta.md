@@ -573,23 +573,30 @@ reached: zero CRITICAL, zero IMPROVEMENT, zero NITPICK.
 
 ## Deferred
 
-- **D-B24.1**: surface oracle BCa fallback on rollup rows
-  with FULL oracle coverage (`n_oracle_cells_paired ==
-  n_pair_grid`). A row with full coverage but oracle BCa
-  fallback currently surfaces nowhere in markdown. v1 of B24
-  scopes the oracle ci_method/fallback columns to the
-  partial-coverage footnote per the literal text of D-B23.1.
-  Empirical justification: the BCa fallback paths
-  (`"p0_at_edge"`, `"a_overshoot"`) fire when the bootstrap
-  bias correction or acceleration overshoots; on the oracle
-  surface (small-n, per-cell) the Cauchy-Schwarz bound from
-  B21 (`|a| <= 1/(6*sqrt(n))`; cf.
+- **D-B24.1**: **PERMANENTLY-DEFERRED-YAGNI:** surface
+  oracle BCa fallback on rollup rows with FULL oracle
+  coverage (`n_oracle_cells_paired == n_pair_grid`). A row
+  with full coverage but oracle BCa fallback currently
+  surfaces nowhere in markdown. v1 of B24 scopes the oracle
+  ci_method/fallback columns to the partial-coverage
+  footnote per the literal text of D-B23.1. Empirical
+  justification: the BCa fallback paths (`"p0_at_edge"`,
+  `"a_overshoot"`) fire when the bootstrap bias correction
+  or acceleration overshoots; on the oracle surface
+  (small-n, per-cell) the Cauchy-Schwarz bound from B21
+  (`|a| <= 1/(6*sqrt(n))`; cf.
   `docs/benchmark_suite_design_b21_delta.md:231, :571,
   :1026`) makes `a_overshoot` unreachable through the
-  canonical metric_fn, and `p0_at_edge` requires a degenerate
-  distribution rarely observed with full coverage. A future "Oracle BCa health"
-  footnote symmetric with the main `Bootstrap CI method`
-  footnote would close this gap if observed in production.
+  canonical metric_fn, and `p0_at_edge` requires a
+  degenerate distribution rarely observed with full
+  coverage. A future "Oracle BCa health" footnote symmetric
+  with the main `Bootstrap CI method` footnote would close
+  this gap if observed in production. Reclassified B33 as
+  YAGNI: the gap is empirically unreachable per the
+  documented Cauchy-Schwarz bound; building a render for an
+  impossible row shape is speculative; reopen only if
+  production observation surfaces a full-coverage row with
+  a populated `bootstrap_oracle_ci_fallback_reason`.
 - **D-B24.2**: **PERMANENTLY-DEFERRED-YAGNI:** introduce a
   separate `bootstrap_oracle_ci_method` field on
   `EnsembleLiftRollupRow` so the oracle and main paths can
