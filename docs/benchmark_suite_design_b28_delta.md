@@ -442,6 +442,14 @@ architecture-reviewer (APPROVE), style-reviewer (0C / 0I /
 Test count after R1 build-swarm closures: 11 named / 16
 collected (unchanged; all closures were comment + doc edits).
 
+### R2 build-swarm closure
+
+R2 confirming build swarm on commit `105cdac`: code-reviewer
+(0C / 0I / 0N APPROVE), qa-test-coverage (0C / 0I / 0N
+APPROVE), architecture-reviewer (0C / 0I / 0N APPROVE),
+style-reviewer (0C / 0I / 0N APPROVE). Build consensus
+reached: zero CRITICAL, zero IMPROVEMENT, zero NITPICK.
+
 ## Deferred
 
 - **D-B28.1**: add the `n_cells_paired + n_skipped_cells
