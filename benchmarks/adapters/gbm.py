@@ -122,6 +122,10 @@ class _GBMAdapter:
     _classifier: bool = field(default=False, init=False, repr=False)
     _est: _SklearnLikeEstimator | None = field(default=None, init=False, repr=False)
     _feature_columns: tuple[str, ...] | None = field(default=None, init=False, repr=False)
+    # Subset of `_feature_columns` derived from the spec's
+    # categorical columns; pinned at fit so predict / predict_proba
+    # apply the same per-library categorical dtype prep.
+    _cat_lag_columns: tuple[str, ...] = field(default=(), init=False, repr=False)
     # Per-instance featurizer cache (R1 arch-I1 close): the B5
     # driver calls `predict` then `predict_proba` then a latency
     # loop of more `predict`s on the same `test_panel` object;
@@ -169,6 +173,56 @@ class _GBMAdapter:
         self._cached_featurized = featurized
         return featurized
 
+    def _categorical_lag_columns(self, x: pd.DataFrame) -> list[str]:
+        """Return the names of lag columns derived from the spec's
+        categorical columns.
+
+        The lag featurizer names categorical-lag columns
+        ``{cat_col}_lag{k}`` for each ``cat_col`` in
+        ``spec.feature_categorical_cols``; this helper rebuilds that
+        list from the featurized X so the per-library categorical
+        wiring (LightGBM `categorical_feature=`, CatBoost
+        `cat_features=`, XGBoost dtype conversion) can target the
+        correct columns. Returns columns in their X order so the
+        per-library kwarg's positional or name-based pinning is
+        deterministic.
+        """
+        cat_cols = list(self.spec.feature_categorical_cols)
+        if not cat_cols:
+            return []
+        cat_prefixes = tuple(f"{c}_lag" for c in cat_cols)
+        return [col for col in x.columns if col.startswith(cat_prefixes)]
+
+    def _categorical_init_kwargs(self, cat_lag_cols: list[str]) -> dict[str, Any]:
+        """Per-library init-time categorical kwargs.
+
+        Default (LightGBM, base) is empty; CatBoost overrides to
+        pass ``cat_features=`` to the constructor, XGBoost
+        overrides to set ``enable_categorical=True``.
+        """
+        del cat_lag_cols
+        return {}
+
+    def _categorical_fit_kwargs(self, cat_lag_cols: list[str]) -> dict[str, Any]:
+        """Per-library fit-time categorical kwargs.
+
+        Default (CatBoost, XGBoost) is empty; LightGBM overrides to
+        pass ``categorical_feature=`` to ``fit``.
+        """
+        del cat_lag_cols
+        return {}
+
+    def _to_native_categorical(self, x: pd.DataFrame, cat_lag_cols: list[str]) -> pd.DataFrame:
+        """Per-library X-column dtype prep.
+
+        Default (LightGBM, CatBoost) returns X unchanged; XGBoost
+        overrides to convert the categorical-lag columns to
+        ``pd.Categorical`` dtype so the booster reads them as
+        true categoricals at fit + predict time.
+        """
+        del cat_lag_cols
+        return x
+
     def fit(self, panel: pd.DataFrame, y: np.ndarray) -> Self:
         if self.spec.task_type not in self.task_types:
             raise ValueError(
@@ -180,19 +234,23 @@ class _GBMAdapter:
                 f"{self.name}: missing `_estimator_factory`; instantiate via a registered factory."
             )
         x = self._featurize(panel)
+        cat_lag_cols = self._categorical_lag_columns(x)
+        x = self._to_native_categorical(x, cat_lag_cols)
         self._feature_columns = tuple(x.columns)
-        # `fit` may take library-specific kwargs (e.g.,
-        # `categorical_feature=` for LightGBM); B10 keeps the
-        # passthrough simple and lets the per-library factory
-        # configure these via the hyperparameters dict.
-        self._est = self._estimator_factory(**self.hyperparameters)
-        self._est.fit(x, np.asarray(y))
+        self._cat_lag_columns = tuple(cat_lag_cols)
+        merged_init_kwargs: dict[str, Any] = {
+            **self.hyperparameters,
+            **self._categorical_init_kwargs(cat_lag_cols),
+        }
+        self._est = self._estimator_factory(**merged_init_kwargs)
+        self._est.fit(x, np.asarray(y), **self._categorical_fit_kwargs(cat_lag_cols))
         return self
 
     def predict(self, panel: pd.DataFrame) -> np.ndarray:
         if self._est is None:
             raise NotFittedError(f"{self.name}: predict() called before fit(); call fit() first")
         x = self._featurize(panel)
+        x = self._to_native_categorical(x, list(self._cat_lag_columns))
         if self._feature_columns is not None:
             x = cast(pd.DataFrame, x[list(self._feature_columns)])
         y = np.asarray(self._est.predict(x))
@@ -215,6 +273,7 @@ class _GBMAdapter:
                 f"check `supports_proba` before calling"
             )
         x = self._featurize(panel)
+        x = self._to_native_categorical(x, list(self._cat_lag_columns))
         if self._feature_columns is not None:
             x = cast(pd.DataFrame, x[list(self._feature_columns)])
         proba_fn = getattr(self._est, "predict_proba", None)
@@ -347,6 +406,56 @@ def _make_catboost_regressor_estimator(**hyperparameters: Any) -> _SklearnLikeEs
     return cast(_SklearnLikeEstimator, cb.CatBoostRegressor(**defaults))
 
 
+# Per-library categorical-handling mixins. The library APIs
+# differ on WHERE the categorical hint goes:
+#   - LightGBM: `categorical_feature=` at `fit` (list of names).
+#   - CatBoost: `cat_features=` at the estimator constructor
+#     (list of names or indices); not accepted at `fit`.
+#   - XGBoost: `enable_categorical=True` at the estimator
+#     constructor PLUS `pd.Categorical` column dtype on every
+#     fit / predict / predict_proba input.
+#
+# The mixins override the corresponding hook on the base; per
+# B2-followup the adapter family treats every categorical lag
+# column as a true categorical so the GBM benchmark is honest vs
+# the seq_sklearn family (which routes the same columns through
+# learned embeddings).
+
+
+class _LightGBMCategoricalMixin:
+    def _categorical_fit_kwargs(self, cat_lag_cols: list[str]) -> dict[str, Any]:
+        if not cat_lag_cols:
+            return {}
+        return {"categorical_feature": cat_lag_cols}
+
+
+class _CatBoostCategoricalMixin:
+    def _categorical_init_kwargs(self, cat_lag_cols: list[str]) -> dict[str, Any]:
+        if not cat_lag_cols:
+            return {}
+        return {"cat_features": cat_lag_cols}
+
+
+class _XGBoostCategoricalMixin:
+    def _categorical_init_kwargs(self, cat_lag_cols: list[str]) -> dict[str, Any]:
+        if not cat_lag_cols:
+            return {}
+        return {"enable_categorical": True}
+
+    def _to_native_categorical(self, x: pd.DataFrame, cat_lag_cols: list[str]) -> pd.DataFrame:
+        if not cat_lag_cols:
+            return x
+        # `astype("category")` builds the dtype from the column's
+        # observed values; the column carries the same int-encoded
+        # codes the lag featurizer emits, so the categorical level
+        # set per column is stable across fit and predict (the lag
+        # featurizer encodes against the full panel, not the fold).
+        x = x.copy()
+        for col in cat_lag_cols:
+            x[col] = x[col].astype("category")
+        return x
+
+
 # Per-(library, task) concrete adapter classes. Each pins its
 # `name`, `task_types`, `supports_proba`, and the estimator
 # factory the generic base routes through. Explicit subclasses
@@ -356,7 +465,7 @@ def _make_catboost_regressor_estimator(**hyperparameters: Any) -> _SklearnLikeEs
 
 
 @dataclass
-class _LightGBMClassifierAdapter(_GBMAdapter):
+class _LightGBMClassifierAdapter(_LightGBMCategoricalMixin, _GBMAdapter):
     name: ClassVar[str] = "lightgbm_classifier"
     task_types: ClassVar[tuple[TaskType, ...]] = ("binary", "multiclass")
     supports_proba: ClassVar[bool] = True
@@ -367,7 +476,7 @@ class _LightGBMClassifierAdapter(_GBMAdapter):
 
 
 @dataclass
-class _LightGBMRegressorAdapter(_GBMAdapter):
+class _LightGBMRegressorAdapter(_LightGBMCategoricalMixin, _GBMAdapter):
     name: ClassVar[str] = "lightgbm_regressor"
     task_types: ClassVar[tuple[TaskType, ...]] = ("regression_point",)
     supports_proba: ClassVar[bool] = False
@@ -378,7 +487,7 @@ class _LightGBMRegressorAdapter(_GBMAdapter):
 
 
 @dataclass
-class _XGBoostClassifierAdapter(_GBMAdapter):
+class _XGBoostClassifierAdapter(_XGBoostCategoricalMixin, _GBMAdapter):
     name: ClassVar[str] = "xgboost_classifier"
     task_types: ClassVar[tuple[TaskType, ...]] = ("binary", "multiclass")
     supports_proba: ClassVar[bool] = True
@@ -389,7 +498,7 @@ class _XGBoostClassifierAdapter(_GBMAdapter):
 
 
 @dataclass
-class _XGBoostRegressorAdapter(_GBMAdapter):
+class _XGBoostRegressorAdapter(_XGBoostCategoricalMixin, _GBMAdapter):
     name: ClassVar[str] = "xgboost_regressor"
     task_types: ClassVar[tuple[TaskType, ...]] = ("regression_point",)
     supports_proba: ClassVar[bool] = False
@@ -400,7 +509,7 @@ class _XGBoostRegressorAdapter(_GBMAdapter):
 
 
 @dataclass
-class _CatBoostClassifierAdapter(_GBMAdapter):
+class _CatBoostClassifierAdapter(_CatBoostCategoricalMixin, _GBMAdapter):
     name: ClassVar[str] = "catboost_classifier"
     task_types: ClassVar[tuple[TaskType, ...]] = ("binary", "multiclass")
     supports_proba: ClassVar[bool] = True
@@ -411,7 +520,7 @@ class _CatBoostClassifierAdapter(_GBMAdapter):
 
 
 @dataclass
-class _CatBoostRegressorAdapter(_GBMAdapter):
+class _CatBoostRegressorAdapter(_CatBoostCategoricalMixin, _GBMAdapter):
     name: ClassVar[str] = "catboost_regressor"
     task_types: ClassVar[tuple[TaskType, ...]] = ("regression_point",)
     supports_proba: ClassVar[bool] = False
