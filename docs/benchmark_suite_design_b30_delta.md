@@ -76,41 +76,38 @@ and `metric_mean`.
 
 In `tests/benchmarks/test_b21_bca_ci.py` (next to existing
 `_bca_percentile_points` tests at `:215-243`), add two
-boundary tests (qa-R1-C1 closure: monkeypatch
-`_BCA_DENOM_EPS` to 0.0 so the boundary lands at an
-EXACTLY-representable float, allowing `<=` vs `<` to
-discriminate):
+boundary tests (qa-R2-C1 closure: my R1 attempt used
+`a = 1.0 / z_hi` claiming an IEEE 754 reciprocal-pair
+identity, but `z_hi = norm.ppf(0.975)` is irrational so
+the identity does NOT hold; `a * z_hi` lands one ULP
+below 1.0, putting `denom_hi` at ~1.1e-16 not exactly 0.
+The fix below uses `a = 0.0` which gives `denom_hi = 1.0`
+exactly via integer subtraction, then monkeypatches
+`_BCA_DENOM_EPS` to 1.0 so the boundary lands on
+`1.0 <= 1.0`):
 
 ```python
 def test_bca_percentile_points_a_overshoot_fires_at_eps_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D-B21.5 closure + qa-R1-C1: monkeypatch the eps to 0.0
-    and synthesize a so denom_hi lands at exactly 0.0. The
-    `<=` predicate at `benchmarks/metrics/bootstrap.py:97`
-    fires on equality; a `<` mutation would NOT fire and
-    fallback would be None. Float arithmetic guarantee:
-    1.0 / z_hi * z_hi == 1.0 exactly in IEEE 754 (the
-    division and multiplication round to a unique reciprocal
-    pair)."""
+    """D-B21.5 closure + qa-R2-C1: monkeypatch the eps to 1.0
+    and pass `a = 0.0` so denom_hi = 1.0 - 0.0 * z_hi = 1.0
+    exactly (integer arithmetic; no float drift). The `<=`
+    predicate at `benchmarks/metrics/bootstrap.py:97` fires
+    on `1.0 <= 1.0`; a `<` mutation would NOT fire on
+    `1.0 < 1.0` and fallback would be None."""
     import benchmarks.metrics.bootstrap as _bca
-    monkeypatch.setattr(_bca, "_BCA_DENOM_EPS", 0.0)
-    from scipy.stats import norm
-    confidence = 0.95
-    alpha = (1.0 - confidence) / 2.0
-    z_hi = float(norm.ppf(1.0 - alpha))
-    # With p0=0.5, z0=0: denom_hi = 1 - a*z_hi. Want
-    # denom_hi == 0.0. Solve: a = 1.0 / z_hi exactly.
-    a = 1.0 / z_hi
-    _, _, fallback = _bca_percentile_points(p0=0.5, a=a, confidence=confidence)
+    monkeypatch.setattr(_bca, "_BCA_DENOM_EPS", 1.0)
+    _, _, fallback = _bca_percentile_points(p0=0.5, a=0.0, confidence=0.95)
     assert fallback == "a_overshoot"
 
 
 def test_bca_percentile_points_a_overshoot_does_not_fire_above_eps() -> None:
     """Companion: with the real eps (1e-12), a value above
-    the threshold must NOT fire the fallback. Combined with
-    the boundary test above, the pair pins `<=` semantics at
-    exactly the threshold value."""
+    the threshold must NOT fire the fallback. The fixture
+    uses real arithmetic; `a = (1.0 - 2e-12) / z_hi` gives
+    `denom_hi ~ 2e-12` (well above 1e-12 eps), confirming
+    no spurious fallback fires in the safe region."""
     from scipy.stats import norm
     confidence = 0.95
     alpha = (1.0 - confidence) / 2.0
@@ -120,11 +117,11 @@ def test_bca_percentile_points_a_overshoot_does_not_fire_above_eps() -> None:
     assert fallback is None
 ```
 
-The two tests together pin the exact `<=` semantics: a `<`
-mutation would let the boundary test pass with `fallback=None`
-(since `denom_hi = 0.0` is NOT `< 0.0`), and the
-above-epsilon test continues to assert `fallback is None`
-under both `<` and `<=` operators.
+The two tests together pin `<=` semantics: a `<` mutation
+makes the boundary test fail (fallback would be None
+instead of `"a_overshoot"`); the above-epsilon companion
+proves the fallback doesn't spuriously fire when it
+shouldn't.
 
 ## B30.2 R-B30-2 design
 
@@ -271,7 +268,7 @@ Total collected: 1082 + 2 = 1084.
 
 | ID | Risk | Severity | Mitigation |
 |---|---|---|---|
-| R-B30-Risk-1 | The BCa boundary test depends on float precision at the threshold value. | Low | Resolved via `monkeypatch.setattr(_bca, "_BCA_DENOM_EPS", 0.0)`. With `a = 1.0 / z_hi`, the float identity `1.0 / z_hi * z_hi == 1.0` holds exactly in IEEE 754 (division and multiplication round to a unique reciprocal pair), so `denom_hi = 1.0 - 1.0 = 0.0 == _BCA_DENOM_EPS`. The `<=` predicate fires; a `<` mutation does not. The "above-epsilon" companion uses the real eps and a safely-distant value (2e-12). |
+| R-B30-Risk-1 | The BCa boundary test depends on float precision at the threshold value. | Low | Resolved via `monkeypatch.setattr(_bca, "_BCA_DENOM_EPS", 1.0)` and `a = 0.0`. With `a = 0.0`, `denom_hi = 1.0 - 0.0 * z_hi = 1.0` exactly (integer arithmetic; no float drift). The `<=` predicate fires on `1.0 <= 1.0`; a `<` mutation does not fire on `1.0 < 1.0`. R1 attempt with `a = 1.0 / z_hi` was incorrect: `z_hi = norm.ppf(0.975)` is irrational so `1.0 / z_hi * z_hi != 1.0` exactly (only powers of two satisfy IEEE 754 reciprocal-pair). The above-epsilon companion uses the real eps and a safely-distant value (2e-12). |
 | R-B30-Risk-2 | The reject-pair parametrize loses the per-test name visibility (pytest output shows `[case-name]` brackets instead of named test functions). | Low | Each parametrize case carries a stable `(schema_name, ...)` tuple; pytest names the case via the first parametrize arg. The `match=` regex still discriminates branches at failure time. |
 | R-B30-Risk-3 | Widening the per-fold table breaks downstream consumers that parse the rendered markdown by column position. | Low | No downstream consumer parses the rendered markdown by column position (the parquet shard is the structured channel). Existing B25 byte-pin tests use exact-header-string assertions which are updated in this same commit. |
 | R-B30-Risk-4 | The B25 test #10a assertion `"n_seeds" not in md` becomes false after R-B30-3 ships. | Medium-confirmed | Test #10a is REMOVED in the same commit (replaced by test #10c with the inverted assertion). If a future B25 audit re-adds #10a expecting the old behavior, the conflict is caught at PR-review time. |
@@ -318,6 +315,29 @@ Closures:
 Test count after R1 closures: unchanged (4 named / 4
 collected new). The qa-C1 closure preserved the 2-test
 boundary structure.
+
+### R2 design swarm closure
+
+R2 confirming swarm on commit `f94a943`: architecture-
+reviewer (0C / 0I / 0N APPROVE), qa-test-coverage (1C / 0I
+/ 0N REQUEST_CHANGES), style-reviewer (0C / 0I / 0N
+APPROVE). Deduplicated total: 1 CRITICAL, 0 IMPROVEMENT, 0
+NITPICK. Closures:
+
+- **qa-R2-C1** (R1's `a = 1.0 / z_hi` approach claimed an
+  IEEE 754 reciprocal-pair identity that does NOT hold for
+  irrational `z_hi`; live verification:
+  `1.0 / 1.959963984540054 * 1.959963984540054 ==
+  0.9999999999999999`, so `denom_hi == 1.11e-16` not 0,
+  and the test would FAIL on correct code never reaching
+  the mutation): boundary test rewritten with `a = 0.0`
+  (gives `denom_hi = 1.0` via integer arithmetic) and
+  `_BCA_DENOM_EPS = 1.0` (monkeypatch). Now
+  `1.0 <= 1.0` fires for `<=`, `1.0 < 1.0` does not fire
+  for `<`. Discriminates cleanly. R1's Risk-1 prose +
+  test body rewritten accordingly.
+
+Test count unchanged.
 
 ## Deferred
 
