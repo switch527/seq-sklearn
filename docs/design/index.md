@@ -2,7 +2,7 @@
 
 ```{warning}
 **Internal governance, not user documentation.** This section hosts
-the design specs, phase plans, and research notes that drove
+the design specs and the benchmark-suite phase log that drive
 seq-sklearn's v1 implementation. They are technical-process artifacts
 intended for contributors, reviewers, and future maintainers, not for
 people learning to use the library. If you are here to *use*
@@ -23,23 +23,9 @@ record stays inspectable.
 ```
 
 ```{toctree}
-:caption: Phase plans (governance ledgers)
+:caption: Benchmark suite
 
-../phase10_onnx_deploy
-../phase11_perf_baselines
-../phase12_docs_release
-```
-
-```{toctree}
-:caption: Research and prior plans
-
-../readme_and_docs_plan
-../docs_strategy_research
 ../benchmark_suite_design
-../benchmark_suite_design_b12_delta
-../benchmark_suite_design_b13_delta
 ../benchmark_suite_implementation_plan
-../hyperparameter_strategy
-../refactor_prediction_step
-../phase_1_refactor_plan
+../benchmark_suite_phase_log
 ```

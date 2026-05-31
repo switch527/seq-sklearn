@@ -1,7 +1,9 @@
 """TFTBackbone: the encoder-only Temporal Fusion Transformer (per A6 / A15).
 
-Composes the A6 block pipeline in the order corrected by
-``docs/research/tft.md``: static encoders -> static VSN -> four context
+Composes the A6 block pipeline in the order corrected against
+the canonical reference (Lim et al., arXiv:1912.09363, and the
+Google Research TF1 ``tft_model.py``): static encoders ->
+static VSN -> four context
 GRNs (c_s, c_h, c_c, c_e) -> past VSN gated by c_s -> LSTM initialized
 ``lstm(x, (c_h, c_c))`` over packed variable-length sequences ->
 post-LSTM GLU + AddNorm against the pre-LSTM VSN output -> c_e

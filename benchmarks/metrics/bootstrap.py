@@ -4,8 +4,8 @@ Pure function: takes pre-computed per-row losses + per-row entity
 ids + `(n_resamples, seed, metric_fn)`, returns
 `(mean, ci_lo, ci_hi)`.
 
-Design contracts (see `docs/benchmark_suite_design_b13_delta.md`
-R1-R5):
+Design contracts (`docs/benchmark_suite_phase_log.md` phase
+B13; full delta at the B13 merge commit per the log):
 
 - The bootstrap resamples UNIQUE entity ids WITH replacement
   (entity-block bootstrap, NOT row bootstrap). Panel data carries

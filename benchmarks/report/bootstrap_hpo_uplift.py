@@ -8,8 +8,8 @@ an inner-join on the variant axis, computes per-cell
 deltas using the entity-block primitive with cell-index as
 entity-id.
 
-Design contracts (`docs/benchmark_suite_design_b15_delta.md`
-sections B15.0, B15.2, B15.4):
+Design contracts (`docs/benchmark_suite_phase_log.md` phase
+B15; full delta at the B15 merge commit per the log):
 
 - Reuses B13 `RawRollupError(RuntimeError)` typed failure.
 - Reuses `RunManifest.fingerprint()` for freshness.

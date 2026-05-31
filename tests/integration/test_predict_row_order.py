@@ -6,7 +6,7 @@ caller's input ``X`` row order, not the transform's internal
 hide the bug, so these tests use shuffled STRING-id panels where the
 internal sort is a non-identity permutation.
 
-Mandatory tests #3, #6, #7, #8, #11 (refactor_prediction_step.md).
+Mandatory tests #3, #6, #7, #8, #11 (Phase 9 prediction-step refactor).
 """
 
 import logging

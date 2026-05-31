@@ -15,8 +15,8 @@ Regression cells emit a sentinel row with
 because `complementarity_score` is defined only for
 classification per B6.
 
-Design contracts (`docs/benchmark_suite_design_b14_delta.md`
-sections B14.0, B14.2):
+Design contracts (`docs/benchmark_suite_phase_log.md` phase
+B14; full delta at the B14 merge commit per the log):
 
 - Reuses the B13 `RawRollupError(RuntimeError)` typed failure
   surface; the CLI wrapper at
