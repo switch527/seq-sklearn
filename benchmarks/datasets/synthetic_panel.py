@@ -40,15 +40,22 @@ _DGP_SEED = 0x5717E71C5EEDB13  # "synthetic-seed-B13" mnemonic, deterministic
 # noise_level, num_classes, class_balance) so the SHA is a hash of
 # the generator's effective configuration. Changing any pinned knob
 # bumps the SHA → registry-invariants test surfaces the drift.
+# All variants are numeric-only at v1: the lag-featurize categorical
+# path produces object-dtype columns that LightGBM and XGBoost reject
+# (pre-existing benchmark issue; see lag_featurize._lag_categorical_column).
+# Re-enabling categoricals here requires fixing the categorical lag
+# encoding to int. periods_per_entity floor is set above lookback +
+# fold-count so the expanding-window CV's first fold always keeps at
+# least one above-floor entity per dataset.
 _VARIANTS: dict[str, dict[str, object]] = {
     "synthetic_binary_small": {
         "target_kind": "binary",
         "num_entities": 96,
-        "periods_per_entity": (12, 36),
-        "num_static_categorical": 2,
-        "num_static_real": 2,
-        "num_time_varying_real": 3,
-        "num_time_varying_categorical": 2,
+        "periods_per_entity": (24, 48),
+        "num_static_categorical": 0,
+        "num_static_real": 3,
+        "num_time_varying_real": 5,
+        "num_time_varying_categorical": 0,
         "class_balance": 0.5,
         "signal_strength": 0.75,
         "noise_level": 0.1,
@@ -57,11 +64,11 @@ _VARIANTS: dict[str, dict[str, object]] = {
     "synthetic_multiclass_small": {
         "target_kind": "multiclass",
         "num_entities": 96,
-        "periods_per_entity": (12, 36),
-        "num_static_categorical": 2,
-        "num_static_real": 2,
-        "num_time_varying_real": 3,
-        "num_time_varying_categorical": 2,
+        "periods_per_entity": (24, 48),
+        "num_static_categorical": 0,
+        "num_static_real": 3,
+        "num_time_varying_real": 5,
+        "num_time_varying_categorical": 0,
         "num_classes": 4,
         "signal_strength": 0.75,
         "noise_level": 0.1,
@@ -70,11 +77,11 @@ _VARIANTS: dict[str, dict[str, object]] = {
     "synthetic_regression_small": {
         "target_kind": "regression_point",
         "num_entities": 96,
-        "periods_per_entity": (12, 36),
-        "num_static_categorical": 2,
-        "num_static_real": 2,
-        "num_time_varying_real": 3,
-        "num_time_varying_categorical": 2,
+        "periods_per_entity": (24, 48),
+        "num_static_categorical": 0,
+        "num_static_real": 3,
+        "num_time_varying_real": 5,
+        "num_time_varying_categorical": 0,
         "signal_strength": 0.75,
         "noise_level": 0.1,
         "target_noise": 0.1,
