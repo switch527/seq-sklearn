@@ -1,7 +1,8 @@
 """Phase B21 D-B16.2 BCa CI tests.
 
-Covers 16 tests from `docs/benchmark_suite_design_b21_delta.md`
-sections B21.6 + R1-R4 closures:
+Covers 16 tests from the B21 delta (B21.6 + R1-R4 closures);
+full delta at the B21 merge commit per
+`docs/benchmark_suite_phase_log.md`:
 
 - Tests #1, #2, #9, #10: public-primitive shape + degenerate paths
 - Tests #3, #4: `_bca_percentile_points` p0_at_edge fallback branches

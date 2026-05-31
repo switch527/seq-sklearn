@@ -67,9 +67,7 @@ a thin wrapper). PatchTST, TimesNet, TST, LSTM, GRU, and LSTM-FCN follow
 in later versions behind the identical API. See the roadmap below.
 
 The full v1 requirements doc is
-[`docs/requirements.md`](docs/requirements.md); the README and
-documentation strategy is
-[`docs/readme_and_docs_plan.md`](docs/readme_and_docs_plan.md).
+[`docs/requirements.md`](docs/requirements.md).
 
 Star or watch the repo to follow the v1 release.
 

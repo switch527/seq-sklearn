@@ -14,7 +14,6 @@ _SPEC_DOCS = (
     _ROOT / "docs" / "architecture.md",
     _ROOT / "docs" / "requirements.md",
     _ROOT / "docs" / "implementation_plan.md",
-    _ROOT / "docs" / "readme_and_docs_plan.md",
 )
 _PATTERN = re.compile(r"mkdocs|mkdocstrings|griffe-pydantic", re.IGNORECASE)
 

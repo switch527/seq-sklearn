@@ -1,9 +1,9 @@
 """Phase B20 D-B16.1 oracle Δ CI tests.
 
-Covers the 13 design-named tests from
-`docs/benchmark_suite_design_b20_delta.md` section B20.3, plus two
+Covers the 13 design-named tests from the B20 delta plus two
 tests added in the Build R1 swarm closure (qa-R1-build-I1 +
-qa-R1-build-I2). Total: 15 tests.
+qa-R1-build-I2). Total: 15 tests. The full delta is at the B20
+merge commit per `docs/benchmark_suite_phase_log.md`.
 
 Six tests exercise the aggregator's new per-cell oracle Δ bootstrap
 path (happy path, partial coverage, all-None fallback, sign

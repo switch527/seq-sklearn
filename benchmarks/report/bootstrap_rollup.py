@@ -6,7 +6,8 @@ computes per-row losses, calls the entity-block bootstrap, and
 emits a per-(dataset, model, task_type) `RollupRow`. The output
 shard is written via `benchmarks.bootstrap_manifest.write_rollup`.
 
-Design contracts (`docs/benchmark_suite_design_b13_delta.md`):
+Design contracts (`docs/benchmark_suite_phase_log.md` phase
+B13; full delta at the B13 merge commit per the log):
 
 - B13.0: `RawRollupError(RuntimeError)` is the typed failure
   surface. Subclasses `RuntimeError` so a future driver call

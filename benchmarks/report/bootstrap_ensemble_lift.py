@@ -8,8 +8,8 @@ the per-(seed, fold) Δloss records. Bootstraps the per-cell
 `delta_loss` array using the entity-block primitive with
 cell-index as entity-id.
 
-Design contracts (`docs/benchmark_suite_design_b16_delta.md`
-sections B16.0, B16.2, B16.5):
+Design contracts (`docs/benchmark_suite_phase_log.md` phase
+B16; full delta at the B16 merge commit per the log):
 
 - Reuses B13 `RawRollupError(RuntimeError)` typed failure.
 - Reuses `RunManifest.fingerprint()` for freshness.

@@ -10,8 +10,8 @@ to OK cells, extracts per-cell `wall_seconds`, calls the entity-
 block bootstrap with the cell index as the entity id, and emits
 one `TrainingTimeRollupRow` per group.
 
-Design contracts (`docs/benchmark_suite_design_b14_delta.md`
-sections B14.0, B14.3):
+Design contracts (`docs/benchmark_suite_phase_log.md` phase
+B14; full delta at the B14 merge commit per the log):
 
 - Reuses the B13 `RawRollupError(RuntimeError)` typed failure
   surface; the CLI wrapper at

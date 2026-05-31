@@ -1,7 +1,8 @@
 """TFT building blocks: GLU, AddNorm, GRN, VSN (per architecture A6).
 
-Block order follows the Google Research TF1 reference and
-pytorch-forecasting v1.3 (validated in ``docs/research/tft.md``):
+Block order follows the Google Research TF1 reference
+(``tft_model.py`` per Lim et al., arXiv:1912.09363) and
+pytorch-forecasting v1.3:
 
 - ``GLU``: gated linear unit, ``a * sigmoid(b)`` over a split projection.
 - ``AddNorm``: residual add then ``LayerNorm``.
