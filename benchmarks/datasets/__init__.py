@@ -22,6 +22,9 @@ entry's shape, so the iteration is gated, not silent.
 from benchmarks.datasets import (
     amex_default,  # pyright: ignore[reportUnusedImport]
     c_mapss_fd001,  # pyright: ignore[reportUnusedImport]
+    c_mapss_fd002,  # pyright: ignore[reportUnusedImport]
+    c_mapss_fd003,  # pyright: ignore[reportUnusedImport]
+    c_mapss_fd004,  # pyright: ignore[reportUnusedImport]
     synthetic_panel,  # pyright: ignore[reportUnusedImport]
     uea_mtsc,  # pyright: ignore[reportUnusedImport]
 )
@@ -35,6 +38,9 @@ __all__ = [
     "PanelDataset",
     "amex_default",
     "c_mapss_fd001",
+    "c_mapss_fd002",
+    "c_mapss_fd003",
+    "c_mapss_fd004",
     "synthetic_panel",
     "uea_mtsc",
 ]

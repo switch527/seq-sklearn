@@ -103,6 +103,70 @@ _VARIANTS: dict[str, dict[str, object]] = {
             "(2018), SelfRegulationSCP1 dataset (BCI competition)."
         ),
     },
+    "uea_face_detection": {
+        "aeon_name": "FaceDetection",
+        "task_type": "binary",
+        "size_tier": "large",
+        # Despite the name, this is MEG (magnetoencephalography)
+        # brain-signal binary classification: subject viewing a face
+        # vs a scrambled image, 144 MEG channels x 62 timesteps.
+        # NOT image-based face detection.
+        "integrity_sha256": ("cfb8d99ecff50f5602cdf425b188e0fe6a4738cc5db161a2b477da8abf082177"),
+        "n_timesteps": 62,
+        "n_channels": 144,
+        "lookback": 18,
+        "citation": (
+            "UEA Multivariate Time Series Classification Archive "
+            "(2018), FaceDetection dataset (MEG brain-signal "
+            "classification)."
+        ),
+    },
+    "uea_motor_imagery": {
+        "aeon_name": "MotorImagery",
+        "task_type": "binary",
+        "size_tier": "medium",
+        # 64-channel EEG x 3000 timesteps, binary: imagined left vs
+        # right hand movement.
+        "integrity_sha256": ("8fe0bb361b6ff5ff0e9523221c113883dfe3a1826bdbffe887afa138b7ee9486"),
+        "n_timesteps": 3000,
+        "n_channels": 64,
+        "lookback": 800,
+        "citation": (
+            "UEA Multivariate Time Series Classification Archive "
+            "(2018), MotorImagery dataset (BCI competition III)."
+        ),
+    },
+    "uea_pems_sf": {
+        "aeon_name": "PEMS-SF",
+        "task_type": "multiclass",
+        "size_tier": "medium",
+        # 963 California highway sensors x 144 daily timesteps,
+        # 7-class day-of-week classification. The most "panel-like"
+        # UEA dataset in the registry.
+        "integrity_sha256": ("614e5190da67ec065b0d0ebcc52ac0e825947a2b03c70c7fe09ec35e373d0495"),
+        "n_timesteps": 144,
+        "n_channels": 963,
+        "lookback": 40,
+        "citation": (
+            "UEA Multivariate Time Series Classification Archive "
+            "(2018), PEMS-SF dataset (California highway sensors)."
+        ),
+    },
+    "uea_ethanol_concentration": {
+        "aeon_name": "EthanolConcentration",
+        "task_type": "multiclass",
+        "size_tier": "medium",
+        # 3-channel raman spectroscopy x 1751 timesteps, 4-class
+        # ethanol concentration.
+        "integrity_sha256": ("834d6d73ea2074a0eb4ea46fb15775c219d107a5d59e9707acb7c6903599a153"),
+        "n_timesteps": 1751,
+        "n_channels": 3,
+        "lookback": 500,
+        "citation": (
+            "UEA Multivariate Time Series Classification Archive "
+            "(2018), EthanolConcentration dataset (Raman spectroscopy)."
+        ),
+    },
 }
 
 
