@@ -42,6 +42,7 @@ from scipy.stats import norm  # B21 / D-B16.2: BCa transform
 __all__ = [
     "BootstrapResult",
     "entity_block_bootstrap_ci",
+    "entity_block_bootstrap_ci_mean_fast",
 ]
 
 
@@ -291,6 +292,170 @@ def entity_block_bootstrap_ci(
         metric_fn=metric_fn,
         confidence=confidence,
     )
+    ci_lo = float(np.percentile(resampled, 100.0 * alpha_1, method="linear"))
+    ci_hi = float(np.percentile(resampled, 100.0 * alpha_2, method="linear"))
+    return BootstrapResult(
+        mean=ground_truth_mean,
+        ci_lo=ci_lo,
+        ci_hi=ci_hi,
+        fallback_reason=fallback_reason,
+    )
+
+
+def entity_block_bootstrap_ci_mean_fast(
+    losses: np.ndarray,
+    entity_ids: np.ndarray,
+    *,
+    n_resamples: int = _DEFAULT_N_RESAMPLES,
+    confidence: float = _DEFAULT_CONFIDENCE,
+    seed: int = _DEFAULT_SEED,
+    ci_method: Literal["percentile", "bca"] = "bca",
+    sqrt_mean: bool = False,
+) -> BootstrapResult:
+    """Sufficient-statistics fast path for the entity-block bootstrap.
+
+    Hardwired to `nanmean` semantics (or `sqrt(nanmean(x))` when
+    `sqrt_mean=True`). Numerically equivalent to
+    `entity_block_bootstrap_ci(..., metric_fn=np.nanmean)` (or the
+    sqrt variant) modulo float-order drift.
+
+    The naive path takes O(N) memory traffic per resample
+    (row-vector concatenation); this fast path uses pre-computed
+    per-entity (sum_loss, count_non_nan) statistics, reducing
+    memory traffic to O(E) per resample. For the full-tier
+    Amex dataset (~500k entities vs 6M rows) this is a ~12x
+    memory + ~12x throughput improvement (D-B13.7).
+
+    Use cases:
+        - v1 classification aggregators with metric_fn=np.nanmean.
+        - v1 regression aggregators with sqrt_mean=True.
+
+    A custom metric_fn that is NOT expressible from sum/count
+    sufficient statistics (e.g., median, ROC-AUC) must continue
+    to use `entity_block_bootstrap_ci`.
+
+    Args:
+        losses: 1-D array of per-row losses. NaN rows are treated
+            as missing (matches `np.nanmean` semantics).
+        entity_ids: 1-D array of per-row entity identifiers (same
+            length as `losses`).
+        n_resamples: Number of bootstrap resamples.
+        confidence: Two-sided percentile interval width.
+        seed: PCG64 seed; pinned algorithm per Gemini-I2.
+        ci_method: `"bca"` (default) or `"percentile"`. BCa uses
+            a leave-one-entity-out sufficient-stats jackknife
+            (O(1) per leave-one-out) rather than re-applying
+            metric_fn to concatenated leave-out rows.
+        sqrt_mean: When True, applies `sqrt` to each per-resample
+            mean (matches the regression metric_fn
+            `lambda x: float(np.sqrt(np.nanmean(x)))`). Sqrt is
+            applied PER RESAMPLE per the Jensen-inequality fix.
+
+    Returns:
+        `BootstrapResult(mean, ci_lo, ci_hi, fallback_reason)`.
+
+    Raises:
+        ValueError: shapes mismatch, confidence outside (0, 1),
+            n_resamples < 1, or all losses are NaN.
+    """
+    if losses.ndim != 1 or entity_ids.ndim != 1:
+        raise ValueError(
+            f"entity_block_bootstrap_ci_mean_fast: losses + entity_ids must be 1-D; "
+            f"got losses.ndim={losses.ndim}, entity_ids.ndim={entity_ids.ndim}"
+        )
+    if losses.shape[0] != entity_ids.shape[0]:
+        raise ValueError(
+            f"entity_block_bootstrap_ci_mean_fast: losses len {losses.shape[0]} != "
+            f"entity_ids len {entity_ids.shape[0]}"
+        )
+    if not (0.0 < confidence < 1.0):
+        raise ValueError(
+            f"entity_block_bootstrap_ci_mean_fast: confidence must be in (0, 1); got {confidence}"
+        )
+    if n_resamples < 1:
+        raise ValueError(
+            f"entity_block_bootstrap_ci_mean_fast: n_resamples must be >= 1; got {n_resamples}"
+        )
+
+    losses_arr = np.asarray(losses, dtype=np.float64)
+    entity_ids_arr = np.asarray(entity_ids)
+
+    # Per-row NaN mask + safe-fill so the sum reduction stays in
+    # float64 without NaN poisoning.
+    nan_mask = np.isnan(losses_arr)
+    safe_losses = np.where(nan_mask, 0.0, losses_arr)
+    non_nan_counts = (~nan_mask).astype(np.int64)
+
+    # Group by entity → per-entity (sum, count_non_nan).
+    _unique_entities, inverse = np.unique(entity_ids_arr, return_inverse=True)
+    n_entities = int(_unique_entities.shape[0])
+    entity_sums = np.zeros(n_entities, dtype=np.float64)
+    entity_counts = np.zeros(n_entities, dtype=np.int64)
+    # `np.add.at` is unbuffered, so duplicate indices accumulate
+    # correctly (a single += would only register the last write).
+    np.add.at(entity_sums, inverse, safe_losses)
+    np.add.at(entity_counts, inverse, non_nan_counts)
+
+    total_sum = float(entity_sums.sum())
+    total_count = int(entity_counts.sum())
+    if total_count == 0:
+        raise ValueError(
+            "entity_block_bootstrap_ci_mean_fast: all losses are NaN; "
+            "ground-truth mean is undefined"
+        )
+
+    ground_truth_mean = total_sum / total_count
+    if sqrt_mean:
+        ground_truth_mean = float(np.sqrt(ground_truth_mean))
+
+    if n_entities <= 1:
+        return BootstrapResult(
+            mean=ground_truth_mean,
+            ci_lo=ground_truth_mean,
+            ci_hi=ground_truth_mean,
+            fallback_reason=None,
+        )
+
+    # Same RNG sequence as the naive path: PCG64(seed) →
+    # `rng.integers(0, n_entities, size=n_entities)` per resample.
+    # Identical `picked` arrays guarantee the fast path's
+    # resampled distribution matches the naive path's modulo
+    # float-order drift in the sum reduction.
+    rng = np.random.Generator(np.random.PCG64(seed))
+    resampled = np.empty(n_resamples, dtype=np.float64)
+    for r in range(n_resamples):
+        picked = rng.integers(0, n_entities, size=n_entities)
+        sum_picked = float(entity_sums[picked].sum())
+        count_picked = int(entity_counts[picked].sum())
+        if count_picked == 0:
+            resampled[r] = np.nan
+            continue
+        val = sum_picked / count_picked
+        resampled[r] = float(np.sqrt(val)) if sqrt_mean else val
+
+    alpha = (1.0 - confidence) / 2.0
+    if ci_method == "percentile":
+        ci_lo = float(np.percentile(resampled, 100.0 * alpha, method="linear"))
+        ci_hi = float(np.percentile(resampled, 100.0 * (1.0 - alpha), method="linear"))
+        return BootstrapResult(
+            mean=ground_truth_mean,
+            ci_lo=ci_lo,
+            ci_hi=ci_hi,
+            fallback_reason=None,
+        )
+
+    # ci_method == "bca": leave-one-entity-out via sufficient stats.
+    p0 = float(np.mean(resampled <= ground_truth_mean))
+    jackknife = np.empty(n_entities, dtype=np.float64)
+    for i in range(n_entities):
+        denom_count = total_count - int(entity_counts[i])
+        if denom_count == 0:
+            jackknife[i] = np.nan
+            continue
+        val = (total_sum - float(entity_sums[i])) / denom_count
+        jackknife[i] = float(np.sqrt(val)) if sqrt_mean else val
+    a = _compute_acceleration_from_jackknife(jackknife)
+    alpha_1, alpha_2, fallback_reason = _bca_percentile_points(p0, a, confidence)
     ci_lo = float(np.percentile(resampled, 100.0 * alpha_1, method="linear"))
     ci_hi = float(np.percentile(resampled, 100.0 * alpha_2, method="linear"))
     return BootstrapResult(
