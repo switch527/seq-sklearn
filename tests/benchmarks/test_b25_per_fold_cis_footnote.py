@@ -431,10 +431,10 @@ def test_per_fold_cis_footnote_null_metric_renders_dash() -> None:
         if ln.startswith("| fake_binary |") and "| 0 |" in ln
     )
     cells = [c.strip() for c in fold_line.strip("| ").split(" | ")]
-    # B30 / D-B25.3 closure: cell list now 9 elements (was 7);
-    # n_seeds + n_entities inserted between fold and metric_mean.
-    # Defaults from `_fold_ci`: n_seeds=2, n_entities=4.
-    assert cells == ["fake_binary", "0", "2", "4", "-", "-", "-", "bca", "-"]
+    # B30 + B37 cascade: 10 elements; scope "main" inserted
+    # between dataset and fold; n_seeds + n_entities between
+    # fold and metric_mean. Defaults: n_seeds=2, n_entities=4.
+    assert cells == ["fake_binary", "main", "0", "2", "4", "-", "-", "-", "bca", "-"]
 
 
 def test_per_fold_cis_footnote_none_fallback_reason_renders_dash_with_non_null_metrics() -> None:
@@ -464,9 +464,9 @@ def test_per_fold_cis_footnote_none_fallback_reason_renders_dash_with_non_null_m
         if ln.startswith("| fake_binary |") and "| 0 |" in ln
     )
     cells = [c.strip() for c in fold_line.strip("| ").split(" | ")]
-    # B30 / D-B25.3 closure: 9-element list with n_seeds=2,
-    # n_entities=4 between fold and metric_mean.
-    assert cells == ["fake_binary", "0", "2", "4", "0.2150", "0.2000", "0.2300", "bca", "-"]
+    # B30 + B37 cascade: 10-element list with scope "main"
+    # inserted between dataset and fold.
+    assert cells == ["fake_binary", "main", "0", "2", "4", "0.2150", "0.2000", "0.2300", "bca", "-"]
 
 
 def test_per_fold_cis_footnote_float_format_4_decimals() -> None:
@@ -520,8 +520,9 @@ def test_per_fold_cis_footnote_sorts_fold_rows_by_fold_index_ascending_when_inpu
         if not ln.startswith("| fake_binary |"):
             continue
         cells = [c.strip() for c in ln.strip("| ").split(" | ")]
-        # Cells: [dataset, fold, n_seeds, n_entities, ...]
-        fold_indices.append(int(cells[1]))
+        # B37 cascade: cells now [dataset, scope, fold,
+        # n_seeds, n_entities, ...]. fold_index is at index 2.
+        fold_indices.append(int(cells[2]))
     assert fold_indices == [0, 1, 2]
 
 
@@ -607,7 +608,7 @@ def test_raw_loss_renderer_emits_per_fold_cis_when_present() -> None:
     md = render_leaderboard_markdown_with_ci(manifest, rollup)
     assert _SECTION in md
     assert (
-        "| Dataset | Model | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
+        "| Dataset | Model | scope | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
         "metric_ci_hi | ci_method | ci_fallback_reason |" in md
     )
 
@@ -618,7 +619,7 @@ def test_pairwise_renderer_emits_per_fold_cis_when_present() -> None:
     md = render_pairwise_markdown_with_ci(manifest, rollup)
     assert _SECTION in md
     assert (
-        "| Dataset | Model A | Model B | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
+        "| Dataset | Model A | Model B | scope | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
         "metric_ci_hi | ci_method | ci_fallback_reason |" in md
     )
 
@@ -629,7 +630,7 @@ def test_training_time_renderer_emits_per_fold_cis_when_present() -> None:
     md = render_training_time_markdown_with_ci(manifest, rollup)
     assert _SECTION in md
     assert (
-        "| Dataset | Model | Hardware tier | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
+        "| Dataset | Model | Hardware tier | scope | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
         "metric_ci_hi | ci_method | ci_fallback_reason |" in md
     )
 
@@ -640,7 +641,7 @@ def test_hpo_uplift_renderer_emits_per_fold_cis_when_present() -> None:
     md = render_hpo_uplift_markdown_with_ci(manifest, rollup)
     assert _SECTION in md
     assert (
-        "| Dataset | Model | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
+        "| Dataset | Model | scope | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
         "metric_ci_hi | ci_method | ci_fallback_reason |" in md
     )
 
@@ -651,7 +652,7 @@ def test_ensemble_lift_renderer_emits_per_fold_cis_when_present() -> None:
     md = render_ensemble_lift_markdown_with_ci(result, rollup)
     assert _SECTION in md
     assert (
-        "| Dataset | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
+        "| Dataset | scope | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
         "metric_ci_hi | ci_method | ci_fallback_reason |" in md
     )
 
