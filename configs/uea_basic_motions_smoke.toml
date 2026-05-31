@@ -15,5 +15,8 @@ cache_dir = ".cache/benchmarks"
 
 [[experiments]]
 kind = "raw_loss"
-seeds = [0, 1, 2]
+# 1 seed for the smoke pass: TFT classifier dominates wall
+# time at ~100s/cell on lookback=30 with 6 channels; 5 folds
+# give a CV signal across all 7 classifiers.
+seeds = [0]
 bootstrap_n_resamples = 1000

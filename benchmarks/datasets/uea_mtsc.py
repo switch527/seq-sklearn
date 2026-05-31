@@ -65,6 +65,14 @@ _VARIANTS: dict[str, dict[str, object]] = {
         "integrity_sha256": ("7af10de0f3bf254f0e3272747aa790947236cd8ffe61e19ff3c1a1cb42fd732d"),
         "n_timesteps": 100,
         "n_channels": 6,
+        # Per-entity test-fold rows after the splitter's left-extension
+        # are bounded by `first_segment_size + test_segment_size` ≈
+        # 2 * n_timesteps / (n_splits + 1). With n_splits=5 that's
+        # ≈ 2*100/6 ≈ 33; pick 30 so the TSC adapter's L_resolved
+        # check (`n_rows >= L`) passes on every test entity. The TSC
+        # window is the trailing 30 of 100 timesteps; not the canonical
+        # UEA evaluation, but a self-consistent CV benchmark.
+        "lookback": 30,
         "citation": (
             "UEA Multivariate Time Series Classification Archive (2018), BasicMotions dataset."
         ),
@@ -73,12 +81,10 @@ _VARIANTS: dict[str, dict[str, object]] = {
         "aeon_name": "Heartbeat",
         "task_type": "binary",
         "size_tier": "medium",
-        # Sorted unique labels: abnormal, normal. positive_label=1
-        # → normal (higher-sorted) is the "positive" class in the
-        # B5.1 framing convention.
         "integrity_sha256": ("0c6555bd2aeba46152a6878d9bdaa2aac60f13152d3c51642609e1010fd399fc"),
         "n_timesteps": 405,
         "n_channels": 61,
+        "lookback": 100,
         "citation": (
             "UEA Multivariate Time Series Classification Archive "
             "(2018), Heartbeat dataset (PhysioNet 2016 Challenge)."
@@ -88,10 +94,10 @@ _VARIANTS: dict[str, dict[str, object]] = {
         "aeon_name": "SelfRegulationSCP1",
         "task_type": "binary",
         "size_tier": "medium",
-        # Sorted unique labels: negativity, positivity.
         "integrity_sha256": ("aa3ef3c9c13d52057cb508aa3f2ed948799843d86d65e9934fae4a71ca680961"),
         "n_timesteps": 896,
         "n_channels": 6,
+        "lookback": 250,
         "citation": (
             "UEA Multivariate Time Series Classification Archive "
             "(2018), SelfRegulationSCP1 dataset (BCI competition)."
@@ -126,16 +132,13 @@ def _build_spec(name: str, params: dict[str, object]) -> DatasetSpec:
         target_col="y",
         feature_real_cols=_channel_cols(n_channels),
         feature_categorical_cols=(),
-        # The expanding-window splitter's min-rows floor is
-        # `n_splits + lookback`. With the harness's default
-        # n_splits=5 a lookback equal to the full sequence
-        # length forces every entity below the floor (the train
-        # set comes back empty). Trim the lookback by a 5-fold
-        # safety margin so the splitter retains every entity;
-        # the TSC adapter clips to the trailing `lookback` rows
-        # per the F2 trailing-window convention, losing only
-        # the first ~1% of timesteps.
-        lookback=int(params["n_timesteps"]) - 5,  # pyright: ignore[reportArgumentType]
+        # Lookback is set per-variant rather than from
+        # `n_timesteps` because the expanding-window splitter
+        # trims the per-entity test-fold to ≈ 2*n_timesteps/
+        # (n_splits+1) rows; lookback must fit that bound so
+        # the TSC adapter's `panel_to_tensor` does not reject
+        # every test entity as below-floor.
+        lookback=int(params["lookback"]),  # pyright: ignore[reportArgumentType]
         observation_cutoff_rule=(
             "Each UEA instance is a fixed-length whole-sequence sample; "
             "the label is broadcast across every timestep row of that "
