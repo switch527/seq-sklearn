@@ -784,13 +784,17 @@ qa-R2-I2 added test #19); total `903 + 19 = 922`.
   WITHIN a fold, yielding a fold-mean uncertainty). v1
   ships the test-row bootstrap; the seed-mean bootstrap
   is a separate audit field.
-- **D-B22.4** (arch-R1-I3 closure): per-kind override on
+- **D-B22.4** (arch-R1-I3 closure):
+  **PERMANENTLY-DEFERRED-YAGNI:** per-kind override on
   `ExperimentSpec.bootstrap_per_fold_cis_enabled` (e.g.,
   enable per-fold CIs for B5 + B16 but not B6 + B7 + B8).
   v1 ships a single cross-cutting flag because the
   underlying helper is uniform; per-kind override would
   add 5 redundant booleans with no per-kind variation at
-  the v1 helper level.
+  the v1 helper level. Reclassified B32 as YAGNI: the
+  cross-cutting flag covers v1 needs; reopen only if a
+  consumer requests per-kind selectivity (and is willing
+  to maintain 5 redundant booleans).
 - **D-B22.5** (arch-R2-N3 closure): documentation cleanup
   pass on the R1 closure block to reconcile the dedup
   header counts with the enumerated closure entries.

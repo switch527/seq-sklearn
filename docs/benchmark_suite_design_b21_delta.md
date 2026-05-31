@@ -1218,16 +1218,23 @@ deferred.
   shard audit columns only; rendering them surfaces
   per-dataset BCa health to readers without making the
   table cells noisier.
-- **D-B21.2**: configurable `ci_method` per-experiment via
+- **D-B21.2**: **PERMANENTLY-DEFERRED-YAGNI:** configurable
+  `ci_method` per-experiment via
   `ExperimentSpec.bootstrap_ci_method`. v1 hard-defaults to
   BCa via `BOOTSTRAP_DEFAULT_CI_METHOD`; per-experiment
   override would let a reviewer test the percentile path
   on a specific aggregator without monkeypatching.
-- **D-B21.3**: ABC (approximate bootstrap confidence)
-  intervals as a third method. ABC is faster than BCa
-  (no jackknife) but requires a smooth `metric_fn`. The
-  current metric_fns (nanmean, sqrt(nanmean)) qualify, but
-  the deferral is intentional to keep B21 scope tight.
+  Reclassified B32 as YAGNI: monkeypatching is sufficient
+  for reviewer debugging; reopen only if a non-debug
+  consumer needs per-experiment ci_method dispatch.
+- **D-B21.3**: **PERMANENTLY-DEFERRED-YAGNI:** ABC
+  (approximate bootstrap confidence) intervals as a third
+  method. ABC is faster than BCa (no jackknife) but
+  requires a smooth `metric_fn`. The current metric_fns
+  (nanmean, sqrt(nanmean)) qualify, but the deferral is
+  intentional to keep B21 scope tight. Reclassified B32 as
+  YAGNI: BCa + percentile fallback meet v1 needs; reopen
+  only if a published comparison case requires ABC bounds.
 - **D-B21.4** (arch-R1-I4 closure): replace the 4-tuple
   return of `entity_block_bootstrap_ci` with a frozen
   `BootstrapResult` pydantic BaseModel carrying named

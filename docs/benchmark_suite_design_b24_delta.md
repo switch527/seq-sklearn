@@ -590,10 +590,14 @@ reached: zero CRITICAL, zero IMPROVEMENT, zero NITPICK.
   distribution rarely observed with full coverage. A future "Oracle BCa health"
   footnote symmetric with the main `Bootstrap CI method`
   footnote would close this gap if observed in production.
-- **D-B24.2**: introduce a separate `bootstrap_oracle_ci_method`
-  field on `EnsembleLiftRollupRow` so the oracle and main
-  paths can be configured independently. v1 reuses
+- **D-B24.2**: **PERMANENTLY-DEFERRED-YAGNI:** introduce a
+  separate `bootstrap_oracle_ci_method` field on
+  `EnsembleLiftRollupRow` so the oracle and main paths can
+  be configured independently. v1 reuses
   `bootstrap_ci_method` for both surfaces because the
   aggregator passes the same constant to both bootstrap
   calls. Tied to D-B21.2 (configurable ci_method per
-  experiment).
+  experiment). Reclassified B32 as YAGNI alongside
+  D-B21.2: independent oracle ci_method only matters if
+  per-experiment ci_method dispatch is implemented; both
+  reopen together if a consumer asks.
