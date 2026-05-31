@@ -33,7 +33,7 @@ R1-R5):
 """
 
 from collections.abc import Callable, Iterator
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict
@@ -68,9 +68,13 @@ class BootstrapResult(BaseModel):
     ci_hi: float
     fallback_reason: str | None = None
 
-    def __iter__(self) -> Iterator[float | str | None]:  # type: ignore[override]
+    def __iter__(self) -> Iterator[Any]:  # type: ignore[override]
         # Yield in original tuple-position order so existing
-        # callers keep tuple-unpack semantics.
+        # callers keep tuple-unpack semantics. Typed `Any` so
+        # the per-position float / str | None narrowing
+        # survives at the unpack site (each variable retains
+        # its expected type at the call site rather than the
+        # union of all field types).
         return iter((self.mean, self.ci_lo, self.ci_hi, self.fallback_reason))
 
     def __len__(self) -> int:
