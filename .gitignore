@@ -76,3 +76,7 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Benchmark data caches (large; downloaded on demand)
+.cache/
+coverage.json

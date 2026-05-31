@@ -199,8 +199,12 @@ def _make_rocket_classifier(**hyperparameters: Any) -> Any:
         RocketClassifier,
     )
 
+    # aeon 1.x renamed `num_kernels` → `n_kernels`; pass through
+    # whichever the caller supplies but normalize on the new name.
+    if "num_kernels" in hyperparameters and "n_kernels" not in hyperparameters:
+        hyperparameters["n_kernels"] = hyperparameters.pop("num_kernels")
     defaults: dict[str, Any] = {
-        "num_kernels": 10_000,
+        "n_kernels": 10_000,
         "n_jobs": -1,
     }
     defaults.update(hyperparameters)
@@ -212,8 +216,10 @@ def _make_multirocket_classifier(**hyperparameters: Any) -> Any:
         MultiRocketClassifier,
     )
 
+    if "num_kernels" in hyperparameters and "n_kernels" not in hyperparameters:
+        hyperparameters["n_kernels"] = hyperparameters.pop("num_kernels")
     defaults: dict[str, Any] = {
-        "num_kernels": 10_000,
+        "n_kernels": 10_000,
         "max_dilations_per_kernel": 32,
         "n_jobs": -1,
     }
