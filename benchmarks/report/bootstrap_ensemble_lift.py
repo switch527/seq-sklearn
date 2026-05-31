@@ -385,9 +385,16 @@ def _build_dataset_rollup(
         oracle_cells_with_loss = [
             c for c in computed.cells if c.oracle_loss is not None
         ]
+        # Recompute the entity ids here so pyright can prove
+        # the array is bound (the `else` branch above only
+        # binds `oracle_entity_ids` when n_oracle > 0; the
+        # B35 block is also guarded on n_oracle > 0, but
+        # pyright doesn't carry the narrowing across the
+        # outer if-else boundary).
+        _oracle_entity_ids = np.arange(n_oracle_cells_paired, dtype=np.int64)
         per_fold_oracle_cis = _bootstrap_aggregate.compute_per_fold_cis(
             losses=oracle_deltas,
-            entities=oracle_entity_ids,
+            entities=_oracle_entity_ids,
             fold_indices=np.array(
                 [c.fold_index for c in oracle_cells_with_loss], dtype=np.int64
             ),
