@@ -182,18 +182,21 @@ def _resolve_hpo_seeds(experiments: Sequence[ExperimentSpec]) -> tuple[int, ...]
 
 def _resolve_hpo_budget(
     experiments: Sequence[ExperimentSpec], profile: str
-) -> tuple[int, float, str]:
-    """Return `(n_trials, timeout_seconds, hpo_tier)` for the run.
+) -> tuple[int, float, str, int | None]:
+    """Return `(n_trials, timeout_seconds, hpo_tier, n_startup_trials)`.
 
     Profile-tier defaults from `_HPO_BUDGETS_BY_PROFILE`. The first
     `ExperimentSpec(kind="hpo_uplift")` carrying a non-None
-    `n_trials` / `timeout_seconds` overrides the corresponding
-    default. When the overrides yield a non-default tier, `hpo_tier`
-    is the override sentinel `"custom"` so the report can tell
-    overridden runs apart.
+    `n_trials` / `timeout_seconds` / `hpo_n_startup_trials` overrides
+    the corresponding default. When the overrides yield a non-default
+    tier, `hpo_tier` is the override sentinel `"custom"` so the report
+    can tell overridden runs apart. ``n_startup_trials`` returns
+    ``None`` to mean "use Optuna's TPESampler default" (10); a
+    non-None value forwards to ``TPESampler(n_startup_trials=...)``.
     """
     n_trials, timeout_seconds = _HPO_BUDGETS_BY_PROFILE.get(profile, (0, 0.0))
     tier = _HPO_TIER_BY_PROFILE.get(profile, "none")
+    n_startup_trials: int | None = None
     overridden = False
     for spec in experiments:
         if spec.kind != "hpo_uplift":
@@ -204,10 +207,13 @@ def _resolve_hpo_budget(
         if spec.timeout_seconds is not None:
             timeout_seconds = float(spec.timeout_seconds)
             overridden = True
+        if spec.hpo_n_startup_trials is not None:
+            n_startup_trials = int(spec.hpo_n_startup_trials)
+            overridden = True
         break
     if overridden:
         tier = "custom"
-    return n_trials, timeout_seconds, tier
+    return n_trials, timeout_seconds, tier, n_startup_trials
 
 
 def _primary_loss_from_metrics(metrics_dump: dict[str, Any], task_type: TaskType) -> float:
@@ -385,6 +391,7 @@ def _run_hpo_study(
     n_trials: int,
     timeout_seconds: float,
     seed: int,
+    n_startup_trials: int | None = None,
 ) -> tuple[optuna.Study, int, int, int | None, float | None, float | None, dict[str, Any] | None]:
     """Drive an Optuna study against the inner train/val split.
 
@@ -404,7 +411,13 @@ def _run_hpo_study(
     # Optuna's TPE sampler is reproducible when seeded; pin to the
     # cell's seed so a (dataset, model, seed, fold) study is
     # deterministic across runs (B8.1 reproducibility).
-    sampler = optuna.samplers.TPESampler(seed=seed)
+    # ``n_startup_trials`` defaults to Optuna's 10 when None; the
+    # caller's ExperimentSpec can widen the warmup for higher-
+    # dimensional search spaces.
+    sampler_kwargs: dict[str, Any] = {"seed": seed}
+    if n_startup_trials is not None:
+        sampler_kwargs["n_startup_trials"] = n_startup_trials
+    sampler = optuna.samplers.TPESampler(**sampler_kwargs)
     study = optuna.create_study(direction="minimize", sampler=sampler)
 
     best_val_loss: float | None = None
@@ -523,6 +536,7 @@ def _run_one_hpo_cell(
     hpo_tier: str,
     n_trials: int,
     timeout_seconds: float,
+    n_startup_trials: int | None = None,
 ) -> ResultRow:
     """Run one (dataset, model, seed, fold) tuned-arm cell.
 
@@ -635,6 +649,7 @@ def _run_one_hpo_cell(
             n_trials=n_trials,
             timeout_seconds=timeout_seconds,
             seed=seed,
+            n_startup_trials=n_startup_trials,
         )
     except OptionalDependencyMissingError as exc:
         # B12: trial fit raised OptionalDependencyMissingError. The
@@ -903,10 +918,15 @@ def run_hpo_uplift(
     dataset_names = _resolve_names(config.datasets, list_datasets())
     model_names = _resolve_names(config.models, list_models())
     seeds = _resolve_hpo_seeds(config.experiments)
-    n_trials, timeout_seconds, hpo_tier = _resolve_hpo_budget(config.experiments, env.profile)
+    (
+        n_trials,
+        timeout_seconds,
+        hpo_tier,
+        n_startup_trials,
+    ) = _resolve_hpo_budget(config.experiments, env.profile)
     logger.info(
         "run_hpo_uplift: env.run_id=%s datasets=%d models=%d seeds=%s "
-        "n_trials=%d timeout=%.1fs hpo_tier=%s",
+        "n_trials=%d timeout=%.1fs hpo_tier=%s n_startup_trials=%s",
         env.run_id,
         len(dataset_names),
         len(model_names),
@@ -914,6 +934,7 @@ def run_hpo_uplift(
         n_trials,
         timeout_seconds,
         hpo_tier,
+        n_startup_trials if n_startup_trials is not None else "default",
     )
     cache_dir = config.cache_dir
     if cache_dir is None:
@@ -1077,6 +1098,7 @@ def run_hpo_uplift(
                             hpo_tier=hpo_tier,
                             n_trials=n_trials,
                             timeout_seconds=timeout_seconds,
+                            n_startup_trials=n_startup_trials,
                         )
                         if row.skipped_reason is None:
                             attempted += 1

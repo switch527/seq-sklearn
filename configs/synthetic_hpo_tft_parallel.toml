@@ -1,0 +1,32 @@
+# TFT-only HPO uplift across the 3 synthetic mixed-feature datasets.
+# Runs ON GPU; meant to run in parallel with synthetic_hpo_gbm_parallel.toml
+# which keeps the CPU busy. Total wall time is roughly max(TFT-only,
+# GBM-only) instead of the sum the all-in-one config produced.
+#
+# Budget: 150 trials per (dataset, model, seed, fold) with 50 TPE
+# warmup trials, so the TPE surrogate has dense prior data on the
+# 10-parameter TFT space before exploiting.
+
+datasets = [
+    "synthetic_binary_small",
+    "synthetic_multiclass_small",
+    "synthetic_regression_small",
+]
+models = [
+    "tft_classifier",
+    "tft_regressor",
+]
+output_dir = ".cache/benchmarks/runs/hpo-uplift-synth-tft"
+cache_dir = ".cache/benchmarks"
+
+[[experiments]]
+kind = "raw_loss"
+seeds = [0]
+bootstrap_n_resamples = 1000
+
+[[experiments]]
+kind = "hpo_uplift"
+seeds = [0]
+n_trials = 150
+hpo_n_startup_trials = 50
+bootstrap_n_resamples = 1000

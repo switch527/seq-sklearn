@@ -1,0 +1,35 @@
+# GBM-only HPO uplift across the 3 synthetic mixed-feature datasets.
+# Runs ON CPU; designed to run in parallel with the TFT-only config.
+#
+# Budget: 150 trials per (dataset, model, seed, fold) with 50 TPE
+# warmup trials. 150 trials on a 6-parameter space is plenty for
+# TPE to converge; 50 startup trials ensures the surrogate isn't
+# fitting on too sparse a prior.
+
+datasets = [
+    "synthetic_binary_small",
+    "synthetic_multiclass_small",
+    "synthetic_regression_small",
+]
+models = [
+    "lightgbm_classifier",
+    "lightgbm_regressor",
+    "xgboost_classifier",
+    "xgboost_regressor",
+    "catboost_classifier",
+    "catboost_regressor",
+]
+output_dir = ".cache/benchmarks/runs/hpo-uplift-synth-gbm"
+cache_dir = ".cache/benchmarks"
+
+[[experiments]]
+kind = "raw_loss"
+seeds = [0]
+bootstrap_n_resamples = 1000
+
+[[experiments]]
+kind = "hpo_uplift"
+seeds = [0]
+n_trials = 150
+hpo_n_startup_trials = 50
+bootstrap_n_resamples = 1000

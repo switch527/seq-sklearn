@@ -212,6 +212,12 @@ class ExperimentSpec(BaseModel):
     seeds: tuple[int, ...] = Field(default=(0, 1, 2), min_length=1)
     n_trials: int | None = Field(default=None, ge=0)
     timeout_seconds: float | None = Field(default=None, gt=0.0)
+    # TPESampler warmup: number of random trials before the
+    # TPE surrogate takes over. Optuna's default is 10; widening
+    # to 50 (or higher) gives the surrogate a denser prior on
+    # high-dimensional spaces. Only consumed by `kind="hpo_uplift"`;
+    # other kinds ignore.
+    hpo_n_startup_trials: int | None = Field(default=None, ge=0)
     bootstrap_rollup_enabled: bool = True
     bootstrap_n_resamples: int | None = Field(default=None, ge=1)
     bootstrap_pairwise_enabled: bool = True
