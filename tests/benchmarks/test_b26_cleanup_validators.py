@@ -214,60 +214,76 @@ def test_rollup_row_rejects_mixed_metric_state(
 
 
 # =============================================================================
-# Per-schema reject pairs (10 tests)
+# Per-schema reject pairs (1 parametrized test, 10 cases)
 # =============================================================================
 
 
-def test_rollup_row_rejects_metrics_set_with_skipped_reason() -> None:
-    with pytest.raises(ValidationError, match=r"non-sentinel rows must have bootstrap_skipped_reason=None"):
-        RollupRow(**_ROLLUP_BASE, primary_metric_mean=0.5, primary_metric_ci_lo=0.4, primary_metric_ci_hi=0.6, bootstrap_skipped_reason="oops")
+# B30 / D-B27.1 closure: 10 reject-pair cases consolidated
+# into 1 parametrized test. Each tuple is
+# (schema_name, kwargs_overrides, expected_match).
+_REJECT_PAIR_CASES: list[tuple[str, dict[str, Any], str]] = [
+    (
+        "rollup_row",
+        dict(primary_metric_mean=0.5, primary_metric_ci_lo=0.4, primary_metric_ci_hi=0.6, bootstrap_skipped_reason="oops"),
+        r"non-sentinel rows must have bootstrap_skipped_reason=None",
+    ),
+    (
+        "rollup_row",
+        dict(bootstrap_skipped_reason=None),
+        r"sentinel rows must populate bootstrap_skipped_reason",
+    ),
+    (
+        "pairwise",
+        dict(primary_metric_mean=0.5, primary_metric_ci_lo=0.4, primary_metric_ci_hi=0.6, bootstrap_skipped_reason="oops"),
+        r"non-sentinel rows must have bootstrap_skipped_reason=None",
+    ),
+    (
+        "pairwise",
+        dict(bootstrap_skipped_reason=None),
+        r"sentinel rows must populate bootstrap_skipped_reason",
+    ),
+    (
+        "training_time",
+        dict(primary_metric_mean=10.0, primary_metric_ci_lo=8.0, primary_metric_ci_hi=12.0, bootstrap_skipped_reason="oops"),
+        r"non-sentinel rows must have bootstrap_skipped_reason=None",
+    ),
+    (
+        "training_time",
+        dict(bootstrap_skipped_reason=None),
+        r"sentinel rows must populate bootstrap_skipped_reason",
+    ),
+    (
+        "hpo_uplift",
+        dict(primary_metric_mean=0.1, primary_metric_ci_lo=0.05, primary_metric_ci_hi=0.15, bootstrap_skipped_reason="oops"),
+        r"non-sentinel rows must have bootstrap_skipped_reason=None",
+    ),
+    (
+        "hpo_uplift",
+        dict(bootstrap_skipped_reason=None),
+        r"sentinel rows must populate bootstrap_skipped_reason",
+    ),
+    (
+        "ensemble_lift",
+        dict(primary_metric_mean=0.2, primary_metric_ci_lo=0.15, primary_metric_ci_hi=0.25, bootstrap_skipped_reason="oops"),
+        r"non-sentinel rows must have bootstrap_skipped_reason=None",
+    ),
+    (
+        "ensemble_lift",
+        dict(bootstrap_skipped_reason=None),
+        r"sentinel rows must populate bootstrap_skipped_reason",
+    ),
+]
 
 
-def test_rollup_row_rejects_metrics_none_with_skipped_none() -> None:
-    with pytest.raises(ValidationError, match=r"sentinel rows must populate bootstrap_skipped_reason"):
-        RollupRow(**_ROLLUP_BASE, bootstrap_skipped_reason=None)
-
-
-def test_pairwise_rollup_row_rejects_metrics_set_with_skipped_reason() -> None:
-    with pytest.raises(ValidationError, match=r"non-sentinel rows must have bootstrap_skipped_reason=None"):
-        PairwiseRollupRow(**_PAIRWISE_BASE, primary_metric_mean=0.5, primary_metric_ci_lo=0.4, primary_metric_ci_hi=0.6, bootstrap_skipped_reason="oops")
-
-
-def test_pairwise_rollup_row_rejects_metrics_none_with_skipped_none() -> None:
-    with pytest.raises(ValidationError, match=r"sentinel rows must populate bootstrap_skipped_reason"):
-        PairwiseRollupRow(**_PAIRWISE_BASE, bootstrap_skipped_reason=None)
-
-
-def test_training_time_rollup_row_rejects_metrics_set_with_skipped_reason() -> None:
-    with pytest.raises(ValidationError, match=r"non-sentinel rows must have bootstrap_skipped_reason=None"):
-        TrainingTimeRollupRow(**_TRAINING_TIME_BASE, primary_metric_mean=10.0, primary_metric_ci_lo=8.0, primary_metric_ci_hi=12.0, bootstrap_skipped_reason="oops")
-
-
-def test_training_time_rollup_row_rejects_metrics_none_with_skipped_none() -> None:
-    with pytest.raises(ValidationError, match=r"sentinel rows must populate bootstrap_skipped_reason"):
-        TrainingTimeRollupRow(**_TRAINING_TIME_BASE, bootstrap_skipped_reason=None)
-
-
-def test_hpo_uplift_rollup_row_rejects_metrics_set_with_skipped_reason() -> None:
-    with pytest.raises(ValidationError, match=r"non-sentinel rows must have bootstrap_skipped_reason=None"):
-        HPOUpliftRollupRow(**_HPO_UPLIFT_BASE, primary_metric_mean=0.1, primary_metric_ci_lo=0.05, primary_metric_ci_hi=0.15, bootstrap_skipped_reason="oops")
-
-
-def test_hpo_uplift_rollup_row_rejects_metrics_none_with_skipped_none() -> None:
-    with pytest.raises(ValidationError, match=r"sentinel rows must populate bootstrap_skipped_reason"):
-        HPOUpliftRollupRow(**_HPO_UPLIFT_BASE, bootstrap_skipped_reason=None)
-
-
-def test_ensemble_lift_rollup_row_rejects_metrics_set_with_skipped_reason() -> None:
-    """B27 / D-B26.2 closure: same reject contract for the 5th
-    schema."""
-    with pytest.raises(ValidationError, match=r"non-sentinel rows must have bootstrap_skipped_reason=None"):
-        EnsembleLiftRollupRow(**_ENSEMBLE_LIFT_BASE, primary_metric_mean=0.2, primary_metric_ci_lo=0.15, primary_metric_ci_hi=0.25, bootstrap_skipped_reason="oops")
-
-
-def test_ensemble_lift_rollup_row_rejects_metrics_none_with_skipped_none() -> None:
-    with pytest.raises(ValidationError, match=r"sentinel rows must populate bootstrap_skipped_reason"):
-        EnsembleLiftRollupRow(**_ENSEMBLE_LIFT_BASE, bootstrap_skipped_reason=None)
+@pytest.mark.parametrize(("schema_name", "kwargs", "expected_match"), _REJECT_PAIR_CASES)
+def test_rollup_row_rejects_invalid_metric_skipped_combo(
+    schema_name: str, kwargs: dict[str, Any], expected_match: str
+) -> None:
+    """B30 / D-B27.1 closure: 10 reject-pair cases (5 schemas
+    x 2 branches: skipped-with-metrics + no-skipped-with-None).
+    Each case retains its discriminating match= regex."""
+    with pytest.raises(ValidationError, match=expected_match):
+        _make_row(schema_name, **kwargs)
 
 
 # =============================================================================

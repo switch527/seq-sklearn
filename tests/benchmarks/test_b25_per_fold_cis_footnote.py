@@ -1,10 +1,10 @@
 """Phase B25 per-fold CIs renderer surface tests (26 named; 34 collected).
 
 Closes D-B22.1: per-fold CIs footnote across all 5
-`*_markdown_with_ci` renderers. The footnote reads EXACTLY 6
-FoldCI fields (fold_index, metric_mean, metric_ci_lo,
-metric_ci_hi, ci_method, ci_fallback_reason). The audit
-fields n_seeds + n_entities are NOT rendered (D-B25.3).
+`*_markdown_with_ci` renderers. After B30 / D-B25.3 closure
+the footnote reads 8 FoldCI fields (fold_index, n_seeds,
+n_entities, metric_mean, metric_ci_lo, metric_ci_hi,
+ci_method, ci_fallback_reason).
 
 Test layout:
 - B25.3.1: shared helper (#1-#10b)
@@ -426,9 +426,10 @@ def test_per_fold_cis_footnote_null_metric_renders_dash() -> None:
         if ln.startswith("| fake_binary |") and "| 0 |" in ln
     )
     cells = [c.strip() for c in fold_line.strip("| ").split(" | ")]
-    # Expected columns: dataset | fold | metric_mean | metric_ci_lo |
-    # metric_ci_hi | ci_method | ci_fallback_reason
-    assert cells == ["fake_binary", "0", "-", "-", "-", "bca", "-"]
+    # B30 / D-B25.3 closure: cell list now 9 elements (was 7);
+    # n_seeds + n_entities inserted between fold and metric_mean.
+    # Defaults from `_fold_ci`: n_seeds=2, n_entities=4.
+    assert cells == ["fake_binary", "0", "2", "4", "-", "-", "-", "bca", "-"]
 
 
 def test_per_fold_cis_footnote_none_fallback_reason_renders_dash_with_non_null_metrics() -> None:
@@ -458,7 +459,9 @@ def test_per_fold_cis_footnote_none_fallback_reason_renders_dash_with_non_null_m
         if ln.startswith("| fake_binary |") and "| 0 |" in ln
     )
     cells = [c.strip() for c in fold_line.strip("| ").split(" | ")]
-    assert cells == ["fake_binary", "0", "0.2150", "0.2000", "0.2300", "bca", "-"]
+    # B30 / D-B25.3 closure: 9-element list with n_seeds=2,
+    # n_entities=4 between fold and metric_mean.
+    assert cells == ["fake_binary", "0", "2", "4", "0.2150", "0.2000", "0.2300", "bca", "-"]
 
 
 def test_per_fold_cis_footnote_float_format_4_decimals() -> None:
@@ -489,7 +492,14 @@ def test_per_fold_cis_footnote_sorts_rows_by_group_columns_first_key() -> None:
 
 def test_per_fold_cis_footnote_sorts_fold_rows_by_fold_index_ascending_when_input_unsorted() -> None:
     """arch-R1-C1 + qa-R1-I1 closure: out-of-order fold input
-    [2, 0, 1] must render ascending 0, 1, 2."""
+    [2, 0, 1] must render ascending 0, 1, 2.
+
+    B30 / D-B25.3 closure: widened table makes bare-substring
+    `| 2 |` search ambiguous (matches n_seeds=2 in every fold
+    row). Scan line by line and extract the fold-index cell
+    (always position 2 after the dataset identifier) for an
+    unambiguous order check.
+    """
     row = _raw_loss_row(
         per_fold_cis=[
             _fold_ci(fold_index=2),
@@ -500,24 +510,28 @@ def test_per_fold_cis_footnote_sorts_fold_rows_by_fold_index_ascending_when_inpu
     md = render_per_fold_cis_footnote(
         [row], group_columns=("dataset_name",), header_labels=("Dataset",)
     )
-    idx_0 = md.find("| 0 |")
-    idx_1 = md.find("| 1 |")
-    idx_2 = md.find("| 2 |")
-    assert idx_0 >= 0
-    assert idx_1 >= 0
-    assert idx_2 >= 0
-    assert idx_0 < idx_1 < idx_2
+    fold_indices: list[int] = []
+    for ln in md.split("\n"):
+        if not ln.startswith("| fake_binary |"):
+            continue
+        cells = [c.strip() for c in ln.strip("| ").split(" | ")]
+        # Cells: [dataset, fold, n_seeds, n_entities, ...]
+        fold_indices.append(int(cells[1]))
+    assert fold_indices == [0, 1, 2]
 
 
-def test_per_fold_cis_footnote_cell_data_reads_correct_six_fields() -> None:
-    """qa-R1-C2 closure: assert all 6 rendered FoldCI fields
-    appear in the rendered output. Uses non-None
-    ci_fallback_reason so the cell is the literal token, not
-    the `-` placeholder (which would mask a hardwired-`-` bug)."""
+def test_per_fold_cis_footnote_cell_data_reads_correct_eight_fields() -> None:
+    """qa-R1-C2 + B30 / D-B25.3 closure: assert all 8 rendered
+    FoldCI fields (now including n_seeds + n_entities) appear
+    in the rendered output. Uses non-None ci_fallback_reason
+    so the cell is the literal token, not the `-` placeholder
+    (which would mask a hardwired-`-` bug)."""
     row = _raw_loss_row(
         per_fold_cis=[
             _fold_ci(
                 fold_index=7,
+                n_seeds=5,
+                n_entities=11,
                 metric_mean=0.215,
                 metric_ci_lo=0.200,
                 metric_ci_hi=0.230,
@@ -530,6 +544,8 @@ def test_per_fold_cis_footnote_cell_data_reads_correct_six_fields() -> None:
         [row], group_columns=("dataset_name",), header_labels=("Dataset",)
     )
     assert "| 7 |" in md
+    assert "| 5 |" in md
+    assert "| 11 |" in md
     assert "0.2150" in md
     assert "0.2000" in md
     assert "0.2300" in md
@@ -537,11 +553,10 @@ def test_per_fold_cis_footnote_cell_data_reads_correct_six_fields() -> None:
     assert "| p0_at_edge |" in md
 
 
-def test_per_fold_cis_footnote_does_not_surface_n_seeds_or_n_entities() -> None:
-    """qa-R1-C2 + qa-R1-I2 closure: n_seeds and n_entities are
-    audit-only fields and must NOT appear in the rendered
-    output. Uses fixture values 99 and 88 (chosen to not
-    collide with any other rendered numeric)."""
+def test_per_fold_cis_footnote_surfaces_n_seeds_and_n_entities() -> None:
+    """B30 / D-B25.3 closure: n_seeds + n_entities now surface
+    in the rendered output AND in the header. Inverts the
+    pre-B30 test_b25 assertion that pinned non-exposure."""
     row = _raw_loss_row(
         per_fold_cis=[_fold_ci(n_seeds=99, n_entities=88)]
     )
@@ -551,10 +566,10 @@ def test_per_fold_cis_footnote_does_not_surface_n_seeds_or_n_entities() -> None:
     section_idx = md.find(_SECTION)
     assert section_idx >= 0
     per_fold_block = md[section_idx:]
-    assert "n_seeds" not in per_fold_block
-    assert "n_entities" not in per_fold_block
-    assert "99" not in per_fold_block
-    assert "88" not in per_fold_block
+    assert "| n_seeds |" in per_fold_block
+    assert "| n_entities |" in per_fold_block
+    assert "| 99 |" in per_fold_block
+    assert "| 88 |" in per_fold_block
 
 
 def test_per_fold_cis_footnote_ci_fallback_reason_source_binding() -> None:
@@ -587,7 +602,7 @@ def test_raw_loss_renderer_emits_per_fold_cis_when_present() -> None:
     md = render_leaderboard_markdown_with_ci(manifest, rollup)
     assert _SECTION in md
     assert (
-        "| Dataset | Model | fold | metric_mean | metric_ci_lo | "
+        "| Dataset | Model | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
         "metric_ci_hi | ci_method | ci_fallback_reason |" in md
     )
 
@@ -598,7 +613,7 @@ def test_pairwise_renderer_emits_per_fold_cis_when_present() -> None:
     md = render_pairwise_markdown_with_ci(manifest, rollup)
     assert _SECTION in md
     assert (
-        "| Dataset | Model A | Model B | fold | metric_mean | metric_ci_lo | "
+        "| Dataset | Model A | Model B | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
         "metric_ci_hi | ci_method | ci_fallback_reason |" in md
     )
 
@@ -609,7 +624,7 @@ def test_training_time_renderer_emits_per_fold_cis_when_present() -> None:
     md = render_training_time_markdown_with_ci(manifest, rollup)
     assert _SECTION in md
     assert (
-        "| Dataset | Model | Hardware tier | fold | metric_mean | metric_ci_lo | "
+        "| Dataset | Model | Hardware tier | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
         "metric_ci_hi | ci_method | ci_fallback_reason |" in md
     )
 
@@ -620,7 +635,7 @@ def test_hpo_uplift_renderer_emits_per_fold_cis_when_present() -> None:
     md = render_hpo_uplift_markdown_with_ci(manifest, rollup)
     assert _SECTION in md
     assert (
-        "| Dataset | Model | fold | metric_mean | metric_ci_lo | "
+        "| Dataset | Model | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
         "metric_ci_hi | ci_method | ci_fallback_reason |" in md
     )
 
@@ -631,7 +646,7 @@ def test_ensemble_lift_renderer_emits_per_fold_cis_when_present() -> None:
     md = render_ensemble_lift_markdown_with_ci(result, rollup)
     assert _SECTION in md
     assert (
-        "| Dataset | fold | metric_mean | metric_ci_lo | "
+        "| Dataset | fold | n_seeds | n_entities | metric_mean | metric_ci_lo | "
         "metric_ci_hi | ci_method | ci_fallback_reason |" in md
     )
 
