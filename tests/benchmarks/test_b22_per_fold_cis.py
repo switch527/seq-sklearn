@@ -707,9 +707,10 @@ def test_aggregator_per_fold_cis_each_fold_receives_correct_n_resamples(
         bootstrap_n_resamples=137,
     )
 
-    # B16 call order: 2 pooled (main + oracle) + 3 per-fold = 5
-    # total. Every call MUST use n_resamples=137 from the spec.
-    assert len(n_resamples_captured) == 5
+    # B16 call order post-B35: 1 main pool + 3 main per-fold +
+    # 1 oracle pool + 3 oracle per-fold = 8 total. Every call
+    # MUST use n_resamples=137 from the spec.
+    assert len(n_resamples_captured) == 8
     assert all(n == 137 for n in n_resamples_captured)
 
 
@@ -797,20 +798,20 @@ def test_non_b5_rollup_row_per_fold_cis_round_trip(tmp_path: Path) -> None:
 # =============================================================================
 
 
-def test_b16_aggregator_per_fold_cis_does_not_populate_oracle_field(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """qa-R2-I2 closure: at v1 the B16 aggregator computes per-fold
-    CIs for the MAIN delta only. Oracle per-fold is deferred under
-    D-B22.2. Assert:
-    (a) per_fold_cis is not None on the emitted row;
-    (b) the schema does NOT carry an attribute named
-        per_fold_oracle_cis (D-B22.2 scope pin)."""
-    rollup = _run_ensemble_lift(tmp_path, monkeypatch, per_fold_enabled=True, cells=_happy_cells())
-    row = rollup[0]
-    assert row.per_fold_cis is not None
-    assert not hasattr(row, "per_fold_oracle_cis")
-    assert "per_fold_oracle_cis" not in EnsembleLiftRollupRow.model_fields
+def test_b16_aggregator_per_fold_cis_populates_both_main_and_oracle_fields() -> None:
+    """B35 / D-B22.2 closure (was qa-R2-I2): the B16 aggregator
+    populates BOTH per_fold_cis (main delta) AND
+    per_fold_oracle_cis (oracle delta) when the per-fold flag
+    is enabled. The old D-B22.2 scope pin (oracle field
+    deliberately absent) inverts post-B35."""
+    # Placeholder test that documents the B35 inversion. Each
+    # specific assertion lives in test_b35_oracle_per_fold_cis.py
+    # (which tests both populated + None branches of
+    # per_fold_oracle_cis directly).
+    from benchmarks.bootstrap_manifest import EnsembleLiftRollupRow as _row
+
+    assert "per_fold_oracle_cis" in _row.model_fields
+    assert "per_fold_cis" in _row.model_fields
 
 
 # =============================================================================

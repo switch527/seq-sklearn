@@ -820,8 +820,16 @@ class EnsembleLiftRollupRow(BaseModel):
     bootstrap_oracle_ci_fallback_reason: str | None = None
     # B22 / D-B16.3: per-fold CIs (opt-in). Same contract as the
     # other 4 RollupRow schemas; surfaced for the MAIN delta only
-    # at v1 (oracle per-fold deferred under D-B22.2).
+    # at v1 (oracle per-fold was deferred under D-B22.2 and is
+    # closed in B35 via `per_fold_oracle_cis` below).
     per_fold_cis: list[FoldCI] | None = None
+    # B35 / D-B22.2 closure: per-fold CIs for the ORACLE delta
+    # path. Opt-in via the same
+    # `ExperimentSpec.bootstrap_per_fold_cis_enabled` flag.
+    # None when the flag is off OR `n_oracle_cells_paired ==
+    # 0`. Parquet-audit-only at v1 (renderer integration
+    # deferred as D-B35.1).
+    per_fold_oracle_cis: list[FoldCI] | None = None
     bootstrap_numpy_version: str
     bootstrap_skipped_reason: str | None = None
     manifest_fingerprint: str
