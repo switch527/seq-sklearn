@@ -6,13 +6,18 @@ the footnote reads 8 FoldCI fields (fold_index, n_seeds,
 n_entities, metric_mean, metric_ci_lo, metric_ci_hi,
 ci_method, ci_fallback_reason).
 
-Test layout:
-- B25.3.1: shared helper (#1-#10b)
-- B25.3.2: per-renderer present emission (#11-#15)
-- B25.3.3: per-renderer silent-when-absent (#16-#20)
-- B25.3.4: mixed parametrized (#21)
-- B25.3.5: empty list edge (#22)
-- B25.3.6: section ordering (#22a)
+Test layout (post-B30 / D-B25.3 cascade):
+- Shared helper tests (heading, raises, truncation, empty,
+  null-metric cell-position, none-reason cell-position,
+  float format, sort by group_columns, sort by fold_index,
+  cell-data eight-fields, surfaces n_seeds/n_entities,
+  ci_fallback_reason source-binding).
+- Per-renderer present-emission (5 renderers, 9-column
+  header).
+- Per-renderer silent-when-per_fold-absent (5 renderers).
+- Mixed-rollup parametrized over 5 renderers.
+- Empty-list edge case.
+- Section ordering vs BCa health footnote.
 """
 
 from collections.abc import Callable

@@ -339,6 +339,35 @@ NITPICK. Closures:
 
 Test count unchanged.
 
+### R1 build-swarm closure
+
+R1 build swarm on commit `0d62230`: code-reviewer (0C / 1I /
+1N APPROVE), qa-test-coverage (0C / 1I / 1N APPROVE),
+architecture-reviewer (0C / 1I / 2N APPROVE), style-reviewer
+(0C / 0I / 0N APPROVE). Deduplicated total: 0 CRITICAL, 3
+IMPROVEMENT, 4 NITPICK. Closures:
+
+- **code-R1-build-I1** (boundary-companion test docstring
+  said "well above 1e-12 eps" but actual margin is exactly
+  one eps): docstring rewritten to state "exactly one eps
+  above" and to clarify the boundary-fires test carries the
+  mutation kill while the companion is a safe-region
+  check.
+- **qa-R1-build-I1** (B25 module docstring section map
+  stale; tests #1-#22a numbering doesn't match post-B30
+  reality): module docstring rewritten with a content-
+  based layout (no stale numbering).
+- **arch-R1-build-I1** (`getattr(fci, "n_seeds", 0)` 0
+  default collides with legit `n_seeds=0` value): NOT
+  changed. FoldCI schema requires both fields (`Field(ge=0)`,
+  no Python default, `extra="forbid"`); v1 emitters
+  always supply them. The defensive default is dead code
+  but harmless and matches the established pattern in
+  other shared helpers.
+- 4 NITs: NOT changed (cosmetic).
+
+Test count unchanged.
+
 ## Deferred
 
 - **D-B30.1**: emit per-fold sample sizes as a SIBLING

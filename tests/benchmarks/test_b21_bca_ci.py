@@ -294,11 +294,13 @@ def test_bca_percentile_points_a_overshoot_fires_at_eps_boundary(
 
 
 def test_bca_percentile_points_a_overshoot_does_not_fire_above_eps() -> None:
-    """B30 / D-B21.5 companion: with the real eps (1e-12), a
-    value above the threshold must NOT fire the fallback.
-    `a = (1.0 - 2e-12) / z_hi` gives `denom_hi ~ 2e-12`
-    (well above 1e-12 eps); confirms no spurious fallback
-    fires in the safe region."""
+    """B30 / D-B21.5 companion (safe-region check, not an
+    independent mutation discriminator): with the real eps
+    (1e-12), `a = (1.0 - 2e-12) / z_hi` gives `denom_hi ~ 2e-12`,
+    exactly one eps above the 1e-12 threshold. The fallback
+    must NOT fire. The boundary-fires test above carries the
+    `<=` vs `<` mutation kill; this companion confirms safe-
+    region behavior."""
     from scipy.stats import norm
 
     confidence = 0.95
