@@ -259,11 +259,16 @@ def test_lag_featurize_handles_categorical_columns() -> None:
     spec = _make_spec(feature_real_cols=("x",), feature_categorical_cols=("category",))
     panel = _make_panel(n_entities=2, n_periods=3, extra_categorical=True)
     fe = lag_featurize(panel, spec, lookback_override=2)
-    # Categorical lag0 of entity-1 row-0 is entity-1's own value;
-    # lag1 is the warmup fill `""`.
+    # Categorical columns are int-encoded via pandas category codes
+    # (sorted-unique order). Lag0 of entity-1 row-0 is entity-1's
+    # own code; lag1 is the leading-window sentinel `-1`. Encoded
+    # column dtype is int64 so LightGBM/XGBoost/CatBoost accept it
+    # without an extra cast.
     assert "category_lag0" in fe.columns
     assert "category_lag1" in fe.columns
-    assert fe.iloc[0]["category_lag1"] == ""
+    assert fe.iloc[0]["category_lag1"] == -1
+    assert fe["category_lag0"].dtype == np.int64
+    assert fe["category_lag1"].dtype == np.int64
 
 
 def test_lag_featurize_rejects_non_positive_lookback() -> None:

@@ -1,0 +1,22 @@
+# UEA BasicMotions multiclass (4 classes: badminton, running, standing, walking).
+# 80 instances × 100 timesteps × 6 channels.
+datasets = ["uea_basic_motions"]
+models = [
+    "tft_classifier",
+    "lightgbm_classifier",
+    "xgboost_classifier",
+    "catboost_classifier",
+    "rocket_classifier",
+    "multirocket_classifier",
+    "catch22_classifier",
+]
+output_dir = ".cache/benchmarks/runs/uea-basic-motions"
+cache_dir = ".cache/benchmarks"
+
+[[experiments]]
+kind = "raw_loss"
+# 1 seed for the smoke pass: TFT classifier dominates wall
+# time at ~100s/cell on lookback=30 with 6 channels; 5 folds
+# give a CV signal across all 7 classifiers.
+seeds = [0]
+bootstrap_n_resamples = 1000

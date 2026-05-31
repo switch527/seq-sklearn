@@ -1,0 +1,18 @@
+# C-MAPSS FD001 turbofan engine RUL regression.
+# 100 engines × 100-360 cycles × 24 sensor channels.
+datasets = ["c_mapss_fd001"]
+models = [
+    "tft_regressor",
+    "lightgbm_regressor",
+    "xgboost_regressor",
+    "catboost_regressor",
+]
+output_dir = ".cache/benchmarks/runs/cmapss"
+cache_dir = ".cache/benchmarks"
+
+[[experiments]]
+kind = "raw_loss"
+# 1 seed for the smoke pass: TFT regressor on 24 sensors *
+# lookback=30 dominates wall time; 5 folds give a CV signal.
+seeds = [0]
+bootstrap_n_resamples = 1000

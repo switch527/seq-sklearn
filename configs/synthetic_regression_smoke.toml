@@ -1,0 +1,15 @@
+# Regression-point synthetic raw_loss run.
+datasets = ["synthetic_regression_small"]
+models = [
+    "tft_regressor",
+    "lightgbm_regressor",
+    "xgboost_regressor",
+    "catboost_regressor",
+]
+output_dir = ".cache/benchmarks/runs/synth-regression"
+cache_dir = ".cache/benchmarks"
+
+[[experiments]]
+kind = "raw_loss"
+seeds = [0, 1, 2]
+bootstrap_n_resamples = 1000

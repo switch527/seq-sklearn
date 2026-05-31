@@ -603,7 +603,7 @@ def main(argv: list[str] | None = None) -> int:
         atomic_write_bytes(report_md.encode("utf-8"), report_path)
         logger.info("assembled report written to %s", report_path)
     except ValueError as exc:
-        logger.error("benchmark run failed: %s", exc)
+        logger.exception("benchmark run failed: %s", exc)
         return 1
     return 0
 

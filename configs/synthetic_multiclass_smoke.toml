@@ -1,0 +1,20 @@
+# 4-class synthetic raw_loss run.
+datasets = ["synthetic_multiclass_small"]
+models = [
+    "tft_classifier",
+    "lightgbm_classifier",
+    "xgboost_classifier",
+    "catboost_classifier",
+    "rocket_classifier",
+    "multirocket_classifier",
+    "catch22_classifier",
+]
+output_dir = ".cache/benchmarks/runs/synth-multiclass"
+cache_dir = ".cache/benchmarks"
+
+[[experiments]]
+kind = "raw_loss"
+# 1 seed for the smoke pass: TFT classifier on 4 classes
+# dominates wall time at ~3 min/cell; 5 folds give a CV signal.
+seeds = [0]
+bootstrap_n_resamples = 1000
