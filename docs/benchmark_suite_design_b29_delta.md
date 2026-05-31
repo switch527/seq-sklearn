@@ -105,9 +105,23 @@ def _validate_row_count_bound(self) -> "RollupRow":
    EnsembleLift `_validate_row_count_invariants` body.
 2. **R-B29-2**: add the new `_validate_row_count_bound`
    validator to RollupRow.
-3. **Fixture audit**: scan EnsembleLift + RollupRow
-   construction sites for any that violate the new
-   bounds.
+3. **Fixture audit + repair** (arch-R1-C2 + arch-R1-I3
+   closure): R1 design swarm identified 1 KNOWN violating
+   site:
+   - `tests/benchmarks/test_b19_n_pair_grid.py:332-359`
+     (`test_n_pair_grid_round_trips_through_parquet_shard`):
+     constructs with `n_seeds=2, n_folds=2, n_pair_grid=137`.
+     Under R-B29-1, `137 > 4`. The test exists to prove
+     the schema preserves an unusual prime value
+     (matching the B16 `bootstrap_n_resamples=137`
+     precedent). Repair: bump `n_seeds=12, n_folds=12`
+     (product 144 > 137) so the value 137 still round-trips
+     while satisfying the new bound. `n_cells_paired=4` and
+     `n_oracle_cells_paired=4` stay (both <= 137).
+   No other EnsembleLift or RollupRow construction sites
+   violate the new bounds (verified via grep on the
+   13 EnsembleLift + 9 RollupRow construction sites under
+   `tests/benchmarks/`).
 4. **Tests**: add `tests/benchmarks/test_b29_cell_count_bounds.py`
    per B29.4.
 5. **Verify**: ruff + pyright + scoped pytest pass at
@@ -119,42 +133,70 @@ Baseline (post-B28 main `f42f01c`): 1075 tests collected.
 
 ### B29.4.1 EnsembleLift n_pair_grid bound (R-B29-1)
 
+**Validator fire-order constraint** (qa-R1-I1 closure): every
+EnsembleLift test fixture must supply ALL required fields
+including `n_oracle_cells_paired` (no schema default; `Field(ge=0)`).
+A valid CI-sentinel base (all-set primary + skipped=None +
+all-set oracle + n_oracle > 0) ensures the B26 and B28
+clauses pass silently so the B23 + new B29 row-count clauses
+are the ones that fire.
+
 1. `test_ensemble_lift_rollup_row_accepts_n_pair_grid_below_bound`:
-   construct with `n_seeds=2, n_folds=2, n_pair_grid=3,
+   non-sentinel base, `n_seeds=2, n_folds=2, n_pair_grid=3,
    n_cells_paired=3, n_oracle_cells_paired=3` (3 < 4);
    assert no raise.
 2. `test_ensemble_lift_rollup_row_accepts_n_pair_grid_equals_bound`:
-   construct with `n_seeds=2, n_folds=2, n_pair_grid=4,
+   non-sentinel base, `n_seeds=2, n_folds=2, n_pair_grid=4,
    n_cells_paired=4, n_oracle_cells_paired=4` (4 = 4);
    assert no raise.
 3. `test_ensemble_lift_rollup_row_rejects_n_pair_grid_exceeds_bound`:
-   construct with `n_seeds=2, n_folds=2, n_pair_grid=5`
-   (5 > 4); assert
+   non-sentinel base, `n_seeds=2, n_folds=2, n_pair_grid=5,
+   n_cells_paired=4, n_oracle_cells_paired=4` (B23 chain
+   satisfies 4 <= 4 <= 5; B29 catches 5 > 4); assert
    `pytest.raises(ValidationError, match=r"n_pair_grid.*exceeds n_seeds \* n_folds")`.
 
 ### B29.4.2 RollupRow n_entities bound (R-B29-2)
 
+**Validator fire-order constraint** (qa-R1-C1 closure):
+RollupRow has the B26 `_validate_ci_sentinel_consistency`
+validator. Tests for the new `_validate_row_count_bound`
+must supply a sentinel-compliant base (non-sentinel:
+`primary_metric_mean=0.215, primary_metric_ci_lo=0.200,
+primary_metric_ci_hi=0.230, bootstrap_skipped_reason=None`)
+so the B26 clause passes silently and the new clause is
+the one that raises in test #6.
+
 4. `test_rollup_row_accepts_n_entities_below_n_rows`:
-   `n_rows=100, n_entities=10`; assert no raise.
+   non-sentinel base, `n_rows=100, n_entities=10`; assert
+   no raise.
 5. `test_rollup_row_accepts_n_entities_equals_n_rows`:
-   `n_rows=4, n_entities=4`; assert no raise.
+   non-sentinel base, `n_rows=4, n_entities=4`; assert no
+   raise.
 6. `test_rollup_row_rejects_n_entities_exceeds_n_rows`:
-   `n_rows=4, n_entities=5`; assert
+   non-sentinel base, `n_rows=4, n_entities=5`; assert
    `pytest.raises(ValidationError, match=r"n_entities.*exceeds n_rows")`.
 
 ### B29.4.3 Existing-fixture compatibility
 
-7. `test_existing_b17_byte_pin_fixtures_satisfy_b29_invariants`:
-   construct the B17 EnsembleLift fixture and verify
-   `n_pair_grid <= n_seeds * n_folds`; construct the B17
-   RollupRow-shaped fixture (via test_bootstrap_render_regression
-   helpers) and verify `n_entities <= n_rows`.
+7. `test_existing_fixtures_satisfy_b29_invariants` (arch-R1-I2
+   closure: B17 only carries EnsembleLift fixtures; RollupRow
+   fixtures live in `test_bootstrap_render_regression.py` which
+   is the B14 regression pin, not B17): construct the B17
+   `_make_ensemble_lift_rollup` helper output and assert no
+   raise; construct a B14 RollupRow via
+   `test_bootstrap_render_regression._rollup_row()` and assert
+   no raise. The asserts are validator-anchored (construction
+   IS the gate post-B29; the test exists to document that the
+   B17 + B14 baseline fixtures stay compatible).
 
 ### B29.4.4 Expected test delta
 
 Baseline (post-B28): 1075.
-- Existing tests: 1075 -> 1075 (assuming fixture audit
-  finds no violations).
+- Existing tests: 1075 -> 1075 after the B29.3 step 3
+  repair lands in the same commit (bumps `n_seeds=2,
+  n_folds=2` to `n_seeds=12, n_folds=12` at
+  `test_b19_n_pair_grid.py:332-359`; test semantics
+  unchanged since the 137 round-trip is what's pinned).
 - B29-new: 7 named tests.
 - Total: 1075 + 7 = 1082.
 
@@ -162,8 +204,47 @@ Baseline (post-B28): 1075.
 
 | ID | Risk | Severity | Mitigation |
 |---|---|---|---|
-| R-B29-Risk-1 | The new n_pair_grid bound rejects existing EnsembleLift fixtures. | Low | All existing fixtures use `n_pair_grid <= n_cells_paired <= n_seeds * n_folds` (B23 validator enforces the first inequality). Audit live during build. |
-| R-B29-Risk-2 | The new n_entities bound rejects existing RollupRow fixtures. | Low | The aggregator at `benchmarks/report/bootstrap_rollup.py` derives `n_entities = unique_entity_ids.size` from the same rows as `n_rows`, so n_entities <= n_rows is structurally guaranteed. Existing fixtures supply consistent values (B17 + test_bootstrap_render_regression). |
+| R-B29-Risk-1 | The new n_pair_grid bound rejects existing EnsembleLift fixtures. | Medium-confirmed | The aggregator at `benchmarks/report/bootstrap_ensemble_lift.py:488` derives `n_pair_grid = len(gbm_pairs & seq_pairs)` and `n_seeds, n_folds` at `:195-198` from union counts; the intersection is cartesian-bounded by `n_seeds * n_folds`. R1 design swarm identified 1 violating fixture at `test_b19_n_pair_grid.py:332-359` (`n_seeds=2, n_folds=2, n_pair_grid=137`); B29.3 step 3 prescribes the repair (bump to `n_seeds=12, n_folds=12`). |
+| R-B29-Risk-2 | The new n_entities bound rejects existing RollupRow fixtures. | Low | The aggregator at `benchmarks/report/bootstrap_rollup.py:387, :396` derives `n_unique_entities = int(np.unique(entities).shape[0])` and `n_rows = int(losses.shape[0])` from the same `np.concatenate(entity_blocks)` / `np.concatenate(losses_blocks)` populated together at `:306-307`. n_entities <= n_rows is structurally guaranteed. Existing fixtures supply consistent values (B14 regression tests at `test_bootstrap_render_regression.py`). |
+
+## Addressed
+
+R1 design swarm on commit `fc71e6c`: architecture-reviewer
+(2C / 3I / 2N REQUEST_CHANGES), qa-test-coverage (1C / 1I /
+1N REQUEST_CHANGES), style-reviewer (0C / 0I / 0N APPROVE).
+Deduplicated total: 3 CRITICAL, 4 IMPROVEMENT, 3 NITPICK.
+Closures:
+
+- **arch-R1-C1** (R-B29-Risk-1 mitigation cited inverted
+  B23 chain): risk text rewritten to cite the aggregator
+  derivation (n_pair_grid = intersection; n_seeds, n_folds =
+  union counts; intersection cartesian-bounded by product).
+- **arch-R1-C2** (b19 fixture at `:332-359` violates the new
+  bound with `n_pair_grid=137 > n_seeds * n_folds = 4`):
+  B29.3 step 3 enumerates the violating site and prescribes
+  the `n_seeds=12, n_folds=12` repair (product 144 > 137).
+- **qa-R1-C1** (RollupRow tests #4-#6 base unspecified;
+  B26 CI-sentinel validator fires first): added "Validator
+  fire-order constraint" paragraph to B29.4.2 mandating a
+  non-sentinel base. Same constraint added to B29.4.1.
+- **arch-R1-I1** (R-B29-Risk-2 mitigation under-cites):
+  added specific line citations (`bootstrap_rollup.py:387,
+  :396, :306-307`).
+- **arch-R1-I2** (test #7 conflates B17 + B14): rewritten
+  to name both the B17 EnsembleLift helper AND the B14
+  RollupRow helper (`test_bootstrap_render_regression._rollup_row`).
+- **arch-R1-I3** (fixture audit needs enumeration): B29.3
+  step 3 expanded with the 1 KNOWN violating site + grep
+  scope.
+- **qa-R1-I1** (test #3 omits `n_oracle_cells_paired`):
+  B29.4.1 fire-order paragraph mandates all required
+  fields; test #3 spec updated with explicit
+  `n_cells_paired=4, n_oracle_cells_paired=4`.
+- **arch-R1-N1, arch-R1-N2, qa-R1-N1**: NOT changed;
+  cosmetic.
+
+Test count after R1 closures: 7 named (unchanged; closures
+sharpened pre-existing test specs).
 
 ## Deferred
 
