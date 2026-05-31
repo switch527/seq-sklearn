@@ -165,6 +165,7 @@ def _emit_sentinel_row(
         bootstrap_ci_fallback_reason=None,
         bootstrap_oracle_ci_fallback_reason=None,
         per_fold_cis=None,
+        per_fold_oracle_cis=None,
         bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=bootstrap_skipped_reason,
         manifest_fingerprint=manifest_fingerprint,
@@ -373,6 +374,34 @@ def _build_dataset_rollup(
             ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
         )
 
+    # B35 / D-B22.2 closure: per-fold CIs for the ORACLE
+    # delta (opt-in via the same flag as main per-fold).
+    # Independent PCG64 stream via
+    # BOOTSTRAP_ORACLE_PER_FOLD_SEED_OFFSET so the three
+    # streams (pooled oracle, main per-fold, oracle per-
+    # fold) stay uncorrelated on shared entity indices.
+    per_fold_oracle_cis = None
+    if per_fold_enabled and n_oracle_cells_paired > 0:
+        oracle_cells_with_loss = [
+            c for c in computed.cells if c.oracle_loss is not None
+        ]
+        per_fold_oracle_cis = _bootstrap_aggregate.compute_per_fold_cis(
+            losses=oracle_deltas,
+            entities=oracle_entity_ids,
+            fold_indices=np.array(
+                [c.fold_index for c in oracle_cells_with_loss], dtype=np.int64
+            ),
+            seeds=np.array([c.seed for c in oracle_cells_with_loss], dtype=np.int64),
+            n_resamples=n_resamples,
+            confidence=BOOTSTRAP_CONFIDENCE,
+            base_seed=BOOTSTRAP_DEFAULT_SEED,
+            fold_seed_offset=_bootstrap_aggregate.BOOTSTRAP_ORACLE_PER_FOLD_SEED_OFFSET,
+            ci_method=_bootstrap_aggregate.BOOTSTRAP_DEFAULT_CI_METHOD,
+            metric_fn=lambda x: float(np.nanmean(x)),
+            dataset_name=dataset_name,
+            kind="ensemble_lift_oracle",
+        )
+
     return EnsembleLiftRollupRow(
         dataset_name=dataset_name,
         task_type=task_type,
@@ -398,6 +427,7 @@ def _build_dataset_rollup(
         bootstrap_ci_fallback_reason=fallback_reason,
         bootstrap_oracle_ci_fallback_reason=oracle_fallback_reason,
         per_fold_cis=per_fold_cis,
+        per_fold_oracle_cis=per_fold_oracle_cis,
         bootstrap_numpy_version=numpy_version(),
         bootstrap_skipped_reason=None,
         manifest_fingerprint=manifest_fingerprint,

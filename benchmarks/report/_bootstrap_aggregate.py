@@ -52,6 +52,13 @@ BOOTSTRAP_ORACLE_SEED_OFFSET: int = 0xB20_07A_C7E
 # `seed(fold_index=0)` onto `BOOTSTRAP_DEFAULT_SEED` and
 # re-correlate the pooled + fold-0 streams.
 BOOTSTRAP_PER_FOLD_SEED_OFFSET: int = 0xB22_F01D_C1
+# B35 / D-B22.2: XOR seed offset for the per-fold ORACLE
+# bootstrap on EnsembleLiftRollupRow. Independent from
+# BOOTSTRAP_ORACLE_SEED_OFFSET (pooled oracle) and
+# BOOTSTRAP_PER_FOLD_SEED_OFFSET (main per-fold) so the
+# three streams stay uncorrelated when they happen to
+# share entity indices.
+BOOTSTRAP_ORACLE_PER_FOLD_SEED_OFFSET: int = 0xB35_07A_FCD
 # B21 / D-B16.2: default CI method for all 5 aggregators.
 # Aggregators read this via late-binding lookup so tests can
 # monkeypatch the canonical source module to verify the seam
@@ -212,6 +219,7 @@ __all__ = [
     "BOOTSTRAP_DEFAULT_CI_METHOD",
     "BOOTSTRAP_DEFAULT_SEED",
     "BOOTSTRAP_N_RESAMPLES_BY_PROFILE",
+    "BOOTSTRAP_ORACLE_PER_FOLD_SEED_OFFSET",
     "BOOTSTRAP_ORACLE_SEED_OFFSET",
     "BOOTSTRAP_PER_FOLD_SEED_OFFSET",
     "BOOTSTRAP_ROW_COUNT_CEILING",
