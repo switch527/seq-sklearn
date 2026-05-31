@@ -140,9 +140,17 @@ def render_per_fold_cis_footnote(
     `fold_index, n_seeds, n_entities, metric_mean,
     metric_ci_lo, metric_ci_hi, ci_method,
     ci_fallback_reason` (B30 / D-B25.3 closure: n_seeds +
-    n_entities now surface between fold and metric cells).
+    n_entities surface between fold and metric cells).
     Rows missing `per_fold_cis` render with no fold rows
     via `getattr(row, "per_fold_cis", []) or []`.
+
+    B37 / D-B35.1 closure: also reads
+    `per_fold_oracle_cis` (EnsembleLiftRollupRow only).
+    Adds a `scope` column ("main" or "oracle") between
+    the identifier columns and `fold`. Schemas without the
+    oracle field default to `[]` and emit no oracle rows.
+    Main rows emit before oracle rows so a reader can scan
+    the main delta block contiguously.
 
     Rows are sorted by `group_columns[0]`; folds within each
     row are sorted defensively by `fold_index` ascending.
@@ -171,6 +179,11 @@ def render_per_fold_cis_footnote(
         + " | ".join(
             [
                 *header_labels,
+                # B37 / D-B35.1 closure: scope column
+                # distinguishes main delta CIs from oracle
+                # delta CIs (the latter only present on
+                # EnsembleLiftRollupRow).
+                "scope",
                 "fold",
                 "n_seeds",
                 "n_entities",
@@ -183,15 +196,16 @@ def render_per_fold_cis_footnote(
         )
         + " |"
     )
-    sep = "| " + " | ".join(["---"] * (len(group_columns) + 8)) + " |"
+    sep = "| " + " | ".join(["---"] * (len(group_columns) + 9)) + " |"
     lines.append(header)
     lines.append(sep)
-    for row in sorted_rows:
-        fold_cis: Sequence[Any] = getattr(row, "per_fold_cis", None) or []
+
+    def _emit_fold_rows(
+        fci_list: Sequence[Any], id_cells: list[str], scope: str
+    ) -> None:
         sorted_folds = sorted(
-            fold_cis, key=lambda f: int(getattr(f, "fold_index", 0))
+            fci_list, key=lambda f: int(getattr(f, "fold_index", 0))
         )
-        id_cells = [str(getattr(row, col, "")) for col in group_columns]
         for fci in sorted_folds:
             mean = getattr(fci, "metric_mean", None)
             ci_lo = getattr(fci, "metric_ci_lo", None)
@@ -206,10 +220,8 @@ def render_per_fold_cis_footnote(
                 reason_cell = reason_cell[:117] + "..."
             row_cells = [
                 *id_cells,
+                scope,
                 str(int(getattr(fci, "fold_index", 0))),
-                # B30 / D-B25.3 closure: surface the per-fold
-                # sample-size audit fields between fold and the
-                # metric cells.
                 str(int(getattr(fci, "n_seeds", 0))),
                 str(int(getattr(fci, "n_entities", 0))),
                 mean_cell,
@@ -219,6 +231,15 @@ def render_per_fold_cis_footnote(
                 reason_cell,
             ]
             lines.append("| " + " | ".join(row_cells) + " |")
+
+    for row in sorted_rows:
+        id_cells = [str(getattr(row, col, "")) for col in group_columns]
+        main_fold_cis: Sequence[Any] = getattr(row, "per_fold_cis", None) or []
+        oracle_fold_cis: Sequence[Any] = getattr(row, "per_fold_oracle_cis", None) or []
+        # Emit main rows first, then oracle, so a reader can
+        # scan the main delta block contiguously.
+        _emit_fold_rows(main_fold_cis, id_cells, "main")
+        _emit_fold_rows(oracle_fold_cis, id_cells, "oracle")
     lines.append("")
     return "\n".join(lines)
 

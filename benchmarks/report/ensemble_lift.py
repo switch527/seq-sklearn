@@ -484,10 +484,14 @@ def _render_with_ci(
             )
         )
 
-    # B25 / D-B22.1: per-fold CIs footnote (main delta only;
-    # oracle per-fold deferred to D-B22.2).
+    # B25 / D-B22.1: per-fold CIs footnote (main delta).
+    # B37 / D-B35.1: also triggers on per_fold_oracle_cis so
+    # the oracle per-fold rows (B35) show up alongside main.
     rollup_with_per_fold = [
-        r for r in rollup if r.per_fold_cis is not None and len(r.per_fold_cis) > 0
+        r
+        for r in rollup
+        if (r.per_fold_cis is not None and len(r.per_fold_cis) > 0)
+        or (r.per_fold_oracle_cis is not None and len(r.per_fold_oracle_cis) > 0)
     ]
     if rollup_with_per_fold:
         parts.append(
