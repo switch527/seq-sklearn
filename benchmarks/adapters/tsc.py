@@ -41,6 +41,7 @@ from benchmarks.adapters._base import (
 from benchmarks.config import DatasetSpec, ModelSpec, TaskType
 from benchmarks.protocol import (
     broadcast_per_instance_to_per_row,
+    compute_categorical_categories,
     instance_labels,
     panel_to_tensor,
 )
@@ -88,6 +89,15 @@ class _TSCAdapter:
     _cached_panel_id: int | None = field(default=None, init=False, repr=False)
     _cached_tensor: np.ndarray | None = field(default=None, init=False, repr=False)
     _cached_row_to_instance: np.ndarray | None = field(default=None, init=False, repr=False)
+    # B39 / D-B12.6 closure: fit-time categorical reference; pins
+    # channel layout across fit + predict so unseen-at-predict
+    # category values map to all-zero one-hot rather than shifting
+    # channel counts. None until fit() runs, which also clears the
+    # reshape cache so a re-fit's tensor is rebuilt against the
+    # new reference rather than served stale from `_cached_tensor`.
+    _fit_categorical_categories: dict[str, tuple[Any, ...]] | None = field(
+        default=None, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if type(self) is _TSCAdapter:
@@ -106,7 +116,11 @@ class _TSCAdapter:
             and self._cached_row_to_instance is not None
         ):
             return self._cached_tensor, self._cached_row_to_instance
-        X_3d, row_to_instance = panel_to_tensor(panel, self.spec)  # noqa: N806
+        X_3d, row_to_instance = panel_to_tensor(  # noqa: N806
+            panel,
+            self.spec,
+            categorical_categories=self._fit_categorical_categories,
+        )
         self._cached_panel_id = panel_id
         self._cached_tensor = X_3d
         self._cached_row_to_instance = row_to_instance
@@ -123,6 +137,16 @@ class _TSCAdapter:
             raise RuntimeError(
                 f"{self.name}: missing `_estimator_factory`; instantiate via a registered factory."
             )
+        # B39 / D-B12.6 closure: pin categorical channel layout
+        # from the fit-time panel. Clear the reshape cache so the
+        # new reference takes effect; otherwise a re-fit on a panel
+        # already seen at predict time would return a stale tensor
+        # built against the previous reference (or against
+        # categorical_categories=None on the pre-B39 path).
+        self._fit_categorical_categories = compute_categorical_categories(panel, self.spec)
+        self._cached_panel_id = None
+        self._cached_tensor = None
+        self._cached_row_to_instance = None
         X_3d, row_to_instance = self._reshape(panel)  # noqa: N806
         y_per_instance = instance_labels(np.asarray(y), row_to_instance)
         self._est = self._estimator_factory(**self.hyperparameters)

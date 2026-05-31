@@ -23,6 +23,7 @@ from benchmarks.protocol.lookback import resolve_lookback
 from benchmarks.protocol.raw_mts import (
     RawMTSError,
     broadcast_per_instance_to_per_row,
+    compute_categorical_categories,
     instance_labels,
     panel_to_tensor,
 )
@@ -31,6 +32,7 @@ from benchmarks.protocol.split import make_splitter
 __all__ = [
     "RawMTSError",
     "broadcast_per_instance_to_per_row",
+    "compute_categorical_categories",
     "fingerprint_folds",
     "instance_labels",
     "lag_featurize",
