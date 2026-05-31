@@ -463,10 +463,12 @@ def test_tsc_adapter_reshape_caches_by_panel_id(
     call_count = 0
     real_panel_to_tensor = _raw_mts_module.panel_to_tensor
 
-    def _counting_panel_to_tensor(p: pd.DataFrame, s: DatasetSpec) -> Any:
+    def _counting_panel_to_tensor(
+        p: pd.DataFrame, s: DatasetSpec, **kwargs: Any
+    ) -> Any:
         nonlocal call_count
         call_count += 1
-        return real_panel_to_tensor(p, s)
+        return real_panel_to_tensor(p, s, **kwargs)
 
     monkeypatch.setattr("benchmarks.adapters.tsc.panel_to_tensor", _counting_panel_to_tensor)
 

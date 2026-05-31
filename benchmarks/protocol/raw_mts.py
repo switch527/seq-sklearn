@@ -11,12 +11,17 @@ Conventions:
   appear in the panel; the same convention as the splitter).
 - `n_timesteps == L_resolved` from
   `benchmarks.protocol.lookback.resolve_lookback`.
-- `n_channels == len(spec.feature_real_cols)`. The v1 reshape DROPS
-  `spec.feature_categorical_cols` entirely (see D-B12.6 in the B12
-  design delta): ordinal encoding violates ROCKET's metric-space
-  assumption and one-hot inflates the channel count unpredictably.
-  A panel whose channel set is entirely categorical raises
-  `RawMTSError`.
+- `n_channels == len(spec.feature_real_cols)` by default. B39 /
+  D-B12.6 closure: when the optional `categorical_categories`
+  reference is supplied, `n_channels` becomes
+  `len(feature_real_cols) + sum(len(reference[c]) for c in
+  feature_categorical_cols)` with one binary channel per fit-time
+  reference category. With the reference omitted (default), the
+  v1 drop-categoricals behavior is preserved; ordinal encoding
+  would violate ROCKET's metric-space assumption.
+- A panel whose channel set is entirely categorical still raises
+  `RawMTSError` regardless of `categorical_categories`; the one-
+  hot channels are additive on top of the real-channel base.
 - Entities with more than `L_resolved` rows are TRAILING-WINDOW
   clipped (last `L_resolved` rows kept).
 - Entities with fewer than `L_resolved` rows are EXCLUDED from the
@@ -28,6 +33,9 @@ Conventions:
 - The tensor is cast to `np.float32` to halve host RAM cost (aeon
   classifiers accept float32 input natively).
 """
+
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -55,11 +63,36 @@ class RawMTSError(RuntimeError):
     """
 
 
+def compute_categorical_categories(
+    panel: pd.DataFrame, spec: DatasetSpec
+) -> dict[str, tuple[Any, ...]]:
+    """B39 / D-B12.6 closure: per-column reference categories for
+    one-hot encoding by `panel_to_tensor`.
+
+    For each column in `spec.feature_categorical_cols`, returns
+    the column's observed unique values sorted ascending. NaN
+    values are dropped (a NaN categorical at predict time maps
+    to all-zero one-hot, same as an unseen value). The TSC
+    adapter calls this at fit time and passes the result into
+    every subsequent predict-time `panel_to_tensor` so the
+    channel layout stays pinned across fit + predict.
+
+    Returns an empty dict when the spec declares no categorical
+    columns.
+    """
+    out: dict[str, tuple[Any, ...]] = {}
+    for col in spec.feature_categorical_cols:
+        uniques = sorted(panel[col].dropna().unique().tolist())
+        out[col] = tuple(uniques)
+    return out
+
+
 def panel_to_tensor(
     panel: pd.DataFrame,
     spec: DatasetSpec,
     *,
     override_lookback: int | None = None,
+    categorical_categories: Mapping[str, Sequence[Any]] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Reshape `panel` into a 3D tensor for an aeon classifier.
 
@@ -73,9 +106,21 @@ def panel_to_tensor(
       below-floor entity (excluded from `X_3d`); the adapter
       broadcasts `np.nan` to those panel rows at predict time.
 
+    When `categorical_categories` is provided (B39 / D-B12.6),
+    each declared categorical column expands to one binary
+    channel per reference category (sorted ascending). Unseen
+    category values map to an all-zero one-hot vector. Missing a
+    declared categorical column's key in the reference raises
+    `RawMTSError` (silently dropping a declared column would
+    inflate or shrink the channel count unpredictably). With the
+    reference omitted (default), categorical columns are dropped
+    entirely, preserving v1 behavior.
+
     Raises:
         RawMTSError: the spec declares zero real-valued channels,
-            or no entity survives the below-floor strip.
+            no entity survives the below-floor strip, or
+            `categorical_categories` is missing a declared
+            categorical column.
     """
     channel_cols = list(spec.feature_real_cols)
     if not channel_cols:
@@ -85,6 +130,23 @@ def panel_to_tensor(
             "TSC reshape drops `feature_categorical_cols` per D-B12.6, so an "
             "all-categorical panel has no usable channels"
         )
+    cat_cols = list(spec.feature_categorical_cols)
+    if categorical_categories is not None:
+        missing = [c for c in cat_cols if c not in categorical_categories]
+        if missing:
+            raise RawMTSError(
+                f"panel_to_tensor: dataset {spec.name!r} declares categorical "
+                f"columns {missing} but `categorical_categories` does not cover "
+                "them; pass every declared categorical column or use "
+                "`categorical_categories=None` to drop them"
+            )
+        # Pre-materialize per-column reference arrays for the
+        # equality broadcast inside the per-entity loop.
+        cat_refs: dict[str, np.ndarray] = {
+            c: np.asarray(categorical_categories[c]) for c in cat_cols
+        }
+    else:
+        cat_refs = {}
     L = resolve_lookback(spec, override=override_lookback)  # noqa: N806  # tensor-time-dim convention
 
     entity_col = spec.entity_col
@@ -124,13 +186,26 @@ def panel_to_tensor(
         # which would otherwise escape the B5/B8 driver's narrow
         # adapter-error tuple and crash the entire run.
         try:
-            block = kept[channel_cols].to_numpy(dtype=np.float32, copy=False).T
+            real_block = kept[channel_cols].to_numpy(dtype=np.float32, copy=False).T
         except (ValueError, TypeError) as exc:
             raise RawMTSError(
                 f"panel_to_tensor: could not cast channels {channel_cols!r} "
                 f"to np.float32 for dataset {spec.name!r}; verify that every "
                 "column in `feature_real_cols` is numeric"
             ) from exc
+        if cat_refs:
+            cat_blocks: list[np.ndarray] = []
+            for cat_col in cat_cols:
+                ref = cat_refs[cat_col]
+                # `kept[cat_col].to_numpy()` keeps dtype; the (C, L)
+                # one-hot is `ref[:, None] == values[None, :]` which
+                # handles string, int, and pd.Categorical equally.
+                values = kept[cat_col].to_numpy()
+                one_hot = (ref[:, None] == values[None, :]).astype(np.float32)
+                cat_blocks.append(one_hot)
+            block = np.concatenate([real_block, *cat_blocks], axis=0)
+        else:
+            block = real_block
         instance_blocks.append(block)
         # Map every panel row of this entity to this instance index
         # (the adapter broadcasts the per-instance prediction to ALL
