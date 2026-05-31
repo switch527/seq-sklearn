@@ -19,15 +19,20 @@ aggregator bug that emits a half-populated oracle triple.
 
 R-B28-2 (closes D-B26.1): add a new
 `@model_validator(mode="after")` to `HPOUpliftRollupRow`
-enforcing the structural cell-count invariant:
-- `n_cells_paired + n_skipped_cells <= n_seeds * n_folds`
+enforcing two structural cell-count invariants:
+- `n_cells_paired <= n_seeds * n_folds`
+- `n_skipped_cells <= n_cells_paired`
 
-The aggregator at `benchmarks/report/bootstrap_hpo_uplift.py:130-160`
-emits sentinel rows with `n_cells_paired=0, n_skipped_cells=0`
-(trivially satisfies the bound). Happy rows partition the
-inner-join space: paired cells are those where both default
-and tuned ran; skipped cells are paired-but-NaN-loss; the
-sum is bounded by the total possible cells `n_seeds * n_folds`.
+Per the schema docstring at `bootstrap_manifest.py:585-586`,
+`n_cells_paired` counts cells where BOTH default and tuned
+ran (bounded by `n_seeds * n_folds`); `n_skipped_cells` is
+a SUBSET of paired cells dropped from the bootstrap due to
+NaN loss (bounded above by `n_cells_paired`). The
+aggregator at `benchmarks/report/bootstrap_hpo_uplift.py:252-264`
+emits the `paired_but_no_valid_loss` sentinel with
+`n_cells_paired=n_paired_total, n_skipped_cells=n_paired_total`
+when all paired cells have NaN loss: both invariants
+trivially satisfied (4<=4 and 4<=4).
 
 ## Non-requirements
 
@@ -114,17 +119,22 @@ In `benchmarks/bootstrap_manifest.py`, add to
 
 ```python
 @model_validator(mode="after")
-def _validate_cell_count_bound(self) -> "HPOUpliftRollupRow":
-    # B28 / D-B26.1 closure: paired + skipped <= seeds * folds.
-    # The aggregator's inner-join space is bounded by the total
-    # possible (seed, fold) cells; paired (both default + tuned
-    # ran) plus skipped (paired-but-NaN-loss) cannot exceed it.
+def _validate_cell_count_bounds(self) -> "HPOUpliftRollupRow":
+    # B28 / D-B26.1 closure (R2 corrected): n_cells_paired is
+    # bounded by the inner-join space (n_seeds * n_folds);
+    # n_skipped_cells is a SUBSET of paired cells (paired-but-
+    # NaN-loss) so bounded above by n_cells_paired.
     total_possible = self.n_seeds * self.n_folds
-    if self.n_cells_paired + self.n_skipped_cells > total_possible:
+    if self.n_cells_paired > total_possible:
         raise ValueError(
-            f"n_cells_paired ({self.n_cells_paired}) + n_skipped_cells "
-            f"({self.n_skipped_cells}) exceeds n_seeds * n_folds "
-            f"({self.n_seeds} * {self.n_folds} = {total_possible})"
+            f"n_cells_paired ({self.n_cells_paired}) exceeds "
+            f"n_seeds * n_folds ({self.n_seeds} * "
+            f"{self.n_folds} = {total_possible})"
+        )
+    if self.n_skipped_cells > self.n_cells_paired:
+        raise ValueError(
+            f"n_skipped_cells ({self.n_skipped_cells}) exceeds "
+            f"n_cells_paired ({self.n_cells_paired})"
         )
     return self
 ```
@@ -140,7 +150,7 @@ pydantic's mode="after" chain in declaration order.
 2. **R-B28-2**: add the new cell-count validator to
    HPOUpliftRollupRow.
 3. **Fixture audit + helper repair** (arch-R1-C1 + qa-R1-C1
-   closure): the R1 design swarm identified 4 KNOWN
+   closure): the R1 design swarm identified 5 KNOWN
    violating sites across two helper factories. Both
    helpers currently default oracle metrics to a fixed
    triple (0.10/0.08/0.12) without conditioning on
@@ -245,35 +255,39 @@ Test #3 parametrizes 6 variants -> 6 collected. Tests #1,
 **Validator fire-order constraint** (arch-R1-I1 closure):
 HPOUpliftRollupRow has the B26 `_validate_ci_sentinel_consistency`
 validator (declared first) AND the new B28
-`_validate_cell_count_bound` (second). To target only the
-cell-count branch, each test must supply a valid CI-sentinel
-state: either all-set primary metrics + skipped=None
-(non-sentinel) or all-None metrics + populated skipped reason
-(sentinel). The convention below is:
-- tests #6, #7, #9, #10 use non-sentinel base
-  (`primary_metric_mean=0.1, primary_metric_ci_lo=0.05,
-  primary_metric_ci_hi=0.15, bootstrap_skipped_reason=None`)
-- test #8 uses sentinel base
-  (`primary_metric_*=None, bootstrap_skipped_reason="no_data"`)
+`_validate_cell_count_bounds` (second). To target only the
+cell-count clause, each test must supply a valid CI-sentinel
+state. The shared non-sentinel base ALWAYS supplies
+`n_seeds=2, n_folds=2, primary_metric_mean=0.1,
+primary_metric_ci_lo=0.05, primary_metric_ci_hi=0.15,
+bootstrap_skipped_reason=None`; the sentinel base supplies
+`n_seeds=2, n_folds=2, primary_metric_*=None,
+bootstrap_skipped_reason="no_data"`. With `n_seeds * n_folds =
+4` fixed, each test reasons about `n_cells_paired` (bounded
+by 4) and `n_skipped_cells` (bounded by `n_cells_paired`)
+independently (qa-R2-I1 closure: pin `n_seeds`/`n_folds`
+in every base so test arithmetic is verifiable in isolation).
 
-6. `test_hpo_uplift_rollup_row_accepts_paired_plus_skipped_equals_bound`:
-   non-sentinel base, `n_seeds=2, n_folds=2,
-   n_cells_paired=3, n_skipped_cells=1` (total = 4 = bound);
-   assert no raise.
-7. `test_hpo_uplift_rollup_row_accepts_paired_plus_skipped_below_bound`:
-   non-sentinel base, `n_cells_paired=2, n_skipped_cells=1`
-   (total = 3 < 4); assert no raise.
+6. `test_hpo_uplift_rollup_row_accepts_n_cells_paired_equals_bound`:
+   non-sentinel base, `n_cells_paired=4, n_skipped_cells=0`
+   (paired = bound = 4); assert no raise.
+7. `test_hpo_uplift_rollup_row_accepts_n_skipped_equals_n_paired`:
+   non-sentinel base, `n_cells_paired=4, n_skipped_cells=4`
+   (matches the `paired_but_no_valid_loss` sentinel emit
+   shape at `bootstrap_hpo_uplift.py:252-264`); assert no
+   raise.
 8. `test_hpo_uplift_rollup_row_accepts_sentinel_with_zero_counts`:
    sentinel base, `n_cells_paired=0, n_skipped_cells=0`;
    assert no raise.
-9. `test_hpo_uplift_rollup_row_rejects_paired_plus_skipped_exceeds_bound`:
-   non-sentinel base, `n_cells_paired=3, n_skipped_cells=2`
-   (total = 5 > 4 = bound); assert
-   `pytest.raises(ValidationError, match=r"exceeds n_seeds \* n_folds")`.
-10. `test_hpo_uplift_rollup_row_rejects_paired_alone_exceeds_bound`
+9. `test_hpo_uplift_rollup_row_rejects_n_cells_paired_exceeds_seeds_times_folds`:
+   non-sentinel base, `n_cells_paired=5, n_skipped_cells=0`
+   (paired > bound = 4); assert
+   `pytest.raises(ValidationError, match=r"n_cells_paired.*exceeds n_seeds \* n_folds")`.
+10. `test_hpo_uplift_rollup_row_rejects_n_skipped_cells_exceeds_n_cells_paired`
     (qa-R1-I1 closure: explicit `match=`): non-sentinel base,
-    `n_cells_paired=5, n_skipped_cells=0`; assert
-    `pytest.raises(ValidationError, match=r"exceeds n_seeds \* n_folds")`.
+    `n_cells_paired=3, n_skipped_cells=4` (skipped > paired);
+    assert
+    `pytest.raises(ValidationError, match=r"n_skipped_cells.*exceeds n_cells_paired")`.
 
 5 named tests for R-B28-2.
 
@@ -302,7 +316,7 @@ Baseline (post-B27): 1059.
 | ID | Risk | Severity | Mitigation |
 |---|---|---|---|
 | R-B28-Risk-1 | The new oracle CI-sentinel clause rejects existing EnsembleLiftRollupRow fixtures. | Medium-confirmed | R1 design swarm identified 5 KNOWN sites across two helper factories where oracle metric defaults are not gated on `n_oracle_cells_paired`. B28.3 step 3 enumerates each site and prescribes the helper-level fix (gate oracle defaults on `n_oracle_cells_paired > 0`). The aggregator itself (`benchmarks/report/bootstrap_ensemble_lift.py:152-159` sentinel + `:320-321` happy path) emits the two structural shapes correctly; the gap is helper-fixture-only. The b16:561 mutation pin uses `model_construct` post-B27 so it bypasses both validators. |
-| R-B28-Risk-2 | The new HPOUplift cell-count validator rejects an existing fixture. | Low | The aggregator emits sentinels with `n_cells_paired=0, n_skipped_cells=0` (trivially satisfies). Happy rows are inner-join-bounded. B17/B21/B22 fixtures supply `n_cells_paired=4` with appropriate `n_seeds=2, n_folds=2` (4 <= 4). Live verification via the suite. |
+| R-B28-Risk-2 | The new HPOUplift cell-count validators reject an existing fixture. | Low | The aggregator emits sentinels with `n_cells_paired=0, n_skipped_cells=0` (trivially satisfies both bounds). Happy rows are inner-join-bounded; `paired_but_no_valid_loss` emits `n_cells_paired=n_paired_total, n_skipped_cells=n_paired_total` (e.g., 4/4 with bound 4: passes both). Audit of existing fixtures: B17 (`n_seeds=2, n_folds=1, n_cells_paired=1, n_skipped_cells=1` → 1<=2 and 1<=1, passes); B15 (`n_seeds=2, n_folds=2, n_cells_paired=4, n_skipped_cells=1` → 4<=4 and 1<=4, passes); B21/B22 (similar shapes). Live verification via the full suite during build. |
 | R-B28-Risk-3 | The composed EnsembleLift validator becomes complex (primary clause + oracle clause + row-count clause). | Low | The two validator methods stay separate (`_validate_row_count_invariants` + `_validate_ci_sentinel_consistency`); only the latter grows. Pydantic v2's mode="after" chain handles ordering. |
 
 ## Addressed
@@ -341,6 +355,51 @@ Closures:
 Test count after R1 closures: 11 named / 16 collected
 (unchanged from R1 draft; all closures sharpen pre-existing
 test specs).
+
+### R2 design swarm closure
+
+R2 confirming swarm on commit `07c3ac5`: architecture-
+reviewer (2C / 1I / 1N REQUEST_CHANGES), qa-test-coverage
+(0C / 1I / 0N APPROVE), style-reviewer (0C / 0I / 0N
+APPROVE). Deduplicated total: 2 CRITICAL, 2 IMPROVEMENT, 1
+NITPICK. Closures:
+
+- **arch-R2-C1** (HPOUplift invariant
+  `n_cells_paired + n_skipped_cells <= n_seeds * n_folds`
+  semantically wrong: per schema docstring at
+  `bootstrap_manifest.py:585-586`, `n_skipped_cells` is a
+  SUBSET of `n_cells_paired` not disjoint; the
+  `paired_but_no_valid_loss` aggregator emit at
+  `bootstrap_hpo_uplift.py:252-264` produces
+  `n_cells_paired=4, n_skipped_cells=4` which the wrong
+  invariant rejects): R-B28-2 reformulated as TWO
+  invariants: `n_cells_paired <= n_seeds * n_folds` AND
+  `n_skipped_cells <= n_cells_paired`. Validator body
+  rewritten; pseudocode at B28.2 updated; risk table
+  updated; tests #6-#10 rewritten to target the new
+  branches with `paired_but_no_valid_loss`-shape test #7
+  pinning the 4/4 emit.
+- **arch-R2-C2** (b15 fixtures at
+  `test_hpo_uplift_report_b15.py:213, :227` violate the
+  WRONG invariant): resolves automatically under the
+  corrected invariant since `4 <= 4` trivially passes.
+  R-B28-Risk-2 narrative updated to cite the b15 shape
+  explicitly.
+- **arch-R2-I1** (site count contradiction: ":143 says 4,
+  :190 says 5"): corrected ":143" to "5 KNOWN" matching
+  the actual 5-site enumeration.
+- **qa-R2-I1** (B28.4.2 base for tests #7/#9/#10 didn't pin
+  n_seeds/n_folds): fire-order constraint paragraph rewritten
+  to make the shared base ALWAYS supply `n_seeds=2,
+  n_folds=2`; test docstrings reason about the fixed bound
+  of 4 directly.
+- **arch-R2-N1** (Risk-2 narrative imprecision on B17
+  shape): risk table updated with the actual B17 fixture
+  shape (`n_seeds=2, n_folds=1, n_cells_paired=1,
+  n_skipped_cells=1`).
+
+Test count after R2 closures: 11 named / 16 collected
+(unchanged; closures were prose + invariant-shape only).
 
 ## Deferred
 
