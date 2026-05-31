@@ -200,6 +200,17 @@ pydantic's mode="after" chain in declaration order.
    All 5 sites are repaired by the 2-line conditional in
    each of the 2 helper factories. No call-site changes
    needed.
+
+   **Build-phase amendment** (qa-R1-build-N1 closure):
+   live build also revealed a 6th site in a 3rd helper
+   factory at `tests/benchmarks/test_b19_n_pair_grid.py:260-290`
+   (`_make_rollup_row_for_renderer`). Same unconditional
+   oracle-default pattern; same fix. The b19 helper was
+   not enumerated in R1 because its constructor differs
+   from b16/b23 (it lacks the
+   `oracle_metric_mean: float | None = 0.10` parameters);
+   the fix uses a local-variable assignment instead.
+   Three helpers, six sites total.
 4. **Tests**: add `tests/benchmarks/test_b28_schema_validators.py`
    per B28.4.
 5. **Verify**: ruff + pyright + scoped pytest pass at
@@ -400,6 +411,36 @@ NITPICK. Closures:
 
 Test count after R2 closures: 11 named / 16 collected
 (unchanged; closures were prose + invariant-shape only).
+
+### R1 build-swarm closure
+
+R1 build swarm on commit `f16a845`: code-reviewer (0C / 2I /
+0N APPROVE), qa-test-coverage (0C / 0I / 1N APPROVE),
+architecture-reviewer (APPROVE), style-reviewer (0C / 0I /
+0N APPROVE). Deduplicated total: 0 CRITICAL, 2 IMPROVEMENT,
+1 NITPICK. Closures:
+
+- **code-R1-build-I1** ("IDENTICAL BODY TO RollupRow"
+  comments on the 3 non-EnsembleLift schemas said
+  "keep all 4 copies in sync", but B27 already added a 5th
+  copy on EnsembleLiftRollupRow which B28 extends with the
+  oracle clause): all 3 markers extended to note that
+  EnsembleLiftRollupRow has an EXTENDED version (do not
+  verbatim-import the body there).
+- **code-R1-build-I2** (`dict[str, object]` base pattern
+  adds pyright argument-type warnings): NOT changed.
+  Pre-existing repo-wide convention since B26; deferring
+  type narrowing would touch every benchmark test file.
+  No new pyright errors introduced.
+- **qa-R1-build-N1** (B28.3 enumerated 5 sites across 2
+  helpers but the build repaired 6 sites across 3 helpers):
+  B28.3 step 3 extended with build-phase amendment noting
+  the 6th site at `test_b19_n_pair_grid.py:260-290` and
+  the structural difference that excluded it from R1
+  enumeration.
+
+Test count after R1 build-swarm closures: 11 named / 16
+collected (unchanged; all closures were comment + doc edits).
 
 ## Deferred
 

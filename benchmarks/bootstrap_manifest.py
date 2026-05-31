@@ -355,7 +355,7 @@ class PairwiseRollupRow(BaseModel):
     def _validate_ci_sentinel_consistency(self) -> "PairwiseRollupRow":
         # B26 / D-B23.2 closure: same CI-sentinel invariant as RollupRow.
         # IDENTICAL BODY TO RollupRow._validate_ci_sentinel_consistency;
-        # keep all 4 copies in sync.
+        # keep all 4 copies in sync (EnsembleLiftRollupRow has an EXTENDED version that also guards the oracle triple; do not import this body there verbatim).
         metric_fields = (
             self.primary_metric_mean,
             self.primary_metric_ci_lo,
@@ -440,7 +440,7 @@ class TrainingTimeRollupRow(BaseModel):
     def _validate_ci_sentinel_consistency(self) -> "TrainingTimeRollupRow":
         # B26 / D-B23.2 closure: same CI-sentinel invariant as RollupRow.
         # IDENTICAL BODY TO RollupRow._validate_ci_sentinel_consistency;
-        # keep all 4 copies in sync.
+        # keep all 4 copies in sync (EnsembleLiftRollupRow has an EXTENDED version that also guards the oracle triple; do not import this body there verbatim).
         metric_fields = (
             self.primary_metric_mean,
             self.primary_metric_ci_lo,
@@ -641,7 +641,7 @@ class HPOUpliftRollupRow(BaseModel):
     def _validate_ci_sentinel_consistency(self) -> "HPOUpliftRollupRow":
         # B26 / D-B23.2 closure: same CI-sentinel invariant as RollupRow.
         # IDENTICAL BODY TO RollupRow._validate_ci_sentinel_consistency;
-        # keep all 4 copies in sync.
+        # keep all 4 copies in sync (EnsembleLiftRollupRow has an EXTENDED version that also guards the oracle triple; do not import this body there verbatim).
         metric_fields = (
             self.primary_metric_mean,
             self.primary_metric_ci_lo,
