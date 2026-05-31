@@ -51,7 +51,7 @@ document specifies how the benchmark consumes them, not how they work.
 ### Non-goals
 
 - **B0.1** This suite is not the internal performance-regression gate.
-  `tests/perf/` and Phase 11 (`docs/implementation_plan.md`) own
+  `tests/perf/` (architecture A13 + requirements N7) own
   step-time / memory / latency regression with checked-in per-cell
   baselines, run nightly, gated on absolute regressions. The benchmark
   suite here is comparative science: it answers "how good, versus what,

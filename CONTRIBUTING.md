@@ -38,9 +38,8 @@ loop documented in `CLAUDE.md`:
   swarm reaches consensus. Gemini capacity is scarce; reserved for
   post-consensus.
 
-See `docs/requirements.md`, `docs/architecture.md`, and
-`docs/implementation_plan.md` for the v1 contract, design, and
-phase-by-phase build order.
+See `docs/requirements.md` and `docs/architecture.md` for the v1
+contract and design; `CHANGELOG.md` records what shipped.
 
 ## Commit conventions
 

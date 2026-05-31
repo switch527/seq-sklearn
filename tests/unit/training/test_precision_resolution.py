@@ -1,7 +1,7 @@
 """Combined hardware-detect + precision-resolution contract (A11 / N1).
 
 Phase 1's ``test_hardware_detect.py`` covers detection in isolation;
-this test covers the combined contract per the implementation plan:
+this test covers the combined contract per A11 / N5:
 parametrized over the six tiers, each row mocks the exact
 ``torch.cuda`` chain ``detect()`` reads, asserts the returned
 ``HardwareTier``, then calls ``resolve_precision(tier, "auto")`` and

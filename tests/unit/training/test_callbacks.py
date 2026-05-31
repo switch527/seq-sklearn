@@ -6,7 +6,7 @@ Each callback is exercised in isolation. The Phase 4b
 blocks plays the ``pl_module`` role; the callbacks never call into the
 module (they read only ``trainer`` / ``outputs`` / ``checkpoint``), so
 a ``MagicMock`` trainer is sufficient. NaN Variant B (Inf into model
-weights) is deferred to Phase 7 per the implementation plan; this file
+weights) is deferred (tracked in CHANGELOG); this file
 covers Variant A only.
 """
 
