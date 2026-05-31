@@ -19,7 +19,6 @@ record stays inspectable.
 
 ../requirements
 ../architecture
-../implementation_plan
 ```
 
 ```{toctree}

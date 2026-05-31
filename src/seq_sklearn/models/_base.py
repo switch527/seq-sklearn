@@ -356,7 +356,7 @@ class BaseSequenceEstimator(BaseEstimator, ABC):
           and there is no sentinel-label hazard because ``y_cal`` is
           real. (Whether to additionally exclude short-history entities
           from a caller-supplied set is a separate input-validation
-          concern, deferred; see implementation_plan Deferred.)
+          concern, deferred; tracked in CHANGELOG.)
         - Recomputed fold (no explicit set): the same deterministic
           three-way split the Trainer applied is recomputed so the
           calibrator fits on the rows training held out. Here the
