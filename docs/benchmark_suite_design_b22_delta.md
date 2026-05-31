@@ -778,12 +778,19 @@ qa-R2-I2 added test #19); total `903 + 19 = 922`.
   delta; oracle per-fold would add a sibling field
   `per_fold_oracle_cis` and a third bootstrap invocation
   per fold.
-- **D-B22.3**: per-fold CIs across SEEDS (currently per-
-  fold means bootstrapping the test-rows OF that fold;
-  a complementary view would bootstrap across the seeds
-  WITHIN a fold, yielding a fold-mean uncertainty). v1
-  ships the test-row bootstrap; the seed-mean bootstrap
-  is a separate audit field.
+- **D-B22.3**: **PERMANENTLY-DEFERRED-YAGNI:** per-fold CIs
+  across SEEDS (currently per-fold means bootstrapping the
+  test-rows OF that fold; a complementary view would
+  bootstrap across the seeds WITHIN a fold, yielding a
+  fold-mean uncertainty). v1 ships the test-row bootstrap;
+  the seed-mean bootstrap is a separate audit field.
+  Reclassified B36 as YAGNI: no current consumer asks for
+  seed-mean uncertainty; the deferral itself frames it as
+  "complementary view" not a gap. Cost (new helper + seed
+  offset + 5 schema fields + 5 aggregator dispatch sites +
+  tests) is significant for speculative value. Reopen only
+  if a consumer asks for cross-seed reproducibility
+  analysis.
 - **D-B22.4** (arch-R1-I3 closure):
   **PERMANENTLY-DEFERRED-YAGNI:** per-kind override on
   `ExperimentSpec.bootstrap_per_fold_cis_enabled` (e.g.,
