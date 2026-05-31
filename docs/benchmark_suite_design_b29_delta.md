@@ -280,9 +280,12 @@ or structural impact (verified clean ruff + pyright +
 
 ## Deferred
 
-- **D-B29.1**: add structural bounds to PairwiseRollupRow
-  and TrainingTimeRollupRow. These schemas don't carry
-  `n_rows` / `n_entities` / `n_folds`; no clean invariant
-  is available without adding fields. Deferred indefinitely
-  unless a future audit identifies a missing field that
-  would enable a structural bound.
+- **D-B29.1**: **PERMANENTLY-DEFERRED:** add structural
+  bounds to PairwiseRollupRow and TrainingTimeRollupRow.
+  These schemas don't carry `n_rows` / `n_entities` /
+  `n_folds`; no clean invariant is available without adding
+  fields. Deferred indefinitely unless a future audit
+  identifies a missing field that would enable a structural
+  bound. Reclassified B31 as no-available-fields; revisit
+  only if a future B-phase adds the missing fields to
+  these schemas.
