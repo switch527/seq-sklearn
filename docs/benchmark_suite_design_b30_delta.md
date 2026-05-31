@@ -52,7 +52,7 @@ boundary tests.
 ### B30.0.2 D-B27.1 closure scope
 
 B27 ships 10 reject-pair tests in
-`test_b26_cleanup_validators.py:170-275` (5 schemas × 2
+`test_b26_cleanup_validators.py:221-270` (5 schemas × 2
 branches: skipped-with-metrics + no-skipped-with-None).
 Each test repeats the same pattern with different field
 kwargs and a different `match=` regex. Consolidation into
@@ -76,30 +76,41 @@ and `metric_mean`.
 
 In `tests/benchmarks/test_b21_bca_ci.py` (next to existing
 `_bca_percentile_points` tests at `:215-243`), add two
-boundary tests:
+boundary tests (qa-R1-C1 closure: monkeypatch
+`_BCA_DENOM_EPS` to 0.0 so the boundary lands at an
+EXACTLY-representable float, allowing `<=` vs `<` to
+discriminate):
 
 ```python
-def test_bca_percentile_points_a_overshoot_fires_at_eps_boundary() -> None:
-    """D-B21.5 closure: synthesize `a` so denom_hi lands at
-    exactly `_BCA_DENOM_EPS`. The `<=` predicate at
-    `benchmarks/metrics/bootstrap.py:97` must fire on
-    equality."""
+def test_bca_percentile_points_a_overshoot_fires_at_eps_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-B21.5 closure + qa-R1-C1: monkeypatch the eps to 0.0
+    and synthesize a so denom_hi lands at exactly 0.0. The
+    `<=` predicate at `benchmarks/metrics/bootstrap.py:97`
+    fires on equality; a `<` mutation would NOT fire and
+    fallback would be None. Float arithmetic guarantee:
+    1.0 / z_hi * z_hi == 1.0 exactly in IEEE 754 (the
+    division and multiplication round to a unique reciprocal
+    pair)."""
+    import benchmarks.metrics.bootstrap as _bca
+    monkeypatch.setattr(_bca, "_BCA_DENOM_EPS", 0.0)
     from scipy.stats import norm
     confidence = 0.95
     alpha = (1.0 - confidence) / 2.0
     z_hi = float(norm.ppf(1.0 - alpha))
-    # With p0=0.5, z0=0, so denom_hi = 1 - a*z_hi.
-    # Want denom_hi == _BCA_DENOM_EPS = 1e-12.
-    # Solve: a = (1 - 1e-12) / z_hi.
-    a = (1.0 - 1e-12) / z_hi
+    # With p0=0.5, z0=0: denom_hi = 1 - a*z_hi. Want
+    # denom_hi == 0.0. Solve: a = 1.0 / z_hi exactly.
+    a = 1.0 / z_hi
     _, _, fallback = _bca_percentile_points(p0=0.5, a=a, confidence=confidence)
     assert fallback == "a_overshoot"
 
 
 def test_bca_percentile_points_a_overshoot_does_not_fire_above_eps() -> None:
-    """Companion to the boundary test: a value that puts
-    denom_hi at 2 * _BCA_DENOM_EPS (just above the
-    threshold) must NOT fire the fallback."""
+    """Companion: with the real eps (1e-12), a value above
+    the threshold must NOT fire the fallback. Combined with
+    the boundary test above, the pair pins `<=` semantics at
+    exactly the threshold value."""
     from scipy.stats import norm
     confidence = 0.95
     alpha = (1.0 - confidence) / 2.0
@@ -110,9 +121,10 @@ def test_bca_percentile_points_a_overshoot_does_not_fire_above_eps() -> None:
 ```
 
 The two tests together pin the exact `<=` semantics: a `<`
-mutation would let the boundary test pass without raising
-(fallback would be None), and an off-by-one `<` flip
-would still pass the above-epsilon test.
+mutation would let the boundary test pass with `fallback=None`
+(since `denom_hi = 0.0` is NOT `< 0.0`), and the
+above-epsilon test continues to assert `fallback is None`
+under both `<` and `<=` operators.
 
 ## B30.2 R-B30-2 design
 
@@ -176,6 +188,15 @@ empty-list early return are unchanged.
   tests) update to include `n_seeds | n_entities` between
   `fold` and `metric_mean`. Same pattern across all 5
   renderers.
+- **Tests #6 and #7** (arch-R1-I1 + qa-R1-I1 closure: both
+  hard-pin the rendered fold row as a 7-element cell list
+  split on ` | `; insertion of n_seeds + n_entities cells
+  changes the list to 9 elements): updated to use the
+  `_fold_ci()` defaults (`n_seeds=2, n_entities=4`). Test
+  #6 expected list becomes
+  `["fake_binary", "0", "2", "4", "-", "-", "-", "bca", "-"]`;
+  test #7 expected list becomes
+  `["fake_binary", "0", "2", "4", "0.2150", "0.2000", "0.2300", "bca", "-"]`.
 - Test #10a
   (`test_per_fold_cis_footnote_does_not_surface_n_seeds_or_n_entities`)
   removed. The B25 design's deferral D-B25.3 explicitly
@@ -188,7 +209,9 @@ empty-list early return are unchanged.
   rendered output AND `"| n_seeds |"` + `"| n_entities |"`
   appear in the header.
 - Test #10 (cell-data reader pin) gets `n_seeds` +
-  `n_entities` added to its asserted-fields list.
+  `n_entities` added to its asserted-fields list. Rename
+  from `_correct_six_fields` to `_correct_eight_fields`
+  (qa-R1-I2 closure: stale field-count name).
 - Test #8 (sort-by-group_columns) and test #9 (sort-by-
   fold_index) unaffected.
 
@@ -230,40 +253,71 @@ Baseline (post-B29 main `a5d307d`): 1082 tests collected.
 ### B30.5.4 Expected test delta
 
 Baseline: 1082.
-- Existing tests:
-  - 10 B26 reject-pair tests removed; 1 new parametrized
-    test (10 cases) replaces them. Net: -10 named, +10
-    collected = 0 net collected, -9 net named.
-  - 1 B25 test #10a removed; 1 new B25 test #10c added.
-    Net: 0 named, 0 collected.
-- B30-new: 4 named tests (2 BCa boundary + 1 reject-pair
-  parametrized + 1 per-fold-widened assertion).
-- Total named: 1082 - 10 - 1 + 4 = 1075 named.
-- Total collected: 1082 - 10 + 10 - 1 + 1 + 2 + 10 + 1 =
-  1085 collected. Wait, let me re-derive.
 
-Actually simpler accounting:
+Per-change accounting:
 - 10 reject-pair tests deleted (-10 named, -10 collected
   since each was 1 case).
 - 1 reject-pair parametrized added (+1 named, +10
-  collected since parametrize-x10).
-- 1 B25 #10a deleted, 1 #10c added (net 0).
-- 2 BCa tests added (+2 named, +2 collected).
-- 1 widened header presence in B25 (already covered by
-  test #10c above).
+  collected via parametrize x10).
+- 1 B25 #10a deleted, 1 #10c added (0 named, 0 collected).
+- 2 BCa boundary tests added (+2 named, +2 collected).
 
-Net: -10 + 1 + 2 = -7 named; -10 + 10 + 2 = +2 collected.
-Total named: 1082 - 7 = 1075. Total collected: 1082 + 2 =
-1084.
+Net: -7 named (-10 + 1 + 2), +2 collected (-10 + 10 + 2).
+
+Total named: 1082 - 7 = 1075.
+Total collected: 1082 + 2 = 1084.
 
 ## B30.6 Risks
 
 | ID | Risk | Severity | Mitigation |
 |---|---|---|---|
-| R-B30-Risk-1 | The BCa boundary test depends on `scipy.stats.norm.ppf` numerical stability at the 1e-12 scale. | Low | The test computes `a = (1 - 1e-12) / z_hi` and asserts the fallback fires. Even with 1-ULP float drift, `denom_hi` lands within `[1e-12 - 1e-16, 1e-12 + 1e-16]`, which still satisfies the `<=` predicate. The "above-epsilon" test uses `2 * 1e-12 = 2e-12`, far enough from the epsilon to tolerate drift. |
+| R-B30-Risk-1 | The BCa boundary test depends on float precision at the threshold value. | Low | Resolved via `monkeypatch.setattr(_bca, "_BCA_DENOM_EPS", 0.0)`. With `a = 1.0 / z_hi`, the float identity `1.0 / z_hi * z_hi == 1.0` holds exactly in IEEE 754 (division and multiplication round to a unique reciprocal pair), so `denom_hi = 1.0 - 1.0 = 0.0 == _BCA_DENOM_EPS`. The `<=` predicate fires; a `<` mutation does not. The "above-epsilon" companion uses the real eps and a safely-distant value (2e-12). |
 | R-B30-Risk-2 | The reject-pair parametrize loses the per-test name visibility (pytest output shows `[case-name]` brackets instead of named test functions). | Low | Each parametrize case carries a stable `(schema_name, ...)` tuple; pytest names the case via the first parametrize arg. The `match=` regex still discriminates branches at failure time. |
 | R-B30-Risk-3 | Widening the per-fold table breaks downstream consumers that parse the rendered markdown by column position. | Low | No downstream consumer parses the rendered markdown by column position (the parquet shard is the structured channel). Existing B25 byte-pin tests use exact-header-string assertions which are updated in this same commit. |
 | R-B30-Risk-4 | The B25 test #10a assertion `"n_seeds" not in md` becomes false after R-B30-3 ships. | Medium-confirmed | Test #10a is REMOVED in the same commit (replaced by test #10c with the inverted assertion). If a future B25 audit re-adds #10a expecting the old behavior, the conflict is caught at PR-review time. |
+
+## Addressed
+
+R1 design swarm on commit `9a7ce4b`: architecture-reviewer
+(0C / 3I / 3N REQUEST_CHANGES), qa-test-coverage (1C / 3I /
+1N REQUEST_CHANGES), style-reviewer (0C / 0I / 1N APPROVE).
+Deduplicated total: 1 CRITICAL, 6 IMPROVEMENT, 5 NITPICK.
+Closures:
+
+- **qa-R1-C1** (BCa boundary test does NOT kill `<` vs
+  `<=` mutation because float arithmetic at the 1e-12
+  scale lands undershoot; both operators fire at
+  undershoot values): boundary test rewritten with
+  `monkeypatch.setattr(_bca, "_BCA_DENOM_EPS", 0.0)` and
+  `a = 1.0 / z_hi`. The IEEE 754 identity
+  `1.0 / z_hi * z_hi == 1.0` guarantees
+  `denom_hi == 0.0 == eps` exactly, so `<=` fires while
+  `<` does not. The above-epsilon companion keeps real
+  eps + safe 2e-12 distance.
+- **arch-R1-I1 + qa-R1-I1** (tests #6 and #7 in B25 also
+  break under R-B30-3 widening): B30.3.1 cascade extended
+  to list tests #6 and #7 with the post-widening 9-element
+  cell list (`["fake_binary", "0", "2", "4", "-", "-", "-",
+  "bca", "-"]` for #6 + similar for #7).
+- **qa-R1-I2** (test #10 name `_correct_six_fields` stale
+  after widening): cascade prescribes rename to
+  `_correct_eight_fields`.
+- **arch-R1-I2 + qa-R1-I3 + style-R1-N1** (test count
+  derivation had stream-of-consciousness "let me
+  re-derive" + duplicate accounting): B30.5.4 rewritten as
+  a single clean per-change breakdown with arithmetic.
+- **arch-R1-I3** (Risk-1 prose framing referenced
+  +/-1-ULP drift inaccurately): rewritten to cite the
+  IEEE 754 reciprocal-pair identity used in the new
+  monkeypatch approach.
+- **arch-R1-N1** (line range :170-275 wrong): corrected to
+  `:221-270`.
+- **arch-R1-N2, arch-R1-N3, qa-R1-N1**: NOT changed;
+  cosmetic.
+
+Test count after R1 closures: unchanged (4 named / 4
+collected new). The qa-C1 closure preserved the 2-test
+boundary structure.
 
 ## Deferred
 
