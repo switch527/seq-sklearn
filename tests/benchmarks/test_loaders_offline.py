@@ -120,7 +120,7 @@ def test_c_mapss_fd001_nan_entity_id_raises_typed() -> None:
         "NaN 2 0.2 0.2 0.2 " + " ".join("0.0" for _ in range(21)) + "\n"
     )
     with pytest.raises(DatasetIOError, match="missing entity_id"):
-        c_mapss_module._read_fd001_table(bad_text)  # pyright: ignore[reportPrivateUsage]
+        c_mapss_module.read_fd_table(bad_text)
 
 
 def test_c_mapss_fd001_zip_missing_train_file_raises_typed(

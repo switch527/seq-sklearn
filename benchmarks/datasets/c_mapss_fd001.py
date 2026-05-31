@@ -1,17 +1,23 @@
-"""C-MAPSS FD001 turbofan engine degradation dataset (NASA, OPEN).
+"""C-MAPSS FD001-FD004 turbofan engine degradation datasets (NASA, OPEN).
 
-100 engines under a single operating condition; the supervised
-target is Remaining Useful Life (RUL) in cycles. Each engine
-contributes one sequence of per-cycle sensor readings (3 operating-
-condition columns + 21 sensor columns); the target per row is
-``max_cycle_for_engine - current_cycle``, a standard piecewise-
+All four FD subsets ship in one archive (``CMAPSSData.zip``); each
+subset differs in engine count and operating-condition complexity:
+
+- FD001: 100 engines, single op condition, single fault mode. Easy.
+- FD002: 260 engines, six op conditions, single fault mode.
+- FD003: 100 engines, single op condition, two fault modes.
+- FD004: 248 engines, six op conditions, two fault modes. Hardest.
+
+Each engine contributes one sequence of per-cycle sensor readings (3
+operating-condition columns + 21 sensor columns); the target per row
+is ``max_cycle_for_engine - current_cycle``, the standard piecewise-
 linear RUL framing.
 
-The archive (``CMAPSSData.zip``) is fetched from the NASA Prognostics
-Data Repository per the spec's ``source_uri``. The loader does NOT
-download in CI: the test path is a tmp-path fixture with a recorded
-mini-archive. Production paths download once, integrity-check, and
-materialize the panel to Parquet (B7.2 atomic shard-then-sentinel).
+This module owns the FD001 spec + loader and exports
+:func:`read_fd_table` + :func:`materialize_fd_panel` so the FD002 /
+FD003 / FD004 modules can reuse the parsing path against the same
+archive. The archive is fetched from the PHM Society S3 mirror per
+the spec's ``source_uri`` and SHA-pinned.
 """
 
 import io
@@ -87,7 +93,7 @@ _SPEC = DatasetSpec(
 )
 
 
-def _read_fd001_table(text: str) -> pd.DataFrame:
+def read_fd_table(text: str) -> pd.DataFrame:
     """Parse the whitespace-separated FD001 training text into a
     typed DataFrame with the canonical column names. Pulled out so
     the unit test can exercise it on a synthetic mini-payload
@@ -114,14 +120,17 @@ def _read_fd001_table(text: str) -> pd.DataFrame:
     return df
 
 
-def _materialize_panel(df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:
+def materialize_fd_panel(
+    df: pd.DataFrame, panel_cols: tuple[str, ...]
+) -> tuple[pd.DataFrame, np.ndarray]:
     """Compute the RUL target and emit the panel + y in F2 contract
     shape (one row per `(entity_id, cycle)`, sorted by entity then
-    cycle, panel columns match the spec)."""
+    cycle, panel columns match the caller's spec). Shared by every
+    FD0xx variant; the spec selects which sensor columns to include
+    via ``panel_cols``."""
     sorted_df: pd.DataFrame = df.sort_values(["entity_id", "cycle"]).reset_index(drop=True)
     max_cycle = sorted_df.groupby("entity_id")["cycle"].transform("max")
     rul = (max_cycle - sorted_df["cycle"]).astype(np.float64)
-    panel_cols = list(_SPEC.feature_real_cols)
     panel = pd.DataFrame(sorted_df[["entity_id", "cycle", *panel_cols]].copy())
     y: np.ndarray = np.asarray(rul.to_numpy(), dtype=np.float64)
     return panel, y
@@ -149,8 +158,8 @@ def load(cache_root: Path) -> PanelDataset:
             raise DatasetIOError(
                 f"{_NAME}: archive {_SPEC.archive_basename!r} does not contain 'train_FD001.txt'"
             ) from exc
-    df = _read_fd001_table(text)
-    panel, y = _materialize_panel(df)
+    df = read_fd_table(text)
+    panel, y = materialize_fd_panel(df, _SPEC.feature_real_cols)
     return PanelDataset(spec=_SPEC, panel=panel, y=y)
 
 
