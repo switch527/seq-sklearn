@@ -378,9 +378,14 @@ ruff + pyright clean.
 
 ## Deferred
 
-- **D-B30.1**: emit per-fold sample sizes as a SIBLING
-  footnote (`### Per-fold sample sizes`) instead of a
-  widened existing table. Option b from D-B25.3. v1 picks
-  option a for simplicity; the sibling footnote could
-  apply if the widened table becomes unwieldy with
-  additional columns.
+- **D-B30.1**: **PERMANENTLY-DEFERRED:** emit per-fold
+  sample sizes as a SIBLING footnote
+  (`### Per-fold sample sizes`) instead of a widened
+  existing table. Option b from D-B25.3. v1 picks option a
+  for simplicity; the sibling footnote could apply if the
+  widened table becomes unwieldy with additional columns.
+  Reclassified B31 as the not-chosen layout alternative;
+  option a (widening) shipped in B30 carries the same data
+  with no information delta; revisit only if a future
+  audit-field addition pushes the widened table past
+  ~12 columns.

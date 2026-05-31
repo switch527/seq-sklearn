@@ -542,15 +542,20 @@ reached: zero CRITICAL, zero IMPROVEMENT, zero NITPICK.
   a future "Per-fold sample sizes" sibling footnote or a
   widened table could surface the audit fields if a
   consumer asks for them.
-- **D-B25.1**: render per-fold CIs as an EXPANDABLE
-  sub-table (markdown `<details>` block) rather than a flat
-  footnote. v1 ships the flat footnote because rendering
-  a `<details>` block in a markdown viewer that strips HTML
-  collapses the data. A future renderer-format negotiation
-  pass (e.g., separate HTML output) could surface this as
-  expandable.
-- **D-B25.2**: surface per-fold CIs as percentile-banded
-  visualizations (e.g., fold-vs-CI box plot inline). v1
-  keeps to flat tabular data; visual rendering is a
-  separate audit channel out of scope for the markdown
-  reporter.
+- **D-B25.1**: **PERMANENTLY-DEFERRED:** render per-fold
+  CIs as an EXPANDABLE sub-table (markdown `<details>`
+  block) rather than a flat footnote. v1 ships the flat
+  footnote because rendering a `<details>` block in a
+  markdown viewer that strips HTML collapses the data. A
+  future renderer-format negotiation pass (e.g., separate
+  HTML output) could surface this as expandable.
+  Reclassified B31 as a renderer-format alternative out of
+  scope for the v1 markdown reporter; revisit only if a
+  separate HTML output channel is added.
+- **D-B25.2**: **PERMANENTLY-DEFERRED:** surface per-fold
+  CIs as percentile-banded visualizations (e.g., fold-vs-CI
+  box plot inline). v1 keeps to flat tabular data; visual
+  rendering is a separate audit channel out of scope for
+  the markdown reporter. Reclassified B31 as a separate
+  output channel out of scope for v1; revisit only if a
+  plotting subsystem is added to the benchmark suite.
