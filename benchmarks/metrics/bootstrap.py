@@ -32,15 +32,51 @@ R1-R5):
   resamples.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Literal
 
 import numpy as np
+from pydantic import BaseModel, ConfigDict
 from scipy.stats import norm  # B21 / D-B16.2: BCa transform
 
 __all__ = [
+    "BootstrapResult",
     "entity_block_bootstrap_ci",
 ]
+
+
+class BootstrapResult(BaseModel):
+    """B34 / D-B21.4: frozen result type for
+    `entity_block_bootstrap_ci`. Replaces the prior 4-tuple
+    return. Fields preserve the original tuple-position
+    semantics: mean, ci_lo, ci_hi, fallback_reason.
+
+    `fallback_reason` is `None` (no fallback fired or
+    `ci_method="percentile"`), `"p0_at_edge"`, or
+    `"a_overshoot"`.
+
+    Custom `__iter__` yields the 4 fields in tuple-position
+    order so existing tuple-unpack callers
+    (`mean, ci_lo, ci_hi, fallback = result`) keep working
+    alongside the new attribute access (`result.mean`).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mean: float
+    ci_lo: float
+    ci_hi: float
+    fallback_reason: str | None = None
+
+    def __iter__(self) -> Iterator[float | str | None]:  # type: ignore[override]
+        # Yield in original tuple-position order so existing
+        # callers keep tuple-unpack semantics.
+        return iter((self.mean, self.ci_lo, self.ci_hi, self.fallback_reason))
+
+    def __len__(self) -> int:
+        # Backward-compat with tuple-style `len(result) == 4`
+        # assertions in B21 tests.
+        return 4
 
 
 # Default bootstrap parameters per B5.4 + R3 / R4 of the B13 delta.
@@ -135,7 +171,7 @@ def entity_block_bootstrap_ci(
     seed: int = _DEFAULT_SEED,
     metric_fn: Callable[[np.ndarray], float] = _default_metric_fn,
     ci_method: Literal["percentile", "bca"] = "bca",
-) -> tuple[float, float, float, str | None]:
+) -> BootstrapResult:
     """Entity-block bootstrap CI (BCa default, percentile opt-in).
 
     Args:
@@ -162,13 +198,13 @@ def entity_block_bootstrap_ci(
             element of the return surfaces which path fired.
 
     Returns:
-        `(mean, ci_lo, ci_hi, fallback_reason)` where `mean` is
-        `metric_fn` applied to the unresampled loss vector, the
-        CI is the percentile or BCa interval over the
-        `n_resamples` resampled `metric_fn` values, and
-        `fallback_reason` is `None` (no fallback fired or
-        `ci_method="percentile"`), `"p0_at_edge"`, or
-        `"a_overshoot"`.
+        `BootstrapResult(mean, ci_lo, ci_hi, fallback_reason)`
+        where `mean` is `metric_fn` applied to the
+        unresampled loss vector, the CI is the percentile
+        or BCa interval over the `n_resamples` resampled
+        `metric_fn` values, and `fallback_reason` is `None`
+        (no fallback fired or `ci_method="percentile"`),
+        `"p0_at_edge"`, or `"a_overshoot"`.
 
     Raises:
         ValueError: shapes mismatch, confidence outside (0, 1),
@@ -213,7 +249,12 @@ def entity_block_bootstrap_ci(
     if n_entities <= 1:
         # Degenerate: only one entity → every resample yields the
         # same scalar; CI collapses to the ground-truth mean.
-        return ground_truth_mean, ground_truth_mean, ground_truth_mean, None
+        return BootstrapResult(
+            mean=ground_truth_mean,
+            ci_lo=ground_truth_mean,
+            ci_hi=ground_truth_mean,
+            fallback_reason=None,
+        )
 
     rng = np.random.Generator(np.random.PCG64(seed))
     resampled = np.empty(n_resamples, dtype=np.float64)
@@ -230,7 +271,12 @@ def entity_block_bootstrap_ci(
     if ci_method == "percentile":
         ci_lo = float(np.percentile(resampled, 100.0 * alpha, method="linear"))
         ci_hi = float(np.percentile(resampled, 100.0 * (1.0 - alpha), method="linear"))
-        return ground_truth_mean, ci_lo, ci_hi, None
+        return BootstrapResult(
+            mean=ground_truth_mean,
+            ci_lo=ci_lo,
+            ci_hi=ci_hi,
+            fallback_reason=None,
+        )
 
     # ci_method == "bca"
     alpha_1, alpha_2, fallback_reason = _bca_percentiles(
@@ -243,4 +289,9 @@ def entity_block_bootstrap_ci(
     )
     ci_lo = float(np.percentile(resampled, 100.0 * alpha_1, method="linear"))
     ci_hi = float(np.percentile(resampled, 100.0 * alpha_2, method="linear"))
-    return ground_truth_mean, ci_lo, ci_hi, fallback_reason
+    return BootstrapResult(
+        mean=ground_truth_mean,
+        ci_lo=ci_lo,
+        ci_hi=ci_hi,
+        fallback_reason=fallback_reason,
+    )
