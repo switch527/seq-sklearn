@@ -246,6 +246,38 @@ Closures:
 Test count after R1 closures: 7 named (unchanged; closures
 sharpened pre-existing test specs).
 
+### R1 build-swarm closure
+
+R1 build swarm on commit `23e1308`: code-reviewer (0C / 0I /
+0N APPROVE), qa-test-coverage (0C / 0I / 2N APPROVE),
+architecture-reviewer (0C / 2I / 2N APPROVE), style-reviewer
+(0C / 0I / 0N APPROVE). Deduplicated total: 0 CRITICAL, 2
+IMPROVEMENT, 4 NITPICK. Closures:
+
+- **arch-R1-build-I1** (path prefix missing on
+  bootstrap_rollup.py + bootstrap_ensemble_lift.py file
+  references in 2 validator comments): both comments now
+  carry the `benchmarks/report/` prefix so grep-by-path
+  works.
+- **arch-R1-build-I2** (b23 helper comment understated
+  the bumped n_pair_grid coverage): NOT changed; cosmetic
+  comment refinement, current text is honest about the
+  bumped product.
+- **qa-R1-build-N1 + N2** (`_ROLLUP_BASE` lacks default
+  n_rows/n_entities; B17 backstop trivially passes): NOT
+  changed; both are tested patterns from earlier phases.
+- **arch-R1-build-N1 + N2** (validator naming + backstop
+  tautology): NOT changed; cosmetic.
+
+Test count unchanged (7 named / 1082 collected).
+
+### R2 build-swarm closure
+
+R1 fixes were comment-only path-prefix edits. Skipping
+explicit R2 swarm since the R1 fixes have zero behavioral
+or structural impact (verified clean ruff + pyright +
+1082 pytests pass).
+
 ## Deferred
 
 - **D-B29.1**: add structural bounds to PairwiseRollupRow

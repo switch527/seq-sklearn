@@ -188,7 +188,7 @@ class RollupRow(BaseModel):
         # B29 / D-B28.2 closure: each entity contributes at
         # least one row, so unique entities cannot exceed
         # total rows. The aggregator at
-        # `bootstrap_rollup.py:387,:396` derives both from the
+        # `benchmarks/report/bootstrap_rollup.py:387,:396` derives both from the
         # same `np.concatenate(entity_blocks)` /
         # `np.concatenate(losses_blocks)` populated together
         # at `:306-307`.
@@ -859,7 +859,7 @@ class EnsembleLiftRollupRow(BaseModel):
             )
         # B29 / D-B28.1 closure: n_pair_grid bounded by total
         # possible (seed, fold) positions. The aggregator at
-        # `bootstrap_ensemble_lift.py:488` derives n_pair_grid
+        # `benchmarks/report/bootstrap_ensemble_lift.py:488` derives n_pair_grid
         # as the cartesian intersection of the two family rosters,
         # bounded above by n_seeds * n_folds where n_seeds and
         # n_folds (`:195-198`) are union counts.
