@@ -182,21 +182,22 @@ def _resolve_hpo_seeds(experiments: Sequence[ExperimentSpec]) -> tuple[int, ...]
 
 def _resolve_hpo_budget(
     experiments: Sequence[ExperimentSpec], profile: str
-) -> tuple[int, float, str, int | None]:
-    """Return `(n_trials, timeout_seconds, hpo_tier, n_startup_trials)`.
+) -> tuple[int, float, str, int | None, int | None]:
+    """Return `(n_trials, timeout_seconds, hpo_tier, n_startup_trials, n_jobs)`.
 
     Profile-tier defaults from `_HPO_BUDGETS_BY_PROFILE`. The first
     `ExperimentSpec(kind="hpo_uplift")` carrying a non-None
-    `n_trials` / `timeout_seconds` / `hpo_n_startup_trials` overrides
-    the corresponding default. When the overrides yield a non-default
-    tier, `hpo_tier` is the override sentinel `"custom"` so the report
-    can tell overridden runs apart. ``n_startup_trials`` returns
-    ``None`` to mean "use Optuna's TPESampler default" (10); a
-    non-None value forwards to ``TPESampler(n_startup_trials=...)``.
+    `n_trials` / `timeout_seconds` / `hpo_n_startup_trials` /
+    `hpo_n_jobs` overrides the corresponding default. When the
+    overrides yield a non-default tier, `hpo_tier` is the override
+    sentinel `"custom"`. ``n_startup_trials`` returns ``None`` to mean
+    "use Optuna's TPESampler default" (10); ``n_jobs`` returns
+    ``None`` to mean Optuna's serial default of 1.
     """
     n_trials, timeout_seconds = _HPO_BUDGETS_BY_PROFILE.get(profile, (0, 0.0))
     tier = _HPO_TIER_BY_PROFILE.get(profile, "none")
     n_startup_trials: int | None = None
+    n_jobs: int | None = None
     overridden = False
     for spec in experiments:
         if spec.kind != "hpo_uplift":
@@ -210,10 +211,13 @@ def _resolve_hpo_budget(
         if spec.hpo_n_startup_trials is not None:
             n_startup_trials = int(spec.hpo_n_startup_trials)
             overridden = True
+        if spec.hpo_n_jobs is not None:
+            n_jobs = int(spec.hpo_n_jobs)
+            overridden = True
         break
     if overridden:
         tier = "custom"
-    return n_trials, timeout_seconds, tier, n_startup_trials
+    return n_trials, timeout_seconds, tier, n_startup_trials, n_jobs
 
 
 def _primary_loss_from_metrics(metrics_dump: dict[str, Any], task_type: TaskType) -> float:
@@ -392,6 +396,7 @@ def _run_hpo_study(
     timeout_seconds: float,
     seed: int,
     n_startup_trials: int | None = None,
+    n_jobs: int | None = None,
 ) -> tuple[optuna.Study, int, int, int | None, float | None, float | None, dict[str, Any] | None]:
     """Drive an Optuna study against the inner train/val split.
 
@@ -471,12 +476,21 @@ def _run_hpo_study(
         return val_loss
 
     if n_trials > 0:
+        # `n_jobs=None` falls through to Optuna's serial default
+        # of 1; an opt-in > 1 runs trials in parallel via a
+        # ThreadPoolExecutor. Lightning's Trainer carries some
+        # global state; only safe on GPU-only model families
+        # where each trial's adapter constructs its own Trainer
+        # under its own lock. Watch for spurious shape errors or
+        # "logger already exists" warnings on the first parallel
+        # run; back out to 1 if seen.
         study.optimize(
             _objective,
             n_trials=n_trials,
             timeout=timeout_seconds if timeout_seconds > 0 else None,
             catch=(),
             show_progress_bar=False,
+            n_jobs=n_jobs if n_jobs is not None else 1,
         )
     # `study.trials` includes both COMPLETE and PRUNED trials; the
     # counter inside `_objective` only increments on COMPLETE. Count
@@ -537,6 +551,7 @@ def _run_one_hpo_cell(
     n_trials: int,
     timeout_seconds: float,
     n_startup_trials: int | None = None,
+    n_jobs: int | None = None,
 ) -> ResultRow:
     """Run one (dataset, model, seed, fold) tuned-arm cell.
 
@@ -650,6 +665,7 @@ def _run_one_hpo_cell(
             timeout_seconds=timeout_seconds,
             seed=seed,
             n_startup_trials=n_startup_trials,
+            n_jobs=n_jobs,
         )
     except OptionalDependencyMissingError as exc:
         # B12: trial fit raised OptionalDependencyMissingError. The
@@ -923,10 +939,11 @@ def run_hpo_uplift(
         timeout_seconds,
         hpo_tier,
         n_startup_trials,
+        n_jobs,
     ) = _resolve_hpo_budget(config.experiments, env.profile)
     logger.info(
         "run_hpo_uplift: env.run_id=%s datasets=%d models=%d seeds=%s "
-        "n_trials=%d timeout=%.1fs hpo_tier=%s n_startup_trials=%s",
+        "n_trials=%d timeout=%.1fs hpo_tier=%s n_startup_trials=%s n_jobs=%s",
         env.run_id,
         len(dataset_names),
         len(model_names),
@@ -935,6 +952,7 @@ def run_hpo_uplift(
         timeout_seconds,
         hpo_tier,
         n_startup_trials if n_startup_trials is not None else "default",
+        n_jobs if n_jobs is not None else "1",
     )
     cache_dir = config.cache_dir
     if cache_dir is None:
@@ -1099,6 +1117,7 @@ def run_hpo_uplift(
                             n_trials=n_trials,
                             timeout_seconds=timeout_seconds,
                             n_startup_trials=n_startup_trials,
+                            n_jobs=n_jobs,
                         )
                         if row.skipped_reason is None:
                             attempted += 1

@@ -147,8 +147,14 @@ class Trainer:
     def _dataloader_kwargs(self) -> dict[str, object]:
         """Resolve the F5 DataLoader defaults, honoring config overrides."""
         cpu_count = os.cpu_count() or 1
+        # Bumped from 4 → 8 (2026-06-01): on the Blackwell + 16-core
+        # box the GPU was visibly idling between batches during HPO
+        # trials at 4 workers. Doubling keeps the GPU fed without
+        # exceeding the GBM-adapter `_DEFAULT_N_JOBS = 15` cap that
+        # leaves the host one core of headroom. Config overrides
+        # still win.
         num_workers = (
-            self.config.num_workers if self.config.num_workers is not None else min(4, cpu_count)
+            self.config.num_workers if self.config.num_workers is not None else min(8, cpu_count)
         )
         on_cuda = torch.cuda.is_available()
         pin_memory = self.config.pin_memory if self.config.pin_memory is not None else on_cuda

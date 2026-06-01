@@ -29,4 +29,10 @@ kind = "hpo_uplift"
 seeds = [0]
 n_trials = 150
 hpo_n_startup_trials = 50
+# Optuna in-study parallel trials. 2 lets one trial's CPU setup
+# overlap with the other's GPU fit, recovering some of the inter-
+# trial idle window. The Blackwell has 96 GB headroom for 2
+# concurrent TFTs (each ≤ 4 GB at hidden_size=256). GBM family
+# stays at 1 (CPU oversubscription concern).
+hpo_n_jobs = 2
 bootstrap_n_resamples = 1000

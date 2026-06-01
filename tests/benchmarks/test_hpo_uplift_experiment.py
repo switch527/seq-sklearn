@@ -441,7 +441,7 @@ def test_resolve_hpo_budget_n_trials_only_override_sets_custom_tier() -> None:
     )
 
     specs = [ExperimentSpec(kind="hpo_uplift", seeds=(0,), n_trials=5)]
-    n_trials, timeout_seconds, tier, n_startup_trials = _resolve_hpo_budget(specs, "smoke")
+    n_trials, timeout_seconds, tier, n_startup_trials, n_jobs = _resolve_hpo_budget(specs, "smoke")
     assert n_trials == 5
     # smoke profile default timeout is 0.0; override flips tier.
     assert tier == "custom"
@@ -449,6 +449,27 @@ def test_resolve_hpo_budget_n_trials_only_override_sets_custom_tier() -> None:
     assert timeout_seconds == 0.0
     # n_startup_trials not overridden -> None (use Optuna default).
     assert n_startup_trials is None
+    assert n_jobs is None
+
+
+def test_resolve_hpo_budget_n_jobs_override_sets_custom_tier() -> None:
+    from benchmarks.config import ExperimentSpec
+    from benchmarks.experiments.hpo_uplift import (
+        _resolve_hpo_budget,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    specs = [ExperimentSpec(kind="hpo_uplift", seeds=(0,), hpo_n_jobs=2)]
+    (
+        _n_trials,
+        _timeout_seconds,
+        tier,
+        _n_startup_trials,
+        n_jobs,
+    ) = _resolve_hpo_budget(specs, "smoke")
+    # smoke profile defaults: n_trials=0, timeout=0.0; n_jobs override
+    # alone flips tier to custom.
+    assert tier == "custom"
+    assert n_jobs == 2
 
 
 def test_resolve_hpo_budget_timeout_only_override_sets_custom_tier() -> None:
@@ -458,12 +479,15 @@ def test_resolve_hpo_budget_timeout_only_override_sets_custom_tier() -> None:
     )
 
     specs = [ExperimentSpec(kind="hpo_uplift", seeds=(0,), timeout_seconds=60.0)]
-    n_trials, timeout_seconds, tier, n_startup_trials = _resolve_hpo_budget(specs, "standard")
+    n_trials, timeout_seconds, tier, n_startup_trials, n_jobs = _resolve_hpo_budget(
+        specs, "standard"
+    )
     # n_trials untouched -> standard default (25).
     assert n_trials == 25
     assert timeout_seconds == 60.0
     assert tier == "custom"
     assert n_startup_trials is None
+    assert n_jobs is None
 
 
 def test_resolve_hpo_budget_unknown_profile_falls_back_to_zero() -> None:
@@ -471,13 +495,14 @@ def test_resolve_hpo_budget_unknown_profile_falls_back_to_zero() -> None:
         _resolve_hpo_budget,  # pyright: ignore[reportPrivateUsage]
     )
 
-    n_trials, timeout_seconds, tier, n_startup_trials = _resolve_hpo_budget(
+    n_trials, timeout_seconds, tier, n_startup_trials, n_jobs = _resolve_hpo_budget(
         [], "nonexistent_profile"
     )
     assert n_trials == 0
     assert timeout_seconds == 0.0
     assert tier == "none"
     assert n_startup_trials is None
+    assert n_jobs is None
 
 
 # --- qa-I4: reference_model absent from matrix ------------------------------

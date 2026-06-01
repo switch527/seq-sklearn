@@ -218,6 +218,15 @@ class ExperimentSpec(BaseModel):
     # high-dimensional spaces. Only consumed by `kind="hpo_uplift"`;
     # other kinds ignore.
     hpo_n_startup_trials: int | None = Field(default=None, ge=0)
+    # Optuna in-study parallel trials. `None` defers to Optuna's
+    # serial default of 1. `> 1` overlaps trial CPU setup with the
+    # active trial's GPU fit, recovering some of the inter-trial
+    # idle window. CAUTION on GBM: each GBM estimator is already
+    # capped at `_DEFAULT_N_JOBS = 15`; concurrent GBM trials
+    # would oversubscribe the 16-core CPU. The default of None
+    # keeps existing configs serial; only opt-in for TFT-only
+    # configs where the GPU has memory headroom for 2+ trials.
+    hpo_n_jobs: int | None = Field(default=None, ge=1)
     bootstrap_rollup_enabled: bool = True
     bootstrap_n_resamples: int | None = Field(default=None, ge=1)
     bootstrap_pairwise_enabled: bool = True
