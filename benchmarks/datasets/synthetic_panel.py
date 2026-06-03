@@ -88,6 +88,39 @@ _VARIANTS: dict[str, dict[str, object]] = {
         "target_noise": 0.1,
         "lookback": 12,
     },
+    # Imbalanced binary variants for stress-testing the F5 imbalance
+    # strategies (none / class_weighted / oversample_minority /
+    # undersample_majority). num_entities bumped to 400 so each CV
+    # fold retains a non-trivial positive count (~50 at 50:1, ~25 at
+    # 100:1) for stable PR-AUC + MCC estimates. class_balance is
+    # calibrated so the empirically observed pos:neg ratio lands at
+    # the named ratio under the DGP's signal_strength=0.75.
+    "synthetic_binary_imbalanced_50to1": {
+        "target_kind": "binary",
+        "num_entities": 400,
+        "periods_per_entity": (24, 48),
+        "num_static_categorical": 2,
+        "num_static_real": 3,
+        "num_time_varying_real": 3,
+        "num_time_varying_categorical": 2,
+        "class_balance": 0.0019,  # → 50.0:1 observed under _DGP_SEED
+        "signal_strength": 0.75,
+        "noise_level": 0.1,
+        "lookback": 12,
+    },
+    "synthetic_binary_imbalanced_100to1": {
+        "target_kind": "binary",
+        "num_entities": 400,
+        "periods_per_entity": (24, 48),
+        "num_static_categorical": 2,
+        "num_static_real": 3,
+        "num_time_varying_real": 3,
+        "num_time_varying_categorical": 2,
+        "class_balance": 0.0008,  # → 98.9:1 observed under _DGP_SEED
+        "signal_strength": 0.75,
+        "noise_level": 0.1,
+        "lookback": 12,
+    },
 }
 
 
@@ -120,12 +153,18 @@ def _build_spec(name: str, params: dict[str, object]) -> DatasetSpec:
     )
     sha = _params_sha(name, params)
     positive_label = 1 if kind == "binary" else None
+    # Binary variants with a low class_balance (≤ 0.05) are the
+    # imbalanced stress-test datasets; flag them so the harness
+    # surfaces the balance tier on the leaderboard.
+    is_imbalanced = (
+        kind == "binary" and float(params.get("class_balance", 0.5)) <= 0.05  # type: ignore[arg-type]
+    )
     return DatasetSpec(
         name=name,
         task_type=kind,  # type: ignore[arg-type]
         access_tier="OPEN",
         size_tier="small",
-        balance="balanced",
+        balance="imbalanced" if is_imbalanced else "balanced",
         modality="mixed",
         # `source_uri` is required; for synthetic the "source" is
         # the DGP module + seed. Uses a stable internal URI so the

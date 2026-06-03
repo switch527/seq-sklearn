@@ -1,0 +1,49 @@
+# Imbalanced binary HPO benchmark: 50:1 and 100:1 ratios.
+#
+# Stress-tests the F5 imbalance strategies (none / class_weighted /
+# oversample_minority / undersample_majority) — HPO chooses the best
+# strategy per (dataset, model, fold) study. Goes head-to-head
+# between TFT, the three GBMs, and the three TSC classifiers on
+# rare-event detection where log_loss, PR-AUC, and MCC diverge from
+# accuracy.
+#
+# Datasets: ~400 entities × ~35 periods each, so ~280 positives at
+# 50:1 (~56 per fold) and ~145 positives at 100:1 (~29 per fold).
+# Tight but workable for stable PR-AUC + MCC estimates under 5-fold
+# expanding-window CV.
+#
+# Wall budget on the Blackwell + 16 cores with hpo_n_jobs=2 (TFT)
+# / hpo_n_jobs=1 (GBMs): roughly 3-4 hours.
+
+datasets = [
+    "synthetic_binary_imbalanced_50to1",
+    "synthetic_binary_imbalanced_100to1",
+]
+models = [
+    "tft_classifier",
+    "lightgbm_classifier",
+    "xgboost_classifier",
+    "catboost_classifier",
+    "rocket_classifier",
+    "multirocket_classifier",
+    "catch22_classifier",
+]
+output_dir = ".cache/benchmarks/runs/synth-imbalanced-hpo"
+cache_dir = ".cache/benchmarks"
+
+[[experiments]]
+kind = "raw_loss"
+seeds = [0]
+bootstrap_n_resamples = 1000
+
+[[experiments]]
+kind = "hpo_uplift"
+seeds = [0]
+n_trials = 150
+hpo_n_startup_trials = 50
+# Optuna in-study parallel trials. TFT-friendly; GBMs still run
+# one-at-a-time but their per-trial wall is short. The harness
+# applies the same n_jobs to every model in this config; if GBM
+# CPU oversubscription matters here we'd split into two configs.
+hpo_n_jobs = 2
+bootstrap_n_resamples = 1000
