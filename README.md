@@ -71,6 +71,26 @@ The full v1 requirements doc is
 
 Star or watch the repo to follow the v1 release.
 
+## Setting up on a new machine
+
+For end-to-end bootstrap on a fresh Ubuntu (or any uv-supported OS), see
+**[`SETUP.md`](SETUP.md)**. Short version:
+
+```bash
+git clone https://github.com/switch527/seq-sklearn.git
+cd seq-sklearn
+git clone https://github.com/switch527/seq-sklearn-meta.git .meta
+bash .meta/bootstrap.sh            # wires CLAUDE.md / .claude / GEMINI.md
+curl -LsSf https://astral.sh/uv/install.sh | sh && exec $SHELL
+uv python install 3.14 && uv venv --python 3.14 && source .venv/bin/activate
+uv sync --extra dev --extra benchmarks --extra docs --extra onnx
+uv pip install "aeon>=1.4" kaggle  # optional: TSC adapters + Kaggle loader
+uv run pytest tests/benchmarks/ -q  # verify ≈ 1132 passed
+```
+
+VS Code multi-root workspace pinning both repos:
+`code .vscode/seq-sklearn.code-workspace`.
+
 ## Quickstart
 
 A complete, runnable binary classifier on a synthetic panel. This

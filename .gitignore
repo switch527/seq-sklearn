@@ -73,7 +73,13 @@ lightning_logs/
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/
+# Ignore .vscode contents but track the multi-root workspace file so
+# cloning + opening puts both seq-sklearn and seq-sklearn-meta in the
+# same window with the right interpreter + formatter defaults pre-wired
+# (see SETUP.md §10). Directory-wildcard form is required: a plain
+# `.vscode/` rule blocks file-level exceptions inside it.
+.vscode/*
+!.vscode/seq-sklearn.code-workspace
 *.swp
 *.swo
 

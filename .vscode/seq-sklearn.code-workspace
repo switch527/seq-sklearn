@@ -1,0 +1,44 @@
+{
+    "folders": [
+        {
+            "name": "seq-sklearn (library + benchmarks)",
+            "path": ".."
+        },
+        {
+            "name": "seq-sklearn-meta (agent config)",
+            "path": "../.meta"
+        }
+    ],
+    "settings": {
+        "python.defaultInterpreterPath": "${workspaceFolder:seq-sklearn (library + benchmarks)}/.venv/bin/python",
+        "python.terminal.activateEnvironment": true,
+        "python.analysis.typeCheckingMode": "strict",
+        "[python]": {
+            "editor.defaultFormatter": "charliermarsh.ruff",
+            "editor.formatOnSave": true
+        },
+        "files.exclude": {
+            "**/__pycache__": true,
+            "**/.pytest_cache": true,
+            "**/.ruff_cache": true,
+            "**/.pyright_cache": true,
+            "**/.mypy_cache": true,
+            "**/*.egg-info": true
+        },
+        "search.exclude": {
+            "**/.venv": true,
+            "**/.cache": true,
+            "**/docs/_build": true,
+            "**/docs/examples_gallery": true,
+            "**/uv.lock": true
+        }
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-python.python",
+            "charliermarsh.ruff",
+            "ms-python.vscode-pylance",
+            "tamasfe.even-better-toml"
+        ]
+    }
+}
