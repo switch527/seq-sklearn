@@ -230,6 +230,6 @@ pass:
 - [ ] `ls -la CLAUDE.md` → symlink to `.meta/CLAUDE.md`
 - [ ] `ls -la .claude` → symlink to `.meta/.claude/`
 - [ ] `uv run python -c "import seq_sklearn; print(seq_sklearn.__version__)"` → prints
-- [ ] `uv run python -c "import benchmarks.datasets; from benchmarks.registry import list_datasets; print(len(list_datasets()))"` → prints `17`
+- [ ] `uv run python -c "import benchmarks.adapters, benchmarks.datasets; from benchmarks.registry import list_datasets, list_models; print(len(list_datasets()), len(list_models()))"` → prints `17 11` (the side-effect imports of `benchmarks.adapters` + `benchmarks.datasets` are what populate the registry)
 - [ ] `uv run pytest tests/benchmarks/ -q` → 1132+ passed
 - [ ] If GPU: `uv run python -c "import torch; print(torch.cuda.is_available())"` → `True`
