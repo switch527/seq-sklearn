@@ -12,6 +12,12 @@ time series, across the transformer and recurrent model families.**
 [![Code style: ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://docs.astral.sh/ruff/)
 
 </div>
+Most tabular stacks converge on the same three base learners: XGBoost, 
+LightGBM, and CatBoost. All three are gradient-boosted trees, so they 
+share an inductive bias and make correlated errors, and a stacking 
+ensemble built from them gains far less than the theory promises. 
+A sequence model over the same panel data fails differently, and 
+that decorrelation is the point.
 
 Sequence learning for ordinary classification and regression is harder
 than it should be. The sklearn ecosystem covers tabular tasks broadly
