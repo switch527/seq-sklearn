@@ -19,6 +19,7 @@ ensemble built from them gains far less than the theory promises.
 A sequence model over the same panel data fails differently, and 
 that decorrelation is the point.
 
+
 Sequence learning for ordinary classification and regression is harder
 than it should be. The sklearn ecosystem covers tabular tasks broadly
 but stops at shallow models. The deep-learning libraries that handle
